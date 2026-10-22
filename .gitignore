@@ -1,0 +1,27 @@
+# App
+app/.env
+.env
+__pycache__/
+*.pyc
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Account-specific inputs stay local; commit the *.example files
+infra/terraform/bootstrap/accounts/*.tfvars
+!infra/terraform/bootstrap/accounts/*.tfvars.example
+
+# Claude Code personal files
+.claude/settings.local.json
+CLAUDE.local.md
+
+# OS
+.DS_Store
