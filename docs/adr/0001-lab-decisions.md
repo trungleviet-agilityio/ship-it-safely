@@ -26,6 +26,7 @@ Claude Code plugin docs. This ADR locks both so every agent works from the same 
 | D12 | `e2e` checks Terraform offline with `terraform init -backend=false`, `validate` and `terraform test` with `mock_provider`, not `terraform plan` | Agents have no AWS credentials (D8), so a real plan only runs in CI with the plan role |
 | D13 | Model split: `security-reviewer` and `solution-architect` on opus; the rest on sonnet | The expensive model goes to trust policies and design, where a miss costs the most |
 | D14 | The orchestrating session owns `README.md` and `docs/**`. `/sis-team:run` has a Docs step after the merge and before verify; `reviewer` checks docs drift against the code | The README spans app and infra, so either build agent editing it would break disjoint ownership (D9) and conflict at merge. The orchestrator already holds the ADR and the merged diff, so a separate writer agent would only re-read them |
+| D15 | A thin `Makefile` is the single entry point for local checks (`help`, `up`, `down`, `test`, `lint`, `tf-check`, `check`); logic longer than a couple of lines goes in `scripts/*.sh` sharing `scripts/lib.sh`. No `apply`/`destroy` targets. `devops-engineer` owns both | `make help` makes the commands discoverable, and CI calls the same targets, so local and CI results match. Make is poor at arguments and loops, so it stays thin. Leaving out apply keeps D8 intact: a convenience target would bypass the checkpoint |
 
 ## Consequences
 

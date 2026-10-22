@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Offline Terraform checks for every root and module under infra/terraform (ADR 0001, D12):
+# fmt, init without a backend, validate, and `terraform test` where test files exist.
+# Never plans or applies: no AWS credentials are needed or used.
+#
+# Usage: scripts/tf-check.sh [dir ...]   (default: every directory holding *.tf)
+
+# shellcheck source=scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
+
+require_cmd terraform "brew install hashicorp/tap/terraform"
+
+tf_root="$ROOT/infra/terraform"
+dirs=()
+if [ $# -gt 0 ]; then
+  for d in "$@"; do dirs+=("$d"); done
+else
+  while IFS= read -r d; do dirs+=("$d"); done < <(
+    find "$tf_root" -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u
+  )
+fi
+
+if [ ${#dirs[@]} -eq 0 ]; then
+  warn "no Terraform files under ${tf_root#"$ROOT"/} yet, nothing to check"
+  exit 0
+fi
+
+log "terraform fmt -check"
+terraform fmt -check -recursive "$tf_root" || die "unformatted files; run: terraform fmt -recursive infra/terraform"
+
+failed=()
+for dir in "${dirs[@]}"; do
+  name="${dir#"$ROOT"/}"
+  log "$name"
+  # Each step is guarded so one broken directory does not hide the rest; the summary fails the run.
+  if ! terraform -chdir="$dir" init -backend=false -input=false >/dev/null; then
+    failed+=("$name (init)")
+    continue
+  fi
+  if ! terraform -chdir="$dir" validate -no-color >/dev/null; then
+    failed+=("$name (validate)")
+    continue
+  fi
+  if compgen -G "$dir/*.tftest.hcl" >/dev/null || compgen -G "$dir/tests/*.tftest.hcl" >/dev/null; then
+    if ! terraform -chdir="$dir" test; then
+      failed+=("$name (test)")
+      continue
+    fi
+  fi
+  ok "$name"
+done
+
+if [ ${#failed[@]} -gt 0 ]; then
+  for f in "${failed[@]}"; do printf '  - %s\n' "$f" >&2; done
+  die "${#failed[@]} Terraform check(s) failed"
+fi
+ok "all ${#dirs[@]} Terraform directories pass"
