@@ -21,6 +21,9 @@ access keys, separate plan/apply/deploy roles, Secrets Manager per environment, 
 | `security-reviewer` | Verify | opus | Read-only | IAM, trust `sub`, `iam:PassRole`, pinning, secret leaks |
 | `code-simplifier` | Verify | sonnet | Read-only | Redundant Terraform/YAML/app code |
 
+Docs (`README.md`, `docs/**`) are written by the session that runs `/sis-team:run`, after the merge and before
+verify; `reviewer` checks them for drift (ADR 0001, D14).
+
 Commands: `/sis-team:plan <phase>`, `/sis-team:run <phase>`, `/sis-team:review [PR]`.
 
 Guardrails (ADR 0001, D8): no admin AWS credentials in the Claude Code shell, deny rules in

@@ -25,9 +25,11 @@ Claude Code plugin docs. This ADR locks both so every agent works from the same 
 | D11 | `solution-architect` is read-only plus web; it returns the ADR text and the orchestrating session writes it to `docs/adr/` | Keeps the read-only rule absolute; no path-scoped write permission needed |
 | D12 | `e2e` checks Terraform offline with `terraform init -backend=false`, `validate` and `terraform test` with `mock_provider`, not `terraform plan` | Agents have no AWS credentials (D8), so a real plan only runs in CI with the plan role |
 | D13 | Model split: `security-reviewer` and `solution-architect` on opus; the rest on sonnet | The expensive model goes to trust policies and design, where a miss costs the most |
+| D14 | The orchestrating session owns `README.md` and `docs/**`. `/sis-team:run` has a Docs step after the merge and before verify; `reviewer` checks docs drift against the code | The README spans app and infra, so either build agent editing it would break disjoint ownership (D9) and conflict at merge. The orchestrator already holds the ADR and the merged diff, so a separate writer agent would only re-read them |
 
 ## Consequences
 
 - Every phase ends with a commit on `main` (or a merged PR) before the next `/sis-team:run`.
 - `terraform apply`, `destroy` and `aws secretsmanager put-secret-value` are always run by the user at checkpoints.
+- `README.md` and `docs/**` change in their own `docs(...)` commit inside each phase branch.
 - Open inputs: dev account ID and budget email, asked for at Phase 1.
