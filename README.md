@@ -101,7 +101,8 @@ cannot assume the roles. The PR plan job must not set `environment:`, or its `su
 
 Inputs live in `infra/terraform/bootstrap/accounts/dev.tfvars`, which is gitignored: copy
 `dev.tfvars.example` and fill in the account ID, budget email and the two GitHub IDs. No account ID is
-committed (ADR 0001, D2); a pre-commit hook rejects a bare 12-digit number under `infra/`.
+committed (ADR 0001, D2); a pre-commit hook rejects a bare 12-digit number in
+`.tf`, `.hcl` and `.tfvars.example` files under `infra/`.
 
 The checkpoint, run by you (never by Claude, NFR-9):
 
