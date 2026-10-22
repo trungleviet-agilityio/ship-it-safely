@@ -1,4 +1,5 @@
 # Revs are pinned to full commit SHAs; the release tag is in the `frozen` comment (NFR-3).
+default_install_hook_types: [pre-commit, commit-msg]
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
@@ -18,3 +19,29 @@ repos:
       - id: terraform_fmt
       - id: terraform_validate
       - id: terraform_tflint
+
+  # App gate (pyproject.toml holds the config). Scoped to app/ so ruff-format leaves markdown alone.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
+    hooks:
+      - id: ruff-check
+        files: ^app/
+      - id: ruff-format
+        files: ^app/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: 2834ec6639549dd6796205c8f011dedcd587288b # frozen: v2.4.0
+    hooks:
+      - id: mypy
+        # Check the files listed in pyproject.toml as one program, with its strict settings.
+        args: []
+        pass_filenames: false
+        files: ^(app/|pyproject\.toml$)
+
+  # Commit messages: Conventional Commits plus `infra` (see .claude/skills/pr-conventions).
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 91ab4bf57e58b32adf1a122681f6ebe164d081c8 # frozen: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, refactor, perf, test, docs, build, ci, infra, chore, style, revert]

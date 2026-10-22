@@ -1,4 +1,5 @@
 """Tests for the Ship-it Board. Run from app/: python -m unittest discover -s tests"""
+
 import json
 import os
 import sys
@@ -15,8 +16,8 @@ KEY = "fake-test-key-123"
 REAL_URLOPEN = urllib.request.urlopen
 
 
-def get(port, path, headers=None):
-    req = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), headers=headers or {})
+def get(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, str]:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers or {})
     try:
         with REAL_URLOPEN(req, timeout=5) as r:
             return r.status, r.read().decode()
@@ -27,7 +28,7 @@ def get(port, path, headers=None):
 class BoardTest(unittest.TestCase):
     env = {"APP_ENV": "test", "GIT_SHA": "abc1234", "APP_API_KEY": KEY}
 
-    def setUp(self):
+    def setUp(self) -> None:
         patcher = mock.patch.dict(os.environ, self.env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -37,75 +38,86 @@ class BoardTest(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    def test_index(self):
+    def test_index(self) -> None:
         status, body = get(self.port, "/")
         self.assertEqual(status, 200)
         for text in ("test", "abc1234", "secret_loaded: yes", "n/a"):
             self.assertIn(text, body)
         self.assertNotIn(KEY, body)
 
-    def test_index_secret_not_loaded(self):
+    def test_index_secret_not_loaded(self) -> None:
         with mock.patch.dict(os.environ, {"APP_API_KEY": ""}):
             self.assertIn("secret_loaded: no", get(self.port, "/")[1])
 
-    def test_index_escapes_html(self):
+    def test_index_escapes_html(self) -> None:
         with mock.patch.dict(os.environ, {"APP_ENV": "<script>x</script>"}):
             body = get(self.port, "/")[1]
         self.assertNotIn("<script>x", body)
         self.assertIn("&lt;script&gt;", body)
 
-    def test_color_override_and_derived(self):
+    def test_color_override_and_derived(self) -> None:
         with mock.patch.dict(os.environ, {"APP_COLOR": "#123456"}):
             self.assertIn("#123456", get(self.port, "/")[1])
         self.assertIn("hsl(", get(self.port, "/")[1])
 
-    def test_health_ok(self):
+    def test_health_ok(self) -> None:
         status, body = get(self.port, "/health")
         self.assertEqual((status, json.loads(body)), (200, {"status": "ok"}))
 
-    def test_health_break(self):
+    def test_health_break(self) -> None:
         with mock.patch.dict(os.environ, {"BREAK": "true"}):
             self.assertEqual(get(self.port, "/health")[0], 500)
 
-    def test_version(self):
+    def test_version(self) -> None:
         status, body = get(self.port, "/version")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body),
-                         {"env": "test", "git_sha": "abc1234", "image_digest": "n/a"})
+        self.assertEqual(
+            json.loads(body), {"env": "test", "git_sha": "abc1234", "image_digest": "n/a"}
+        )
 
-    def test_admin_with_key(self):
+    def test_admin_with_key(self) -> None:
         status, body = get(self.port, "/admin", {"X-API-Key": KEY})
         self.assertEqual(status, 200)
         self.assertNotIn(KEY, body)
 
-    def test_admin_without_or_wrong_key(self):
+    def test_admin_without_or_wrong_key(self) -> None:
         self.assertEqual(get(self.port, "/admin")[0], 401)
         status, body = get(self.port, "/admin", {"X-API-Key": "wrong"})
         self.assertEqual(status, 401)
         self.assertNotIn(KEY, body)
 
-    def test_admin_unset_or_empty_key_never_matches(self):
+    def test_admin_unset_or_empty_key_never_matches(self) -> None:
         with mock.patch.dict(os.environ, {"APP_API_KEY": ""}):
             self.assertEqual(get(self.port, "/admin", {"X-API-Key": ""})[0], 401)
         with mock.patch.dict(os.environ):
             del os.environ["APP_API_KEY"]
             self.assertEqual(get(self.port, "/admin", {"X-API-Key": ""})[0], 401)
 
-    def test_unknown_path(self):
+    def test_unknown_path(self) -> None:
         self.assertEqual(get(self.port, "/nope")[0], 404)
 
-    def test_digest_from_metadata(self):
+    def test_digest_from_metadata(self) -> None:
         class Resp:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return b'{"ImageID": "sha256:deadbeef"}'
-        with mock.patch.dict(os.environ, {"ECS_CONTAINER_METADATA_URI_V4": "http://x"}), \
-                mock.patch("urllib.request.urlopen", return_value=Resp()):
+            def __enter__(self) -> "Resp":
+                return self
+
+            def __exit__(self, *a: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ImageID": "sha256:deadbeef"}'
+
+        with (
+            mock.patch.dict(os.environ, {"ECS_CONTAINER_METADATA_URI_V4": "http://x"}),
+            mock.patch("urllib.request.urlopen", return_value=Resp()),
+        ):
             self.assertEqual(board.image_digest(), "sha256:deadbeef")
 
-    def test_digest_error_is_na(self):
-        with mock.patch.dict(os.environ, {"ECS_CONTAINER_METADATA_URI_V4": "http://x"}), \
-                mock.patch("urllib.request.urlopen", side_effect=OSError):
+    def test_digest_error_is_na(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"ECS_CONTAINER_METADATA_URI_V4": "http://x"}),
+            mock.patch("urllib.request.urlopen", side_effect=OSError),
+        ):
             self.assertEqual(board.image_digest(), "n/a")
 
 
