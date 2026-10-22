@@ -32,11 +32,11 @@
 | Variable | Example | Value |
 |---|---|---|
 | AWS region | `ap-southeast-1` | `ap-southeast-1` |
-| Dev account ID | `111111111111` | `TODO` (needed at Phase 1; kept out of git, see `docs/adr/0001-lab-decisions.md`) |
+| Dev account ID | `111111111111` | set in `CLAUDE.local.md` (gitignored; ADR 0001 D2) |
 | Prod account ID (stretch) | `222222222222` | `TODO / later` |
 | GitHub owner / repo | `my-user/ship-it-safely` | `trungleviet-agilityio/ship-it-safely` (public) |
 | Name prefix | `sis` | `sis` |
-| Budget alert email / monthly USD | `me@example.com` / `20` | `TODO` / `20` |
+| Budget alert email / monthly USD | `me@example.com` / `20` | set in `CLAUDE.local.md` (gitignored) / `20` |
 | App | existing app with Dockerfile, or generate the sample app (§6) | Generate Ship-it Board in Python 3.13, stdlib only (no dependencies) |
 
 Claude Code: ask the user for any `TODO` value before writing code that depends on it.
