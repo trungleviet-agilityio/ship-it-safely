@@ -102,6 +102,8 @@ disagree, the ADR wins; update this file.
 - Action wildcards are fine in Deny statements, where they widen protection.
 - EC2 resources have random IDs, so scope EC2 writes by tag (`aws:RequestTag`/`aws:ResourceTag`
   on `Project` and `Env`) instead of by ARN.
+  Keep `default_tags` on every provider so standalone security group rules are tagged too;
+  untagged rules cannot be changed or deleted by the apply role.
 - IAM roles that a GitHub role creates carry the bootstrap permissions boundary
   (`iam:PermissionsBoundary` condition).
 - `iam:PassRole` names the exact role ARNs and sets `iam:PassedToService`.
