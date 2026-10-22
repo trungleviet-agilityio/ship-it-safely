@@ -32,7 +32,13 @@ values are always handled by a human at the checkpoint.
 Prerequisites (macOS):
 
 ```bash
-brew install tflint actionlint hadolint gitleaks trivy pre-commit
+brew install actionlint hadolint gitleaks trivy pre-commit
+```
+
+TFLint is no longer in homebrew-core; use its official tap (from the TFLint README):
+
+```bash
+brew install terraform-linters/tap/tflint
 ```
 
 Register the repo-local marketplace and install the plugin once (from the repo root):
