@@ -20,6 +20,16 @@ repos:
       - id: terraform_validate
       - id: terraform_tflint
 
+  # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID is allowed (tests).
+  - repo: local
+    hooks:
+      - id: no-aws-account-id
+        name: no bare 12-digit AWS account ID in infra
+        language: pygrep
+        entry: '(?<![0-9])(?!123456789012)[0-9]{12}(?![0-9])'
+        files: ^infra/.*\.(tf|hcl|tfvars\.example)$
+        exclude: \.terraform\.lock\.hcl$
+
   # App gate (pyproject.toml holds the config). Scoped to app/ so ruff-format leaves markdown alone.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
