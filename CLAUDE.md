@@ -13,10 +13,12 @@ privilege and supply-chain hardening. `PLAN.md` is the requirements source; `doc
 - This shell has no AWS credentials on purpose. Do not ask for them or export a profile.
 - Never commit secrets, a real `.env`, `*.tfstate`, `*.tfvars` holding account IDs, or plan files.
 - Look up current versions and commit SHAs for actions and tools; never guess them (NFR-3).
-- After a change: `terraform fmt -recursive`, `terraform validate`, `tflint`, `actionlint`, `hadolint` (each when
-  available).
-- Commit per phase with Conventional Commits, e.g. `feat(app-ecs): fargate service with secrets manager injection`.
-- Trunk-based: short feature branch, PR into `main`. No `develop` branch.
+- Follow `docs/reference/CODING_STANDARDS.md` (Python, Dockerfile, Terraform, GitHub Actions).
+- Load the `pr-conventions` skill before committing, branching or opening a PR. It holds the commit and PR title
+  format (Conventional Commits, `infra` type for Terraform) and the Pre-PR Checks: ruff, mypy, unittest,
+  hadolint, `terraform fmt`/`validate`, `tflint`, `actionlint`, `pre-commit run --all-files`.
+- Commit per phase, e.g. `infra(app-ecs): fargate service with secrets manager injection`.
+- Trunk-based: short feature branch, PR into `main`, squash merge. No `develop` branch.
 
 ## Agent team
 
