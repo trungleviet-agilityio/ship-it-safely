@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # python:3.13-slim, pinned by digest (index digest, multi-arch).
 FROM python:3.13-slim@sha256:57b29a7c050c4e679e4bea572e14b3965cf4b5839de2da49d55e49ffc4024f39 AS test
 WORKDIR /app
