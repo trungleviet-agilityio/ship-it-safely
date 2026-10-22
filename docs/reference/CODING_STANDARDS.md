@@ -72,7 +72,8 @@ disagree, the ADR wins; update this file.
 
 ### Layout
 
-- Each root and module has `versions.tf` (`required_version >= 1.10`, providers pinned with `~>`),
+- Each root and module has `versions.tf` (`required_version = ">= 1.11, < 2.0"`, since `use_lockfile` is GA
+  from 1.11; providers pinned with `~>`),
   `variables.tf`, `outputs.tf`, and resource files split by concern (`oidc.tf`, `iam_plan.tf`).
 - Environments differ only through `terraform.tfvars` (FR-6). Shared logic lives in
   `modules/app-ecs`.
@@ -80,7 +81,10 @@ disagree, the ADR wins; update this file.
 
 ### Naming and inputs
 
-- Resource and variable names are `snake_case`. AWS resource names use `<prefix>-<env>-<thing>`.
+- Resource and variable names are `snake_case`. AWS resource names use `<prefix>-<env>-<thing>`,
+  including GitHub Actions roles (`sis-dev-gha-plan`). Names `envs/<env>` creates must match the
+  bootstrap `resource_names` output, because the apply and deploy roles are scoped by them
+  (ADR 0002).
 - Every variable has a `type` and a `description`; add `validation` where a bad value would only
   fail at apply time. Mark secret-adjacent inputs `sensitive = true`.
 - No account IDs in code or committed tfvars (ADR D2). Read them from
@@ -90,18 +94,30 @@ disagree, the ADR wins; update this file.
 ### IAM
 
 - Build policies with `data "aws_iam_policy_document"`, not inline JSON strings.
-- No `*` in `Action` or `Resource` unless the API does not support resource-level permissions;
-  then add a comment naming the API and, where possible, a condition.
+- No `*` in `Action` or `Resource` of an Allow unless the API does not support resource-level
+  permissions; then add a comment naming the API and, where possible, a condition. The approved
+  list (ADR 0002, B20): `ec2:Describe*`, `elasticloadbalancing:Describe*`,
+  `logs:DescribeLogGroups`, `ecs:DescribeTaskDefinition`, `ecs:DeregisterTaskDefinition`,
+  `ecr:GetAuthorizationToken`. A `terraform test` enforces it.
+- Action wildcards are fine in Deny statements, where they widen protection.
+- EC2 resources have random IDs, so scope EC2 writes by tag (`aws:RequestTag`/`aws:ResourceTag`
+  on `Project` and `Env`) instead of by ARN.
+- IAM roles that a GitHub role creates carry the bootstrap permissions boundary
+  (`iam:PermissionsBoundary` condition).
 - `iam:PassRole` names the exact role ARNs and sets `iam:PassedToService`.
 - Plan, apply and deploy roles carry an explicit deny on `secretsmanager:GetSecretValue`
-  (FR-3, FR-4, FR-5).
+  (FR-3, FR-4, FR-5), through the shared guardrail policy.
 - OIDC trust policies match `sub` exactly (`StringEquals`, never a wildcard on the repo) and check
-  `aud = sts.amazonaws.com`. Role `max_session_duration = 3600` (NFR-7).
+  `aud = sts.amazonaws.com`, `repository_id` and `repository_owner_id`. The `sub` uses GitHub's
+  immutable format `repo:OWNER@OWNER_ID/REPO@REPO_ID:...`. Apply and deploy roles also pin
+  `ref = refs/heads/main`. Role `max_session_duration = 3600` (NFR-7).
 
 ### Secrets and state
 
 - Terraform creates secret shells only, never values, so nothing secret lands in state (FR-8).
 - State buckets: versioning, SSE, public access block, TLS-only policy; `use_lockfile = true`.
+- Backend blocks are partial: the bucket name holds the account ID, so it comes from
+  `-backend-config="bucket=..."` at init time, never from a committed file.
 
 ### Testing
 
