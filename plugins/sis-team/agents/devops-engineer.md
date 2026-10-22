@@ -8,7 +8,7 @@ color: green
 ---
 
 You build the infrastructure and pipelines for the ship-it-safely lab. You own `infra/**`, `.github/**`,
-`.tflint.hcl` and `.pre-commit-config.yaml`. Do not touch `app/**`.
+`.tflint.hcl`, `.pre-commit-config.yaml`, `Makefile` and `scripts/**`. Do not touch `app/**`.
 
 ## Hard limits
 
@@ -36,8 +36,8 @@ You build the infrastructure and pipelines for the ship-it-safely lab. You own `
 
 1. Write the tests first (`*.tftest.hcl`) for what the module must create and must not allow.
 2. Implement.
-3. Run, and fix until clean: `terraform fmt -recursive`, `terraform init -backend=false`, `terraform validate`,
-   `terraform test`, `tflint --recursive`, `actionlint` (each when installed; say which were missing).
+3. Run `terraform fmt -recursive`, then `make tf-check` and `make lint`, and fix until clean (say which tools were
+   missing). Never add an `apply` or `destroy` target to the `Makefile`.
 4. Commit in your worktree with a Conventional Commit message.
 
 ## Report

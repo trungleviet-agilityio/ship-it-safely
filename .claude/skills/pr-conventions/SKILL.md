@@ -60,7 +60,7 @@ type(scope): subject
 | `build` | `Dockerfile`, `docker-compose.yml`, `pyproject.toml` |
 | `ci` | `.github/workflows/`, Dependabot |
 | `infra` | `infra/terraform/**` |
-| `chore` | repo tooling and maintenance (`.pre-commit-config.yaml`, `.tflint.hcl`, `.gitignore`) |
+| `chore` | repo tooling and maintenance (`.pre-commit-config.yaml`, `.tflint.hcl`, `.gitignore`, `Makefile`, `scripts/`) |
 | `style` | formatting only |
 | `revert` | reverting a previous commit |
 
@@ -121,6 +121,7 @@ pass. Skip an area the PR does not touch.
 
 | Area | Command |
 |---|---|
+| All of the below | `make check` (`make lint test tf-check`) |
 | App lint | `uvx ruff check app` |
 | App format | `uvx ruff format --check app` |
 | App types | `uvx mypy` (strict, config in `pyproject.toml`) |
@@ -130,6 +131,7 @@ pass. Skip an area the PR does not touch.
 | Terraform | `terraform init -backend=false && terraform validate` in each root and module |
 | Terraform | `tflint --init && tflint --recursive` |
 | Workflows | `actionlint` |
+| Shell scripts | `shellcheck -x scripts/*.sh` |
 | Everything | `pre-commit run --all-files` (gitleaks, file checks, the hooks above) |
 
 Use the tool versions pinned in `.pre-commit-config.yaml` when running them through `uvx`

@@ -24,7 +24,7 @@ Decide which build agents the phase needs from the paths it touches:
 | Paths | Agent |
 |---|---|
 | `app/**` | `sis-team:backend-dev` |
-| `infra/**`, `.github/**`, `.tflint.hcl`, `.pre-commit-config.yaml` | `sis-team:devops-engineer` |
+| `infra/**`, `.github/**`, `.tflint.hcl`, `.pre-commit-config.yaml`, `Makefile`, `scripts/**` | `sis-team:devops-engineer` |
 
 Spawn the needed agents in one message so they run in parallel. Give each: the phase, its requirement IDs,
 its build brief from the ADR, and the path ownership above. Each works in its own worktree.

@@ -35,7 +35,7 @@ values are always handled by a human at the checkpoint.
 Prerequisites (macOS):
 
 ```bash
-brew install actionlint hadolint gitleaks trivy pre-commit
+brew install actionlint hadolint gitleaks trivy pre-commit shellcheck
 ```
 
 TFLint is no longer in homebrew-core; use its official tap (from the TFLint README):
@@ -53,6 +53,18 @@ claude plugin marketplace add ./
 ```bash
 claude plugin install sis-team@sis-lab --scope project
 ```
+
+Day to day, run everything through `make` (`make help` lists the targets):
+
+| Target | Does |
+|---|---|
+| `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
+| `make test` | App unit tests |
+| `make lint` | pre-commit hooks, hadolint, shellcheck, actionlint |
+| `make tf-check` | Offline Terraform `fmt`, `validate`, `terraform test` (no AWS) |
+| `make check` | All of the above checks; what a PR must pass |
+
+There is no `apply` or `destroy` target: you run those by hand at the checkpoint (ADR 0001, D15).
 
 Then in Claude Code: `/sis-team:run 0` to build Phase 0 (local app).
 

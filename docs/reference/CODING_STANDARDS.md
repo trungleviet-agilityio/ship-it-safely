@@ -122,3 +122,19 @@ disagree, the ADR wins; update this file.
 - Never interpolate `${{ github.event.* }}` or other user-controlled values directly in `run:`.
   Pass them through `env:` and quote them in the shell.
 - Set `timeout-minutes` on every job and `concurrency` on workflows that change AWS state.
+
+## Makefile and shell scripts (`Makefile`, `scripts/`)
+
+- The `Makefile` stays thin: each target is one or two lines and has a `## description` for
+  `make help`. Anything longer goes in `scripts/<name>.sh`. Never add `apply` or `destroy` targets
+  (ADR 0001, D15).
+- Targets must work with the GNU Make 3.81 that ships with macOS (no `.ONESHELL`, no
+  `.SHELLFLAGS`).
+- Scripts start with `#!/usr/bin/env bash` and `source "$(dirname "$0")/lib.sh"`, which sets
+  `set -Eeuo pipefail`, `ROOT`, `log`/`ok`/`warn`/`die` and `require_cmd`. Messages go to stderr.
+- Write for bash 3.2: no `mapfile`, no associative arrays, and never expand an empty array under
+  `set -u`; check `${#arr[@]}` first.
+- Use `terraform -chdir=<dir>` or a subshell instead of `cd` and back.
+- When looping over many directories, collect failures, finish the loop, then print a summary and
+  exit non-zero.
+- `shellcheck -x scripts/*.sh` passes (run by `make lint`).
