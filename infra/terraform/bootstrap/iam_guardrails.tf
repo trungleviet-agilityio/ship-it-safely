@@ -36,6 +36,8 @@ data "aws_iam_policy_document" "guardrails" {
       "iam:Delete*",
       "iam:Attach*",
       "iam:Detach*",
+      "iam:Add*",
+      "iam:Remove*",
       "iam:Tag*",
       "iam:Untag*",
       "iam:*PermissionsBoundary",

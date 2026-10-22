@@ -19,9 +19,9 @@ data "aws_iam_policy_document" "plan" {
     resources = [local.bucket_arn]
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "s3:prefix"
-      values   = [local.state_key]
+      values   = local.state_list_prefixes
     }
   }
 

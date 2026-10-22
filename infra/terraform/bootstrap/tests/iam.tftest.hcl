@@ -42,6 +42,52 @@ run "guardrails_deny_and_attach" {
   }
 
   assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.guardrails.statement : toset(s.resources) == toset(["*"])
+      if contains(["G1DenySecretValues", "G2DenySsmParameterReads", "G3DenyRoleChaining"], s.sid)
+    ])
+    error_message = "G1, G2 and G3 must apply to every resource"
+  }
+
+  assert {
+    condition = (
+      length([for s in data.aws_iam_policy_document.guardrails.statement : s if s.sid == "G4DenyBootstrapIamWrites"]) == 1
+      && length([for s in data.aws_iam_policy_document.guardrails.statement : s if s.sid == "G5DenyBootstrapState"]) == 1
+    )
+    error_message = "G4 and G5 statements must exist exactly once"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.guardrails.statement : (
+        s.effect == "Deny"
+        && toset(s.resources) == toset([
+          "arn:aws:iam::123456789012:role/sis-dev-gha-*",
+          "arn:aws:iam::123456789012:policy/sis-dev-gha-*",
+          "arn:aws:iam::123456789012:policy/sis-dev-ecs-boundary",
+          "arn:aws:iam::123456789012:oidc-provider/*",
+        ])
+        && alltrue([
+          for a in ["iam:Create*", "iam:Put*", "iam:Update*", "iam:Delete*", "iam:Attach*", "iam:Detach*", "iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:*PermissionsBoundary", "iam:*PolicyVersion"] :
+          contains(s.actions, a)
+        ])
+      ) if s.sid == "G4DenyBootstrapIamWrites"
+    ])
+    error_message = "G4 must deny IAM writes (including Add* and Remove*) on the gha roles, gha policies, boundary and OIDC providers"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.guardrails.statement : (
+        s.effect == "Deny"
+        && toset(s.resources) == toset(["arn:aws:s3:::sis-dev-tfstate-123456789012-ap-southeast-1-an/bootstrap/*"])
+        && toset(s.actions) == toset(["s3:GetObject*", "s3:PutObject*", "s3:DeleteObject*"])
+      ) if s.sid == "G5DenyBootstrapState"
+    ])
+    error_message = "G5 must deny object access under bootstrap/*"
+  }
+
+  assert {
     condition = (
       toset(keys(aws_iam_role_policy_attachment.guardrails)) == toset(["plan", "apply", "deploy"])
       && alltrue([for k, a in aws_iam_role_policy_attachment.guardrails : a.policy_arn == aws_iam_policy.guardrails.arn])
@@ -63,10 +109,25 @@ run "plan_role" {
       for s in data.aws_iam_policy_document.plan.statement : (
         s.effect == "Deny"
         && contains(s.actions, "s3:GetObject")
-        && length(s.not_resources) == 2
+        && toset(s.not_resources) == toset([
+          "arn:aws:s3:::sis-dev-tfstate-123456789012-ap-southeast-1-an/envs/dev/terraform.tfstate",
+          "arn:aws:s3:::sis-dev-tfstate-123456789012-ap-southeast-1-an/envs/dev/terraform.tfstate.tflock",
+        ])
       )
     ])
-    error_message = "plan role needs the NotResource s3 read deny"
+    error_message = "plan role needs the NotResource s3 read deny on exactly the envs/dev state and lock objects"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.plan.statement : (
+        toset(s.resources) == toset(["arn:aws:s3:::sis-dev-tfstate-123456789012-ap-southeast-1-an"])
+        && anytrue([
+          for c in s.condition : c.test == "StringLike" && c.variable == "s3:prefix" && toset(c.values) == toset(["envs/dev/terraform.tfstate", "env:/*"])
+        ])
+      ) if contains(s.actions, "s3:ListBucket")
+    ])
+    error_message = "plan ListBucket must allow the state key and the workspace listing prefix env:/ (S3 backend)"
   }
 }
 
@@ -130,6 +191,21 @@ run "apply_iam_requires_boundary" {
     error_message = "iam:CreateRole needs the boundary condition"
   }
 
+  # Per the IAM Service Authorization Reference all six actions support iam:PermissionsBoundary.
+  assert {
+    condition = alltrue([
+      for a in ["iam:CreateRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"] :
+      anytrue([
+        for s in data.aws_iam_policy_document.apply.statement : (
+          contains(s.actions, a)
+          && toset(s.resources) == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-*"])
+          && anytrue([for c in s.condition : c.variable == "iam:PermissionsBoundary"])
+        ) if s.effect == "Allow"
+      ])
+    ])
+    error_message = "every mutating IAM role action must sit under the boundary condition on the ecs role pattern"
+  }
+
   assert {
     condition = anytrue([
       for s in data.aws_iam_policy_document.apply.statement : s.effect == "Deny" && contains(s.actions, "iam:DeleteRolePermissionsBoundary")
@@ -142,6 +218,167 @@ run "apply_iam_requires_boundary" {
       for s in data.aws_iam_policy_document.apply.statement : !anytrue([for a in s.actions : startswith(a, "iam:Attach")])
     ])
     error_message = "apply must not attach managed policies"
+  }
+}
+
+run "apply_state_listing" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : (
+        toset(s.resources) == toset(["arn:aws:s3:::sis-dev-tfstate-123456789012-ap-southeast-1-an"])
+        && anytrue([
+          for c in s.condition : c.test == "StringLike" && c.variable == "s3:prefix" && toset(c.values) == toset(["envs/dev/terraform.tfstate", "env:/*"])
+        ])
+      ) if contains(s.actions, "s3:ListBucket")
+    ])
+    error_message = "apply ListBucket must allow the state key and the workspace listing prefix env:/ (S3 backend)"
+  }
+}
+
+run "ecs_task_size_and_update_conditions" {
+  command = plan
+
+  assert {
+    condition = alltrue(flatten([
+      for doc in [data.aws_iam_policy_document.apply, data.aws_iam_policy_document.deploy] : [
+        for s in doc.statement : (
+          anytrue([for c in s.condition : c.test == "NumericLessThanEquals" && c.variable == "ecs:task-cpu" && toset(c.values) == toset(["512"])])
+          && anytrue([for c in s.condition : c.test == "NumericLessThanEquals" && c.variable == "ecs:task-memory" && toset(c.values) == toset(["1024"])])
+        ) if contains(s.actions, "ecs:RegisterTaskDefinition")
+      ]
+    ]))
+    error_message = "RegisterTaskDefinition needs ecs:task-cpu <= 512 and ecs:task-memory <= 1024 in apply and deploy"
+  }
+
+  assert {
+    condition = alltrue([
+      for doc in [data.aws_iam_policy_document.apply, data.aws_iam_policy_document.deploy] :
+      length([for s in doc.statement : s if contains(s.actions, "ecs:RegisterTaskDefinition")]) == 1
+    ])
+    error_message = "apply and deploy each have exactly one RegisterTaskDefinition statement"
+  }
+
+  assert {
+    condition = (
+      length([for s in data.aws_iam_policy_document.deploy.statement : s if contains(s.actions, "ecs:UpdateService")]) == 1
+      && alltrue([
+        for s in data.aws_iam_policy_document.deploy.statement : anytrue([
+          for c in s.condition : (
+            c.test == "ArnLike"
+            && c.variable == "ecs:task-definition"
+            && toset(c.values) == toset(["arn:aws:ecs:ap-southeast-1:123456789012:task-definition/sis-dev-app:*"])
+          )
+        ]) if contains(s.actions, "ecs:UpdateService")
+      ])
+    )
+    error_message = "deploy UpdateService must be limited to the sis-dev-app task definition family"
+  }
+}
+
+run "apply_ec2_tag_scoping" {
+  command = plan
+
+  # No create statement guarded by RequestTag may span the whole region.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : alltrue([for r in s.resources : !endswith(r, ":*")])
+      if s.effect == "Allow" && anytrue([for c in s.condition : startswith(c.variable, "aws:RequestTag/")])
+    ])
+    error_message = "RequestTag statements must name resource types, not the region-wide ec2 ARN"
+  }
+
+  # Authorize* never rides on a RequestTag condition and is gated by tags on the parent security group.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : (
+        !anytrue([for c in s.condition : startswith(c.variable, "aws:RequestTag/")])
+        && alltrue([
+          for r in s.resources : contains([
+            "arn:aws:ec2:ap-southeast-1:123456789012:security-group/*",
+            "arn:aws:ec2:ap-southeast-1:123456789012:security-group-rule/*",
+          ], r)
+        ])
+        && (
+          !contains(s.resources, "arn:aws:ec2:ap-southeast-1:123456789012:security-group/*")
+          || (
+            anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Project" && toset(c.values) == toset(["ship-it-safely"])])
+            && anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Env" && toset(c.values) == toset(["dev"])])
+          )
+        )
+      ) if s.effect == "Allow" && anytrue([for a in s.actions : startswith(a, "ec2:AuthorizeSecurityGroup")])
+    ])
+    error_message = "Authorize* may only target security-group/* (with ResourceTag Project and Env) and security-group-rule/*"
+  }
+
+  assert {
+    condition = (
+      length([for s in data.aws_iam_policy_document.apply.statement : s if contains(s.actions, "ec2:AuthorizeSecurityGroupIngress")]) == 2
+      && alltrue([
+        for s in data.aws_iam_policy_document.apply.statement : (
+          contains(s.actions, "ec2:AuthorizeSecurityGroupIngress") == contains(s.actions, "ec2:AuthorizeSecurityGroupEgress")
+        )
+      ])
+    )
+    error_message = "Authorize ingress and egress are granted together on the security group and on the rule"
+  }
+
+  # Child creates: RequestTag on the new resource type only, ResourceTag on the parent vpc.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : (
+        s.effect == "Allow"
+        && (
+          (
+            toset(s.resources) == toset(["arn:aws:ec2:ap-southeast-1:123456789012:vpc/*"])
+            && !anytrue([for c in s.condition : startswith(c.variable, "aws:RequestTag/")])
+            && anytrue([for c in s.condition : c.variable == "aws:ResourceTag/Project" && toset(c.values) == toset(["ship-it-safely"])])
+            && anytrue([for c in s.condition : c.variable == "aws:ResourceTag/Env" && toset(c.values) == toset(["dev"])])
+          )
+          || (
+            alltrue([for r in s.resources : contains([
+              "arn:aws:ec2:ap-southeast-1:123456789012:subnet/*",
+              "arn:aws:ec2:ap-southeast-1:123456789012:route-table/*",
+              "arn:aws:ec2:ap-southeast-1:123456789012:security-group/*",
+            ], r)])
+            && anytrue([for c in s.condition : c.variable == "aws:RequestTag/Project" && toset(c.values) == toset(["ship-it-safely"])])
+            && anytrue([for c in s.condition : c.variable == "aws:RequestTag/Env" && toset(c.values) == toset(["dev"])])
+          )
+        )
+      ) if anytrue([for a in s.actions : contains(["ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup"], a)])
+    ])
+    error_message = "CreateSubnet, CreateRouteTable and CreateSecurityGroup need RequestTag on the new resource and ResourceTag on the parent vpc"
+  }
+
+  assert {
+    condition = (
+      length([for s in data.aws_iam_policy_document.apply.statement : s if contains(s.actions, "ec2:CreateVpc")]) == 1
+      && alltrue([
+        for s in data.aws_iam_policy_document.apply.statement : (
+          toset(s.resources) == toset([
+            "arn:aws:ec2:ap-southeast-1:123456789012:vpc/*",
+            "arn:aws:ec2:ap-southeast-1:123456789012:internet-gateway/*",
+          ])
+          && anytrue([for c in s.condition : c.variable == "aws:RequestTag/Project"])
+          && anytrue([for c in s.condition : c.variable == "aws:RequestTag/Env"])
+        ) if contains(s.actions, "ec2:CreateVpc")
+      ])
+    )
+    error_message = "CreateVpc and CreateInternetGateway use RequestTag on vpc/* and internet-gateway/*"
+  }
+
+  # Tag-on-create stays in sync with the create actions.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : (
+        toset(flatten([for c in s.condition : c.values if c.variable == "ec2:CreateAction"])) == toset([
+          "CreateVpc", "CreateSubnet", "CreateInternetGateway", "CreateRouteTable", "CreateSecurityGroup",
+          "AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress",
+        ])
+      ) if contains(s.actions, "ec2:CreateTags") && anytrue([for c in s.condition : c.variable == "ec2:CreateAction"])
+    ])
+    error_message = "ec2:CreateAction list must match the create actions"
   }
 }
 
@@ -223,7 +460,13 @@ run "name_contract_output" {
       && local.resource_names.ecr_repository == "sis-dev-app"
       && local.resource_names.ecs_exec_role == "sis-dev-ecs-exec"
       && local.resource_names.ecs_task_role == "sis-dev-ecs-task"
+      && local.resource_names.task_family == "sis-dev-app"
+      && local.resource_names.log_group == "/ecs/sis-dev-app"
+      && local.resource_names.alb == "sis-dev-alb"
+      && local.resource_names.target_group == "sis-dev-tg"
       && local.resource_names.secret == "sis/dev/app-api-key"
+      && local.resource_names.boundary == "sis-dev-ecs-boundary"
+      && length(local.resource_names) == 11
     )
     error_message = "name contract"
   }

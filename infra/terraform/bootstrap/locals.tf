@@ -13,6 +13,9 @@ locals {
   lock_arn      = "${local.bucket_arn}/${local.lock_key}"
   bootstrap_arn = "${local.bucket_arn}/bootstrap/*"
 
+  # The S3 backend lists the state key and, for workspaces, the "env:/" prefix. Neither exposes object data.
+  state_list_prefixes = [local.state_key, "env:/*"]
+
   # OIDC (B12). The immutable form carries owner and repo IDs.
   gh_sub_prefix = (
     var.github_immutable_subject

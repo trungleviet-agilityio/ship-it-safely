@@ -9,6 +9,9 @@ resource "aws_iam_role" "apply" {
 locals {
   ec2_arn = "${local.svc_arn["ec2"]}:*"
 
+  # Resource-type ARNs, so no statement guarded by RequestTag spans the whole region.
+  ec2_type_arn = { for t in ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule"] : t => "${local.svc_arn["ec2"]}:${t}/*" }
+
   ec2_create_actions = [
     "CreateVpc",
     "CreateSubnet",
@@ -36,9 +39,9 @@ data "aws_iam_policy_document" "apply" {
     resources = [local.bucket_arn]
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "s3:prefix"
-      values   = [local.state_key]
+      values   = local.state_list_prefixes
     }
   }
 
@@ -64,11 +67,16 @@ data "aws_iam_policy_document" "apply" {
     resources = ["*"] # No resource-level support for Describe
   }
 
+  # Creates carry the tags on the new resource (RequestTag). A parent that already exists must carry them too
+  # (ResourceTag), so a child cannot be attached to a VPC that this lab does not own.
   statement {
-    sid       = "Ec2CreateTagged"
-    effect    = "Allow"
-    actions   = [for a in local.ec2_create_actions : "ec2:${a}"]
-    resources = [local.ec2_arn]
+    sid     = "Ec2CreateTopLevelTagged"
+    effect  = "Allow"
+    actions = ["ec2:CreateVpc", "ec2:CreateInternetGateway"]
+    resources = [
+      local.ec2_type_arn["vpc"],
+      local.ec2_type_arn["internet-gateway"],
+    ]
 
     condition {
       test     = "StringEquals"
@@ -84,10 +92,81 @@ data "aws_iam_policy_document" "apply" {
   }
 
   statement {
-    sid       = "Ec2TagOnCreate"
+    sid     = "Ec2CreateChildTagged"
+    effect  = "Allow"
+    actions = ["ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup"]
+    resources = [
+      local.ec2_type_arn["subnet"],
+      local.ec2_type_arn["route-table"],
+      local.ec2_type_arn["security-group"],
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.tag_project]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Env"
+      values   = [var.env]
+    }
+  }
+
+  statement {
+    sid       = "Ec2CreateChildInTaggedVpc"
     effect    = "Allow"
-    actions   = ["ec2:CreateTags"]
-    resources = [local.ec2_arn]
+    actions   = ["ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup"]
+    resources = [local.ec2_type_arn["vpc"]]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.tag_project]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Env"
+      values   = [var.env]
+    }
+  }
+
+  # Authorize* touches the security group (tags exist) and the new rule (no tags yet, only RequestTag is
+  # available there). The rule statement carries no condition: it is useless without the gated group statement.
+  statement {
+    sid       = "Ec2AuthorizeRulesOnTaggedGroup"
+    effect    = "Allow"
+    actions   = ["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"]
+    resources = [local.ec2_type_arn["security-group"]]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.tag_project]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Env"
+      values   = [var.env]
+    }
+  }
+
+  statement {
+    sid       = "Ec2AuthorizeRuleResource"
+    effect    = "Allow"
+    actions   = ["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"]
+    resources = [local.ec2_type_arn["security-group-rule"]]
+  }
+
+  statement {
+    sid     = "Ec2TagOnCreate"
+    effect  = "Allow"
+    actions = ["ec2:CreateTags"]
+    resources = [for t in ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule"] :
+    local.ec2_type_arn[t]]
 
     condition {
       test     = "StringEquals"
