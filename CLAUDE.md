@@ -25,7 +25,8 @@ privilege and supply-chain hardening. `PLAN.md` is the requirements source; `doc
 ## Agent team
 
 The `sis-team` plugin (`plugins/sis-team/`) provides `/sis-team:plan <phase>`, `/sis-team:run <phase>` and
-`/sis-team:review`. Build agents work in their own worktree and own disjoint paths:
+`/sis-team:review`, plus `/sis-team:team` (roster table) and `/sis-team:diagram <topic>` (diagrams in
+`docs/diagrams/`). Build agents work in their own worktree and own disjoint paths:
 
 | Agent | Owns |
 |---|---|
