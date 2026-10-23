@@ -308,7 +308,8 @@ gh variable set TF_STATE_BUCKET     --env dev --repo "$REPO" --body "${BUCKET}"
 gh variable set AWS_ACCOUNT_ID      --env dev --repo "$REPO" --body "<DEV_ACCOUNT_ID>"
 
 gh variable set AWS_REGION            --repo "$REPO" --body ap-southeast-1
-gh variable set AWS_PLAN_ROLE_ARN_DEV --repo "$REPO" --body "$(terraform output -raw plan_role_arn)"
+# Superseded by ADR 0003 C10: AWS_PLAN_ROLE_ARN_DEV is a repo secret, not a variable
+terraform output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV --repo "$REPO"
 gh variable set TF_STATE_BUCKET_DEV   --repo "$REPO" --body "${BUCKET}"
 gh variable set AWS_ACCOUNT_ID_DEV    --repo "$REPO" --body "<DEV_ACCOUNT_ID>"
 ```

@@ -95,7 +95,7 @@ account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap
 | Workflow | Trigger | Does |
 |---|---|---|
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
-| | `workflow_dispatch` from `main` | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
+| | `workflow_dispatch` (run it with `--ref main`) | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
 
 Repo configuration it reads: secret `AWS_PLAN_ROLE_ARN_DEV` (a secret, not a variable, so the account ID in
 the ARN never shows in public logs; ADR 0003 C10) and variable `AWS_REGION`. No AWS keys are stored anywhere.
@@ -104,7 +104,9 @@ not a required status check.
 
 Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA,
 and pre-commit runs [zizmor](https://docs.zizmor.sh/) on workflows (rejects `pull_request_target`, unpinned
-actions, template injection). After the Phase 1 checkpoint, set the secret (you run this, not Claude):
+actions, template injection). After the Phase 1 checkpoint, set the secret (you run this, not Claude; the
+bootstrap state is in S3, so log in with `aws sso login --profile sis-dev-admin` and export
+`AWS_PROFILE=sis-dev-admin` first):
 
 ```bash
 terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV
