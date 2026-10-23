@@ -68,6 +68,61 @@ There is no `apply` or `destroy` target: you run those by hand at the checkpoint
 
 Then in Claude Code: `/sis-team:run 0` to build Phase 0 (local app).
 
+Terraform `>= 1.11` (S3 native locking; 1.17.0 is used here), from HashiCorp's tap:
+
+```bash
+brew install hashicorp/tap/terraform
+```
+
+## Bootstrap a dev account (Phase 1)
+
+`infra/terraform/bootstrap/` runs once per AWS account, locally, with your SSO admin login. It creates:
+
+| Resource | Name | Notes |
+|---|---|---|
+| State bucket | `sis-dev-tfstate-<account_id>-ap-southeast-1-an` | Account-regional namespace, versioned, SSE-S3, public access blocked, TLS only |
+| GitHub OIDC provider | `token.actions.githubusercontent.com` | Audience `sts.amazonaws.com` |
+| Plan role | `sis-dev-gha-plan` | PR jobs only; `ReadOnlyAccess` + `envs/dev` state read + lock file |
+| Apply role | `sis-dev-gha-apply` | `environment: dev` on `main`; only the `sis-dev-*` resources of `modules/app-ecs` |
+| Deploy role | `sis-dev-gha-deploy` | `environment: dev` on `main`; one ECR repo, one ECS service |
+| ECS role boundary | `sis-dev-ecs-boundary` | Every ECS role the apply role creates must carry it |
+| Guardrails | `sis-dev-gha-guardrails` | On all three roles: deny secret values, SSM parameters, role chaining, bootstrap state |
+| Budget | `sis-dev-monthly-cost` | 20 USD/month, email at 80% actual |
+
+Trust conditions, all `StringEquals`:
+
+| Role | `sub` | Also checked |
+|---|---|---|
+| plan | `repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request` | `aud`, `repository_id`, `repository_owner_id` |
+| apply, deploy | `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:dev` | the same, plus `ref = refs/heads/main` |
+
+The `sub` uses GitHub's immutable format with numeric IDs, so a renamed or re-created repo with the same name
+cannot assume the roles. The PR plan job must not set `environment:`, or its `sub` stops being `pull_request`.
+
+Inputs live in `infra/terraform/bootstrap/accounts/dev.tfvars`, which is gitignored: copy
+`dev.tfvars.example` and fill in the account ID, budget email and the two GitHub IDs. No account ID is
+committed (ADR 0001, D2); a pre-commit hook rejects a bare 12-digit number in
+`.tf`, `.hcl` and `.tfvars.example` files under `infra/`.
+
+The checkpoint, run by you (never by Claude, NFR-9):
+
+1. Fill in `dev.tfvars`, `aws sso login --profile sis-dev-admin`, and check that
+   `aws sts get-caller-identity` shows the dev account.
+2. First apply on local state, using a gitignored `backend_override.tf` with `backend "local" {}`.
+3. Delete the override and move state into the bucket:
+   `terraform init -migrate-state -backend-config="bucket=<state_bucket_name>"`. A second plan shows no changes.
+4. Create GitHub environment `dev` (you as required reviewer, `main` only) and the variables from the
+   outputs. Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`,
+   `AWS_ACCOUNT_ID`. Repo: `AWS_REGION`, `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`.
+   These are variables, never secrets, and there are no access keys (NFR-1).
+
+The exact commands are in [ADR 0002](docs/adr/0002-phase-1-bootstrap-dev.md#checkpoint-commands-user-runs-claude-never-does-nfr-9).
+Later inits of the bootstrap pass the same `-backend-config="bucket=..."`.
+
+Teardown (after every `envs/*` is destroyed): migrate state back to local with the override file, empty every
+object version in the bucket, then `terraform destroy -var-file=accounts/dev.tfvars`. The bucket has
+`force_destroy = false`, so a non-empty bucket stops the destroy.
+
 ## Tonight (Phase 0 to 3)
 
 | Phase | Needs AWS? | You do by hand |
