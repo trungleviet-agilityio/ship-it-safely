@@ -181,11 +181,11 @@ gh workflow run oidc-smoke-test.yml --repo "$REPO" --ref main
 sleep 15
 RUN_ID="$(gh run list --repo "$REPO" --workflow oidc-smoke-test.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh run watch "$RUN_ID" --repo "$REPO" --exit-status   # expect success (= denied as designed)
-gh run view "$RUN_ID" --repo "$REPO" --log | grep -i 'Not authorized to perform sts:AssumeRoleWithWebIdentity'
+gh run view "$RUN_ID" --repo "$REPO" --log | grep 'Refused as designed (AccessDenied'   # printed only after a real denied call
 # Re-run step 3: newest event shows errorCode AccessDenied and a sub ending in :ref:refs/heads/main
 ```
 
-If step 2 fails with "Not authorized", compare the token `sub` in CloudTrail (step 3) with `terraform output oidc_sub_prefix`. Fix the bootstrap, not the workflow.
+If step 2 fails at the assume step (for example AccessDenied in the configure-aws-credentials log), compare the token `sub` in CloudTrail (step 3) with `terraform output oidc_sub_prefix`. Fix the bootstrap, not the workflow.
 
 ## Sources
 
