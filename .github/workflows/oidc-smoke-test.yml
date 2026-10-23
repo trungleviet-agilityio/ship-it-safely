@@ -1,0 +1,144 @@
+# OIDC smoke test (PLAN Phase 2, ADR 0003). Proves GitHub can assume the dev plan role with no stored keys.
+# Not a required status check: it is path filtered, so a skipped run would stay "Pending" (C18).
+name: oidc-smoke-test
+
+on:
+  pull_request:
+    branches: [main]
+    paths: [.github/workflows/oidc-smoke-test.yml]
+  # Runs only the negative job: a non-PR token must be refused by the plan role (N1).
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assume-plan-role:
+    name: assume the plan role and prove identity
+    # Fork and Dependabot PRs get no ID token or secrets, so skip them instead of failing.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # Needed to request the OIDC token that configure-aws-credentials exchanges for the role.
+      id-token: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if [[ -z "$ROLE_ARN" ]]; then
+            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV is empty or not set"
+            exit 1
+          fi
+          if [[ -z "$REGION" ]]; then
+            echo "::error::Variable AWS_REGION is empty or not set"
+            exit 1
+          fi
+          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
+            exit 1
+          fi
+          echo "Configuration present and well formed"
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-oidc-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          retry-max-attempts: 3
+
+      - name: Prove identity
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+        run: |
+          aws --version
+          identity="$(aws sts get-caller-identity --output json)"
+          account="$(jq -r '.Account' <<<"$identity")"
+          echo "::add-mask::$account"
+          arn="$(jq -r '.Arn' <<<"$identity")"
+          if [[ ! "$arn" =~ ^arn:aws:sts::[0-9]{12}:assumed-role/sis-dev-gha-plan/gha-oidc-smoke- ]]; then
+            echo "::error::Caller identity is not the sis-dev-gha-plan role"
+            exit 1
+          fi
+          role_account="${ROLE_ARN#arn:aws:iam::}"
+          role_account="${role_account%%:*}"
+          if [[ "$account" != "$role_account" ]]; then
+            echo "::error::Caller account differs from the account in AWS_PLAN_ROLE_ARN_DEV"
+            exit 1
+          fi
+          echo "Assumed identity: $arn"
+          {
+            echo "### OIDC smoke test"
+            echo "Assumed \`${arn#*:assumed-role/}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  plan-role-denied-outside-pr:
+    name: plan role refuses a non-PR token (N1)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # Needed to request the OIDC token whose sub must be refused.
+      id-token: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if [[ -z "$ROLE_ARN" ]]; then
+            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV is empty or not set"
+            exit 1
+          fi
+          if [[ -z "$REGION" ]]; then
+            echo "::error::Variable AWS_REGION is empty or not set"
+            exit 1
+          fi
+          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
+            exit 1
+          fi
+          echo "Configuration present and well formed"
+
+      - name: Try to assume the plan role (must be refused)
+        id: assume
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-oidc-negative-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          disable-retry: true
+
+      - name: Require the refusal
+        env:
+          OUTCOME: ${{ steps.assume.outcome }}
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$OUTCOME" == "success" ]]; then
+            echo "::error::plan role was assumed outside pull_request: trust too broad"
+            exit 1
+          fi
+          echo "Refused as designed (outcome: $OUTCOME)"
+          echo "Expected token sub ends with :ref:$REF, not :pull_request"
