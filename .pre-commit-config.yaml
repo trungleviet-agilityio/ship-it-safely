@@ -28,11 +28,19 @@ repos:
   - repo: local
     hooks:
       - id: no-aws-account-id
-        name: no bare 12-digit AWS account ID in infra
+        name: no bare 12-digit AWS account ID in infra or workflows
         language: pygrep
-        entry: '(?<![0-9])(?!123456789012)[0-9]{12}(?![0-9])'
-        files: ^infra/.*\.(tf|hcl|tfvars\.example)$
+        # Alphanumeric boundaries: a digit run inside a 40-hex SHA pin is bounded by letters or digits.
+        entry: '(?<![0-9A-Za-z])(?!123456789012)[0-9]{12}(?![0-9A-Za-z])'
+        files: ^(infra/.*\.(tf|hcl|tfvars\.example)|\.github/.*\.ya?ml)$
         exclude: \.terraform\.lock\.hcl$
+
+  # Workflow security audits (offline): dangerous-triggers (ADR 0002 L3), template-injection,
+  # excessive-permissions, unpinned-uses. No ignores.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: c92afdf2c6ca336aaa8f39e2bd8d48f62dbd8e1f # frozen: v1.31.1
+    hooks:
+      - id: zizmor
 
   # App gate (pyproject.toml holds the config). Scoped to app/ so ruff-format leaves markdown alone.
   - repo: https://github.com/astral-sh/ruff-pre-commit
