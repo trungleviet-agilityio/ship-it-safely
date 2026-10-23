@@ -142,11 +142,20 @@ disagree, the ADR wins; update this file.
 
 - Every third-party action is pinned to a full commit SHA with the version in a comment (NFR-3).
   Tool binaries are pinned by version and checksum-verified.
-- `step-security/harden-runner` is the first step of every job (NFR-4).
+- `step-security/harden-runner` is the first step of every job (NFR-4). Set `egress-policy`
+  explicitly (`audit` until Phase 6); its default is `block`.
+- Pin `runs-on` to a versioned label (`ubuntu-24.04`), not `ubuntu-latest`.
+- No `actions/checkout` and no `contents: read` unless the job needs repo files.
 - `permissions:` at workflow level is `{}` or read-only; each job grants what it needs.
   `id-token: write` only on jobs that assume a role (NFR-2).
-- Role ARNs and region come from GitHub environment or repo **variables**, never secrets, and
-  never AWS access keys (NFR-1).
+- Never store AWS access keys (NFR-1). Values that contain the account ID (role ARNs) are GitHub
+  **secrets**, because variables print unmasked in public logs; names and the region are
+  **variables** (ADR 0003 C10). Set `mask-aws-account-id: true` on `configure-aws-credentials`.
+- Jobs that need an OIDC token skip fork and Dependabot PRs, which get none:
+  `github.event.pull_request.head.repo.full_name == github.repository` and
+  `github.event.pull_request.user.login != 'dependabot[bot]'` (not `github.actor`, which zizmor
+  flags as spoofable).
+- Never use `pull_request_target`. zizmor (pre-commit) must pass with no ignore comments.
 - PR plan jobs do not set `environment:` (the OIDC `sub` must be `pull_request`); apply, deploy
   and destroy jobs do.
 - Never interpolate `${{ github.event.* }}` or other user-controlled values directly in `run:`.

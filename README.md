@@ -75,7 +75,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 |---|---|
 | `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
 | `make test` | App unit tests |
-| `make lint` | pre-commit hooks, hadolint, shellcheck, actionlint |
+| `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint |
 | `make tf-check` | Offline Terraform README check, `fmt`, `validate`, `terraform test` (no AWS) |
 | `make docs` | Regenerate the `terraform-docs` tables in Terraform READMEs |
 | `make check` | All of the above checks; what a PR must pass |
@@ -90,13 +90,42 @@ Terraform lives in [`infra/terraform/`](infra/terraform/), and each root and mod
 `README.md`: start with [`infra/terraform/README.md`](infra/terraform/README.md). Phase 1 (bootstrap a dev
 account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap/README.md).
 
+## Pipelines (`.github/workflows/`)
+
+| Workflow | Trigger | Does |
+|---|---|---|
+| [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
+| | `workflow_dispatch` from `main` | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
+
+Repo configuration it reads: secret `AWS_PLAN_ROLE_ARN_DEV` (a secret, not a variable, so the account ID in
+the ARN never shows in public logs; ADR 0003 C10) and variable `AWS_REGION`. No AWS keys are stored anywhere.
+Fork and Dependabot PRs skip the job, since GitHub gives them no OIDC token. The workflow is a diagnostic,
+not a required status check.
+
+Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA,
+and pre-commit runs [zizmor](https://docs.zizmor.sh/) on workflows (rejects `pull_request_target`, unpinned
+actions, template injection). After the Phase 1 checkpoint, set the secret (you run this, not Claude):
+
+```bash
+terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV
+```
+
+After merge, run the negative test from `main`:
+
+```bash
+gh workflow run oidc-smoke-test.yml --ref main
+```
+
+The full checkpoint (log checks, CloudTrail cross-check) is in
+[ADR 0003](docs/adr/0003-phase-2-oidc-smoke-test.md#checkpoint-steps-the-user-runs-these-claude-never-does-nfr-9).
+
 ## Tonight (Phase 0 to 3)
 
 | Phase | Needs AWS? | You do by hand |
 |---|---|---|
 | 0 Scaffold + local app | No | `docker compose up`, check `/`, `/admin`, `BREAK=true` |
 | 1 Bootstrap dev account | **Yes**: dev account ID, SSO admin login, budget email | `terraform apply` bootstrap, migrate state, GitHub environment `dev` + variables |
-| 2 OIDC smoke test | Yes (roles from Phase 1) | Open the PR, read the assumed-role ARN |
+| 2 OIDC smoke test | Yes (roles from Phase 1) | Set secret `AWS_PLAN_ROLE_ARN_DEV`, read the assumed-role ARN in the PR run, run N1 after merge |
 | 3 Infra pipeline + ECS | Yes | Approve apply, `put-secret-value`, negative tests |
 
 Cost: ALB + Fargate bill hourly. Destroy `envs/dev` at the end of every session.
