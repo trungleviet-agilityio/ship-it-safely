@@ -159,13 +159,15 @@ jobs:
 
           # Unsigned call: this STS action needs no AWS credentials. Any credentials go to /dev/null.
           stderr_file="$(mktemp)"
+          # The runner shell is bash -eo pipefail, so a non-zero exit is captured with || to keep errexit
+          # from ending the step before the checks below.
+          rc=0
           aws sts assume-role-with-web-identity \
             --role-arn "$ROLE_ARN" \
             --role-session-name "gha-oidc-negative-$RUN_ID-$RUN_ATTEMPT" \
             --web-identity-token "$token" \
             --region "$REGION" \
-            --no-sign-request >/dev/null 2>"$stderr_file"
-          rc=$?
+            --no-sign-request >/dev/null 2>"$stderr_file" || rc=$?
           stderr="$(cat "$stderr_file")"
 
           if [[ $rc -eq 0 ]]; then
