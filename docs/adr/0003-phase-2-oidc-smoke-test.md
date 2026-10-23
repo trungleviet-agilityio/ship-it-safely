@@ -102,7 +102,10 @@ Findings from current docs that shape this ADR:
 - If Q1 is accepted, ADR 0002 B23 is amended: `AWS_PLAN_ROLE_ARN_DEV` becomes a repo secret. Phase 3 must decide the same for the other account-bearing values (role ARNs, account ID, state bucket). Environment-level secrets work for the `dev` jobs.
 - harden-runner in `audit` sends run telemetry (network and process events) to StepSecurity, and the insights link is visible for a public repo. It contains endpoints, not the account ID. Accepted under NFR-4.
 - Fork and Dependabot PRs that touch the workflow show a skipped job, not a red one.
-- L3 and L5 from ADR 0002's security review are closed by C14 and C15.
+- L3 and L5 from ADR 0002's security review are mitigated locally by C14 and C15, not closed: pre-commit
+  can be skipped (`--no-verify`, the web editor), and nothing in CI enforces zizmor yet (C16). The Phase 2
+  security review proposes an AWS-side fix for L3 (an `event_name = pull_request` trust condition on the
+  plan role) and a wider account-ID guard for Phase 3 file types; both are open for the user.
 - After Phase 3, this workflow becomes a rarely triggered diagnostic. Keep it: it re-proves OIDC in isolation when trust breaks, and N1 stays a one-command regression test for the plan role's `sub` pin.
 - **Docs follow-up for the orchestrator (D14):**
   - README: add a Phase 2 section (what the smoke test proves, how to run N1, how to read CloudTrail), and note that the ARN is a secret if Q1 is accepted.
