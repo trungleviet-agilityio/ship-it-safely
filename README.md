@@ -24,7 +24,9 @@ access keys, separate plan/apply/deploy roles, Secrets Manager per environment, 
 Docs (`README.md`, `docs/**`) are written by the session that runs `/sis-team:run`, after the merge and before
 verify; `reviewer` checks them for drift (ADR 0001, D14).
 
-Commands: `/sis-team:plan <phase>`, `/sis-team:run <phase>`, `/sis-team:review [PR]`.
+Commands: `/sis-team:plan <phase>`, `/sis-team:run <phase>`, `/sis-team:review [PR]`, `/sis-team:team` (this
+table, generated from the agent files) and `/sis-team:diagram <topic>` (AWS architecture diagrams in
+[`docs/diagrams/`](docs/diagrams/)).
 
 Guardrails (ADR 0001, D8): no admin AWS credentials in the Claude Code shell, deny rules in
 `.claude/settings.json`, and a `PreToolUse` guard hook in the plugin. `terraform apply`/`destroy` and secret
@@ -43,6 +45,9 @@ brew install mise
 ```bash
 mise install
 ```
+
+For `/sis-team:diagram` exports, also `brew install --cask drawio` (draw.io Desktop and its CLI; mise has no
+draw.io).
 
 Add `eval "$(mise activate zsh)"` to `~/.zshrc` so the pinned versions come first on `PATH` inside the repo
 (`which terraform` should point into `~/.local/share/mise`). Another version manager that also ships

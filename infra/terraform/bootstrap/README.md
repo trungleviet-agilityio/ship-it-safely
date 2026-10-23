@@ -3,6 +3,8 @@
 Runs **once per AWS account**, locally, with your SSO admin login. It creates what GitHub Actions and
 Terraform need before any app infrastructure exists. Design and decisions: [ADR 0002](../../../docs/adr/0002-phase-1-bootstrap-dev.md).
 
+![Bootstrap diagram](../../../docs/diagrams/bootstrap.drawio.png)
+
 | Resource | Name | Notes |
 |---|---|---|
 | State bucket | `sis-dev-tfstate-<account_id>-ap-southeast-1-an` | Account-regional namespace, versioned, SSE-S3, public access blocked, TLS only |

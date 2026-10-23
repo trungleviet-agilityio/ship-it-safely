@@ -6,5 +6,7 @@ agents (`e2e`, `reviewer`, `security-reviewer`, `code-simplifier`) check the res
 files. A `PreToolUse` guard hook blocks `terraform apply`/`destroy`, state mutation, Secrets Manager value
 access and IAM writes, so a human always runs those at the checkpoint.
 
-Commands: `/sis-team:plan <phase>`, `/sis-team:run <phase>`, `/sis-team:review [PR]`.
+Commands: `/sis-team:plan <phase>`, `/sis-team:run <phase>`, `/sis-team:review [PR]`, `/sis-team:team` (agent
+roster table from the agent files) and `/sis-team:diagram <topic>` (draw.io AWS diagrams, checked and exported
+to PNG).
 Setup and the agent table: see the repository `README.md`.
