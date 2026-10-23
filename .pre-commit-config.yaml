@@ -19,6 +19,10 @@ repos:
       - id: terraform_fmt
       - id: terraform_validate
       - id: terraform_tflint
+      # Inputs/outputs/resources tables in each Terraform README (ADR 0001, D16). Settings: .terraform-docs.yml.
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
 
   # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID is allowed (tests).
   - repo: local

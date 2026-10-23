@@ -36,7 +36,8 @@ left its lane: stop and show the user. Remove the worktrees afterwards.
 
 ## 3. Docs (you, not an agent)
 
-You own `README.md` and `docs/**` (ADR 0001 D14); build agents never edit them. After the merge, update the
+You own the repo `README.md` and `docs/**` (ADR 0001 D14); build agents never edit them. READMEs inside
+`infra/**` are `devops-engineer`'s (D16): check they exist and match the code, and send gaps back to it. After the merge, update the
 docs this phase changed, from the ADR and the merged diff:
 
 - `README.md`: setup steps, commands, variables, ports and outputs that the phase added or changed, plus any

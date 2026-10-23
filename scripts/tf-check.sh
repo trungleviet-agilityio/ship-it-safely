@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Offline Terraform checks for every root and module under infra/terraform (ADR 0001, D12):
-# fmt, init without a backend, validate, and `terraform test` where test files exist.
+# a README.md with terraform-docs markers (D16), fmt, init without a backend, validate, and `terraform test`
+# where test files exist.
 # Never plans or applies: no AWS credentials are needed or used.
 #
 # Usage: scripts/tf-check.sh [dir ...]   (default: every directory holding *.tf)
@@ -12,6 +13,7 @@ require_cmd terraform "brew install hashicorp/tap/terraform"
 
 tf_root="$ROOT/infra/terraform"
 dirs=()
+failed=()
 if [ $# -gt 0 ]; then
   for d in "$@"; do dirs+=("$d"); done
 else
@@ -25,10 +27,19 @@ if [ ${#dirs[@]} -eq 0 ]; then
   exit 0
 fi
 
+# D16: every root and module documents itself. The tables between the markers come from terraform-docs.
+for dir in "${dirs[@]}"; do
+  readme="$dir/README.md"
+  if [ ! -f "$readme" ]; then
+    failed+=("${dir#"$ROOT"/} (README.md missing)")
+  elif ! grep -q 'BEGIN_TF_DOCS' "$readme"; then
+    failed+=("${dir#"$ROOT"/} (README.md has no BEGIN_TF_DOCS marker)")
+  fi
+done
+
 log "terraform fmt -check"
 terraform fmt -check -recursive "$tf_root" || die "unformatted files; run: terraform fmt -recursive infra/terraform"
 
-failed=()
 for dir in "${dirs[@]}"; do
   name="${dir#"$ROOT"/}"
   log "$name"

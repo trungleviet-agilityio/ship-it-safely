@@ -8,7 +8,7 @@ PYTHON ?= python3.13
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
 
 .DEFAULT_GOAL := help
-.PHONY: help up down test lint tf-check check
+.PHONY: help up down test lint tf-check docs check
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,7 +31,10 @@ lint: ## pre-commit hooks on all files, plus hadolint, shellcheck and actionlint
 	shellcheck -x scripts/*.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 
-tf-check: ## Offline Terraform fmt, validate and test (no AWS)
+tf-check: ## Offline Terraform README check, fmt, validate and test (no AWS)
 	scripts/tf-check.sh
+
+docs: ## Regenerate terraform-docs tables in every Terraform README
+	pre-commit run terraform_docs --all-files
 
 check: lint test tf-check ## Everything a PR must pass
