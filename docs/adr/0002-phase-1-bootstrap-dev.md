@@ -175,7 +175,7 @@ the official Service Reference JSON.
 |---|---|
 | B21 | `aws_budgets_budget` named `sis-dev-monthly-cost`: `budget_type = "COST"`, `limit_amount = "20"`, `limit_unit = "USD"`, `time_unit = "MONTHLY"`. One `notification` block: `GREATER_THAN`, threshold `80`, `PERCENTAGE`, `ACTUAL`, `subscriber_email_addresses = [var.budget_email]`. `account_id` is omitted, so it uses the caller's account. |
 | B22 | Outputs: `state_bucket_name`, `plan_role_arn`, `apply_role_arn`, `deploy_role_arn`, `oidc_provider_arn`, `ecs_permissions_boundary_arn`, `oidc_sub_prefix`, `aws_region`, `resource_names` (the name contract). None are sensitive. They contain the account ID, which is not a secret, but the user copies them into GitHub variables only. |
-| B23 | GitHub variables (NFR-1, never secrets). Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`, `AWS_ACCOUNT_ID`. Repo level, because the PR plan job has no environment: `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`, `AWS_REGION`. The bucket and account variables are first used in Phase 3 (`-backend-config` and `TF_VAR_aws_account_id`, D2). Environment `dev` gets: required reviewer = the user, `prevent_self_review = false` (solo lab), and a custom deployment branch policy allowing only `main`. |
+| B23 | GitHub variables (NFR-1, never secrets). Amended by ADR 0003 C10: `AWS_PLAN_ROLE_ARN_DEV` is a repo secret, so the account ID stays out of public logs. Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`, `AWS_ACCOUNT_ID`. Repo level, because the PR plan job has no environment: `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`, `AWS_REGION`. The bucket and account variables are first used in Phase 3 (`-backend-config` and `TF_VAR_aws_account_id`, D2). Environment `dev` gets: required reviewer = the user, `prevent_self_review = false` (solo lab), and a custom deployment branch policy allowing only `main`. |
 | B24 | **Tests**: `terraform test` with `mock_provider "aws"` (D12). Use `mock_data "aws_caller_identity"` with `account_id = "123456789012"`, `mock_data "aws_partition"` with `partition = "aws"`, and `mock_data "aws_iam_policy_document"` with `json = "{}"`. Assertions read locals and the `statement` arguments of the policy documents. Mocks keep configured arguments; only computed ones such as `json` are faked. Use `command = plan` and `override_during = plan`. |
 | B25 | **Account-ID commit guard**: a local `pygrep` hook in `.pre-commit-config.yaml` rejects a bare 12-digit number in `^infra/.*\.(tf|hcl|tfvars\.example)$`. It excludes `.terraform.lock.hcl` and allows the AWS doc example `123456789012`. Regex: `(?<![0-9])(?!123456789012)[0-9]{12}(?![0-9])`. gitleaks does not look for account IDs. |
 
@@ -308,7 +308,8 @@ gh variable set TF_STATE_BUCKET     --env dev --repo "$REPO" --body "${BUCKET}"
 gh variable set AWS_ACCOUNT_ID      --env dev --repo "$REPO" --body "<DEV_ACCOUNT_ID>"
 
 gh variable set AWS_REGION            --repo "$REPO" --body ap-southeast-1
-gh variable set AWS_PLAN_ROLE_ARN_DEV --repo "$REPO" --body "$(terraform output -raw plan_role_arn)"
+# Superseded by ADR 0003 C10: AWS_PLAN_ROLE_ARN_DEV is a repo secret, not a variable
+terraform output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV --repo "$REPO"
 gh variable set TF_STATE_BUCKET_DEV   --repo "$REPO" --body "${BUCKET}"
 gh variable set AWS_ACCOUNT_ID_DEV    --repo "$REPO" --body "<DEV_ACCOUNT_ID>"
 ```
