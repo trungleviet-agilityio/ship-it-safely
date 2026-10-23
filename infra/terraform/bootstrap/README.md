@@ -51,7 +51,8 @@ email and the two GitHub IDs. No account ID is committed (ADR 0001, D2); a pre-c
 4. Create GitHub environment `dev` (you as required reviewer, `main` only) and the variables from the
    outputs. Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`,
    `AWS_ACCOUNT_ID`. Repo: `AWS_REGION`, `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`.
-   These are variables, never secrets, and there are no access keys (NFR-1).
+   `AWS_PLAN_ROLE_ARN_DEV` is a repo secret (ADR 0003, C10); everything else is a variable. Set it with
+   `terraform output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV`. There are no access keys (NFR-1).
 
 The exact commands are in [ADR 0002](../../../docs/adr/0002-phase-1-bootstrap-dev.md#checkpoint-commands-user-runs-claude-never-does-nfr-9).
 Later inits pass the same `-backend-config="bucket=..."`.
