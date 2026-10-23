@@ -153,6 +153,16 @@ disagree, the ADR wins; update this file.
   Pass them through `env:` and quote them in the shell.
 - Set `timeout-minutes` on every job and `concurrency` on workflows that change AWS state.
 
+## Tool versions (`mise.toml`)
+
+- Every CLI the repo runs locally (Terraform, linters, scanners, pre-commit, uv) is pinned to an exact
+  version in `mise.toml`, and `mise install` sets up a machine. Do not document `brew install` for
+  them.
+- CI pins the same versions (Terraform in `hashicorp/setup-terraform`, tools by version and
+  checksum), so local and CI results match (NFR-3).
+- Bump a version in its own `chore(repo)` commit and run `make check` before pushing.
+- Python packages stay in `pyproject.toml` and run through `uv` / `uvx`, not mise.
+
 ## Makefile and shell scripts (`Makefile`, `scripts/`)
 
 - The `Makefile` stays thin: each target is one or two lines and has a `## description` for

@@ -32,16 +32,26 @@ values are always handled by a human at the checkpoint.
 
 ## Setup
 
-Prerequisites (macOS):
+Prerequisites (macOS): Docker, the GitHub CLI and [mise](https://mise.jdx.dev). Every other CLI the repo
+uses (Terraform 1.17.0, terraform-docs, tflint, actionlint, hadolint, shellcheck, gitleaks, trivy, pre-commit,
+uv) is pinned in [`mise.toml`](mise.toml). Install them once from the repo root:
 
 ```bash
-brew install actionlint hadolint gitleaks trivy pre-commit shellcheck terraform-docs
+brew install mise
 ```
 
-TFLint is no longer in homebrew-core; use its official tap (from the TFLint README):
+```bash
+mise install
+```
+
+Add `eval "$(mise activate zsh)"` to `~/.zshrc` so the pinned versions come first on `PATH` inside the repo
+(`which terraform` should point into `~/.local/share/mise`). Another version manager that also ships
+`terraform` (for example asdf) must not come before mise on `PATH`.
+
+Install the git hooks once:
 
 ```bash
-brew install terraform-linters/tap/tflint
+pre-commit install
 ```
 
 Register the repo-local marketplace and install the plugin once (from the repo root):
@@ -68,12 +78,6 @@ Day to day, run everything through `make` (`make help` lists the targets):
 There is no `apply` or `destroy` target: you run those by hand at the checkpoint (ADR 0001, D15).
 
 Then in Claude Code: `/sis-team:run 0` to build Phase 0 (local app).
-
-Terraform `>= 1.11` (S3 native locking; 1.17.0 is used here), from HashiCorp's tap:
-
-```bash
-brew install hashicorp/tap/terraform
-```
 
 ## Infrastructure
 
