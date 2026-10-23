@@ -32,7 +32,8 @@ The `sis-team` plugin (`plugins/sis-team/`) provides `/sis-team:plan <phase>`, `
 | `backend-dev` | `app/**` |
 | `devops-engineer` | `infra/**`, `.github/**`, repo tooling (`.tflint.hcl`, `.pre-commit-config.yaml`, `Makefile`, `scripts/**`) |
 
-The orchestrating session (the one running `/sis-team:run`) owns `README.md` and `docs/**`: it writes ADRs
-from the architect's text and updates the docs after the merge. Build agents never edit them (ADR 0001, D14).
+The orchestrating session (the one running `/sis-team:run`) owns the repo `README.md` and `docs/**`: it writes
+ADRs from the architect's text and updates the docs after the merge. Build agents never edit them (ADR 0001, D14).
+READMEs inside `infra/**` (one per Terraform root and module) belong to `devops-engineer` (D16).
 
 Verify agents (`e2e`, `reviewer`, `security-reviewer`, `code-simplifier`) never edit files; `reviewer` also checks docs drift.

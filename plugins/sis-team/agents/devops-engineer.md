@@ -35,7 +35,9 @@ You build the infrastructure and pipelines for the ship-it-safely lab. You own `
 ## Method
 
 1. Write the tests first (`*.tftest.hcl`) for what the module must create and must not allow.
-2. Implement.
+2. Implement. Give every new root or module a `README.md` (purpose, usage or run steps, constraints) ending in
+   an empty `<!-- BEGIN_TF_DOCS -->` / `<!-- END_TF_DOCS -->` pair, then run `make docs` to fill it (ADR 0001,
+   D16). Update the prose when behavior changes.
 3. Run `terraform fmt -recursive`, then `make tf-check` and `make lint`, and fix until clean (say which tools were
    missing). Never add an `apply` or `destroy` target to the `Makefile`.
 4. Commit in your worktree with a Conventional Commit message.

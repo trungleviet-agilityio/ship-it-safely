@@ -77,6 +77,18 @@ disagree, the ADR wins; update this file.
   `variables.tf`, `outputs.tf`, and resource files split by concern (`oidc.tf`, `iam_plan.tf`).
 - Environments differ only through `terraform.tfvars` (FR-6). Shared logic lives in
   `modules/app-ecs`.
+- Roots (`bootstrap/`, `envs/<env>/`) own `providers.tf`, the partial `backend.tf` and their inputs.
+  `envs/<env>` stays thin: one `module` call plus variables and outputs. Modules declare
+  `required_providers` but never a `provider` or `backend` block.
+
+### READMEs (ADR 0001, D16)
+
+- Every root and module has a `README.md`. Hand-write what the tables cannot say: purpose, what it
+  creates, how to run it (or a usage block for a module), constraints such as name contracts, and
+  teardown.
+- End it with an empty `<!-- BEGIN_TF_DOCS -->` / `<!-- END_TF_DOCS -->` pair; the `terraform_docs`
+  hook fills it from `.terraform-docs.yml` (`make docs`). Never edit between the markers.
+- `make tf-check` fails when a directory with `.tf` files has no README or no markers.
 - `.terraform.lock.hcl` is committed with `linux_amd64` and dev-machine hashes (NFR-5).
 
 ### Naming and inputs
