@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Offline Terraform checks for every root and module under infra/terraform (ADR 0001, D12):
 # a README.md with terraform-docs markers (D16), fmt, init without a backend, validate, and `terraform test`
-# where test files exist.
+# where test files exist. Runs scripts/tf-policy.sh first (ADR 0004, E28).
+# Each directory gets its own temporary TF_DATA_DIR (ADR 0004, E27), so a real `init` against S3 in a checkout
+# (a `.terraform/` next to the config) is never read or written and cannot make these checks ask for AWS.
 # Never plans or applies: no AWS credentials are needed or used.
 #
 # Usage: scripts/tf-check.sh [dir ...]   (default: every directory holding *.tf)
@@ -12,6 +14,12 @@ source "$(dirname "$0")/lib.sh"
 require_cmd terraform "brew install hashicorp/tap/terraform"
 
 tf_root="$ROOT/infra/terraform"
+
+tmp_root="$(mktemp -d)"
+trap 'rm -rf "$tmp_root"' EXIT
+export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$tmp_root/plugin-cache}"
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
 dirs=()
 failed=()
 if [ $# -gt 0 ]; then
@@ -26,6 +34,9 @@ if [ ${#dirs[@]} -eq 0 ]; then
   warn "no Terraform files under ${tf_root#"$ROOT"/} yet, nothing to check"
   exit 0
 fi
+
+log "terraform policy rules"
+"$ROOT/scripts/tf-policy.sh" "$tf_root"
 
 # D16: every root and module documents itself. The tables between the markers come from terraform-docs.
 for dir in "${dirs[@]}"; do
@@ -43,6 +54,9 @@ terraform fmt -check -recursive "$tf_root" || die "unformatted files; run: terra
 for dir in "${dirs[@]}"; do
   name="${dir#"$ROOT"/}"
   log "$name"
+  data_dir="$tmp_root/data/$(printf '%s' "$name" | tr '/' '_')"
+  mkdir -p "$data_dir"
+  export TF_DATA_DIR="$data_dir"
   # Each step is guarded so one broken directory does not hide the rest; the summary fails the run.
   if ! terraform -chdir="$dir" init -backend=false -input=false >/dev/null; then
     failed+=("$name (init)")
