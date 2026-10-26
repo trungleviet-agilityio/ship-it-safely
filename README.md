@@ -6,6 +6,7 @@ A small containerized app shipped to AWS ECS Fargate through GitHub Actions + Te
 access keys, separate plan/apply/deploy roles, Secrets Manager per environment, supply-chain hardening.
 
 - Requirements and phases: [`PLAN.md`](PLAN.md)
+- Phase status: [`PROGRESS.md`](PROGRESS.md)
 - Locked decisions: [`docs/adr/`](docs/adr/)
 - Agent team: [`plugins/sis-team/`](plugins/sis-team/)
 
