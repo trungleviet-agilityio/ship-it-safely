@@ -36,9 +36,15 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 not found. Install: $2"
 }
 
+# The one definition of "looks like an AWS account ID" (the repo is public). ACCOUNT_ID_DIGITS is any run of 12 digits;
+# ACCOUNT_ID_RE is a standalone run (alphanumeric boundaries, like the no-aws-account-id pre-commit hook), so a digit
+# run inside a hash or a longer number is not a hit.
+ACCOUNT_ID_DIGITS='[0-9]{12}'
+ACCOUNT_ID_RE="(^|[^0-9A-Za-z])${ACCOUNT_ID_DIGITS}([^0-9A-Za-z]|\$)"
+
 # redact_ids: filter that replaces every run of 12 digits with <redacted>, so AWS error text can be logged on a
 # public repo.
-redact_ids() { sed -E 's/[0-9]{12}/<redacted>/g'; }
+redact_ids() { sed -E "s/${ACCOUNT_ID_DIGITS}/<redacted>/g"; }
 
 # run_capture <command...>: run it without failing the script and record the result in globals:
 #   RUN_RC (exit code), RUN_OUT (stdout), RUN_ERR (stderr with 12-digit runs redacted; safe to print).
@@ -55,6 +61,20 @@ run_capture() {
   rm -f "$err_file"
 }
 
+# assert_denied <label> <expected text> <command...>: the call must fail and its stderr must hold the expected text
+# (for example AccessDeniedException). A call that succeeds, or fails for any other reason, dies with the redacted
+# error, so a broken guardrail and a broken test both turn the job red.
+assert_denied() {
+  local label="$1" text="$2"
+  shift 2
+  run_capture "$@"
+  [ "$RUN_RC" -ne 0 ] || die "${label} failed: the call succeeded, it must be denied"
+  case "$RUN_ERR" in
+    *"$text"*) ok "denied as designed (${label}): ${text}" ;;
+    *) die "${label} failed for a reason other than ${text} (exit code ${RUN_RC}): ${RUN_ERR}" ;;
+  esac
+}
+
 # sha256_of <file>: hex digest on Linux and macOS.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -65,29 +85,51 @@ sha256_of() {
 # image_name <commit sha>: the local image name every build, smoke, scan and push step uses.
 image_name() { printf 'sis-app:%s' "$1"; }
 
+# valid_env <name>: an environment name is lowercase letters and digits, starting with a letter (ADR 0001, naming).
+valid_env() {
+  local re='^[a-z][a-z0-9]*$' # [[ =~ ]] matches the whole value, so a newline cannot smuggle a second line past it
+  [[ "$1" =~ $re ]]
+}
+
 # app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
 app_names() {
   ENV="${ENV:-dev}"
-  printf '%s' "$ENV" | grep -Eq '^[a-z][a-z0-9]*$' || die "ENV must be lowercase letters and digits, got '$ENV'"
+  valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
   CLUSTER="sis-${ENV}-cluster" SERVICE="sis-${ENV}-app" FAMILY="sis-${ENV}-app" REPOSITORY="sis-${ENV}-app"
   EXEC_ROLE="sis-${ENV}-ecs-exec" TASK_ROLE="sis-${ENV}-ecs-task"
   SECRET_ID="sis/${ENV}/app-api-key" LOG_GROUP="/ecs/sis-${ENV}-app"
 }
 
-# ecs_service_status <cluster> <service>: print ACTIVE, DRAINING, INACTIVE or MISSING (no cluster, no service, or
-# an empty answer). Any other error dies with redacted text. Call it as `x="$(ecs_service_status c s)" || exit 1`: the
-# helper has already printed the error.
+# ecs_service_status <cluster> <service>: set SERVICE_STATUS to ACTIVE, DRAINING, INACTIVE or MISSING. MISSING covers
+# no cluster and the answers "None", "MISSING" and empty. Any other error or status dies with redacted text, so a
+# new or unexpected answer never reads as "the service is gone".
 ecs_service_status() {
+  SERVICE_STATUS=""
   run_capture aws ecs describe-services --cluster "$1" --services "$2" --query 'services[0].status' --output text
   if [ "$RUN_RC" -ne 0 ]; then
     case "$RUN_ERR" in
-      *ClusterNotFoundException*) printf 'MISSING\n'; return 0 ;;
+      *ClusterNotFoundException*) SERVICE_STATUS=MISSING; return 0 ;;
       *) die "describe-services failed (exit code $RUN_RC): $RUN_ERR" ;;
     esac
   fi
   case "$RUN_OUT" in
-    ACTIVE | DRAINING | INACTIVE) printf '%s\n' "$RUN_OUT" ;;
-    *) printf 'MISSING\n' ;; # "None", "MISSING" or empty: the service is not there
+    None | MISSING | "") SERVICE_STATUS=MISSING ;;
+    ACTIVE | DRAINING | INACTIVE) SERVICE_STATUS="$RUN_OUT" ;;
+    *) die "describe-services returned an unexpected status: $(printf '%s' "$RUN_OUT" | redact_ids)" ;;
+  esac
+}
+
+# assumed_role_name: print the name of the role the current AWS credentials assumed, never the session name (it
+# carries the run ID). Returns 1 when the caller is not an assumed role. Summaries use it because
+# configure-aws-credentials masks the whole ARN in logs.
+assumed_role_name() {
+  local arn
+  run_capture aws sts get-caller-identity --query Arn --output text
+  [ "$RUN_RC" -eq 0 ] || return 1
+  arn="$RUN_OUT"
+  case "$arn" in
+    *:assumed-role/*) arn="${arn#*:assumed-role/}"; printf '%s\n' "${arn%%/*}" ;;
+    *) return 1 ;;
   esac
 }
 

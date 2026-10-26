@@ -18,7 +18,7 @@ fixture() {
   local d="$tmp_root/$1"
   mkdir -p "$d/modules/m" "$d/envs/dev"
   cat >"$d/modules/m/main.tf" <<'EOF'
-# comments may mention aws_secretsmanager_secret_version and AmazonECSTaskExecutionRolePolicy
+# comments may mention aws_secretsmanager_secret_version, AmazonECSTaskExecutionRolePolicy and provisioner "x"
 resource "aws_iam_role" "ok" {
   name                 = "x"
   permissions_boundary = "arn"
@@ -156,5 +156,21 @@ expect_fail "$d" 6
 d="$(fixture r6b)"
 printf 'terraform {\n  backend "s3" {}\n}\n' >"$d/modules/m/be.tf"
 expect_fail "$d" 6
+
+d="$(fixture r9a)"
+printf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}\n' >"$d/modules/m/prov.tf"
+expect_fail "$d" 9
+
+d="$(fixture r9b)"
+printf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}\n' >"$d/envs/dev/prov.tf"
+expect_fail "$d" 9
+
+d="$(fixture r9c)"
+printf 'data "external" "x" {\n  program = ["true"]\n}\n' >"$d/modules/m/ext.tf"
+expect_fail "$d" 9
+
+d="$(fixture r9d)"
+printf 'data "external" "x" {\n  program = ["true"]\n}\n' >"$d/envs/dev/ext.tf"
+expect_fail "$d" 9
 
 ok "all $n bad fixtures fail with their rule id"

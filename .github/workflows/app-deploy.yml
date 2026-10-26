@@ -17,6 +17,7 @@ on:
       - scripts/lib.sh
       - scripts/app-names.sh
       - scripts/app-smoke.sh
+      - scripts/assumed-role-name.sh
       - scripts/assert-no-account-id.sh
       - scripts/build-image.sh
       - scripts/check-aws-config.sh
@@ -187,8 +188,8 @@ jobs:
       - name: Wait for the rollout
         run: scripts/ecs-wait-deployment.sh "$CLUSTER" "$SERVICE" "$TD_ARN"
 
-      # configure-aws-credentials masks the assumed-role ARN in logs, so the summary shows the role name. The
-      # session name is left out: it carries the run ID. The Trivy result is in the build-scan job summary.
+      # configure-aws-credentials masks the assumed-role ARN in logs, so the summary shows the role name (the helper
+      # leaves the session name out: it carries the run ID). The Trivy result is in the build-scan job summary.
       - name: Summary
         if: always()
         env:
@@ -200,11 +201,7 @@ jobs:
           if [[ -n "${TD_ARN:-}" ]]; then
             revision="${TD_ARN##*/}"
           fi
-          role="not assumed"
-          if arn="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)"; then
-            role="${arn#*:assumed-role/}"
-            role="${role%%/*}"
-          fi
+          role="$(scripts/assumed-role-name.sh 2>/dev/null)" || role="not assumed"
           {
             echo "### app-deploy"
             echo "Commit: \`${GIT_SHA}\`"

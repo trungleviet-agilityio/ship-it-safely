@@ -43,7 +43,7 @@ verify: ## Build, smoke test and scan in one go (what app-ci runs)
 lint: ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
-	shellcheck -x scripts/*.sh
+	shellcheck -x scripts/*.sh scripts/selftest/*.sh
 	scripts/ci-selftest.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 

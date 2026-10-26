@@ -5,8 +5,11 @@
 # DescribeTaskDefinition and DeregisterTaskDefinition are already allowed).
 # 1. It runs only when the service is gone (MISSING or INACTIVE), so it never pulls a revision from a live service.
 # 2. DescribeTaskDefinition with a family returns the latest ACTIVE revision, and ClientException means none is
-#    left. Each revision is deregistered once; one that comes back again fails (eventual consistency).
-# MAX_REVISIONS (default 200) caps the loop. Prints DEREGISTERED=<count> on stdout. Names derive from ENV.
+#    left. Each revision is deregistered once. If the same revision comes back right after it was deregistered
+#    (eventual consistency), the describe is retried once after DEREGISTER_RETRY_SLEEP seconds (default 5); a second
+#    repeat fails.
+# MAX_REVISIONS (default 200) caps the loop. Prints DEREGISTERED=<count> on stdout, also when the script fails
+# (an EXIT trap), so the job summary shows how far it got. Names derive from ENV.
 #
 # Usage: ENV=dev scripts/ecs-deregister-revisions.sh >> "$GITHUB_OUTPUT"
 
@@ -17,32 +20,46 @@ source "$(dirname "$0")/lib.sh"
 require_cmd aws "the AWS CLI is preinstalled on GitHub runners"
 app_names
 max_revisions="${MAX_REVISIONS:-200}"
+retry_sleep="${DEREGISTER_RETRY_SLEEP:-5}"
 
-status="$(ecs_service_status "$CLUSTER" "$SERVICE")" || exit 1
-case "$status" in
+count=0
+trap 'printf "DEREGISTERED=%s\n" "$count"' EXIT
+
+ecs_service_status "$CLUSTER" "$SERVICE"
+case "$SERVICE_STATUS" in
   MISSING | INACTIVE) ;;
-  *) die "service ${SERVICE} still exists (${status}); not deregistering" ;;
+  *) die "service ${SERVICE} still exists (${SERVICE_STATUS}); not deregistering" ;;
 esac
 
-count=0 seen=" "
-while :; do
+# latest_revision: set REVISION to the newest ACTIVE revision of the family, or "" when none is left.
+latest_revision() {
   run_capture aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition.revision --output text
+  REVISION=""
   if [ "$RUN_RC" -ne 0 ]; then
     case "$RUN_ERR" in
-      *ClientException*) break ;; # no ACTIVE revision is left
+      *ClientException*) return 0 ;; # no ACTIVE revision is left
       *) die "describe-task-definition failed (exit code $RUN_RC): $RUN_ERR" ;;
     esac
   fi
-  rev="$RUN_OUT"
-  printf '%s' "$rev" | grep -Eq '^[0-9]+$' || die "describe-task-definition returned '${rev}', not a revision number"
-  case "$seen" in *" $rev "*) die "revision ${rev} returned again (eventual consistency); re-run the job" ;; esac
+  printf '%s' "$RUN_OUT" | grep -Eq '^[0-9]+$' || die "describe-task-definition returned '${RUN_OUT}', not a revision number"
+  REVISION="$RUN_OUT"
+}
+
+last=""
+while :; do
+  latest_revision
+  if [ -n "$REVISION" ] && [ "$REVISION" = "$last" ]; then
+    warn "revision ${REVISION} returned after it was deregistered; retrying in ${retry_sleep}s"
+    sleep "$retry_sleep"
+    latest_revision
+    [ "$REVISION" != "$last" ] || die "revision ${REVISION} returned again (eventual consistency); re-run the job"
+  fi
+  [ -n "$REVISION" ] || break
   [ "$count" -lt "$max_revisions" ] || die "more than ${max_revisions} active revisions; run the job again"
-  run_capture aws ecs deregister-task-definition --task-definition "${FAMILY}:${rev}" --query taskDefinition.status --output text
+  run_capture aws ecs deregister-task-definition --task-definition "${FAMILY}:${REVISION}" --query taskDefinition.status --output text
   [ "$RUN_RC" -eq 0 ] || die "deregister-task-definition failed (exit code $RUN_RC): $RUN_ERR"
-  [ "$RUN_OUT" = "INACTIVE" ] || die "revision ${rev} is ${RUN_OUT} after deregistering, expected INACTIVE"
-  log "deregistered ${FAMILY}:${rev}"
-  seen="${seen}${rev} "
+  [ "$RUN_OUT" = "INACTIVE" ] || die "revision ${REVISION} is ${RUN_OUT} after deregistering, expected INACTIVE"
+  log "deregistered ${FAMILY}:${REVISION}"
+  last="$REVISION"
   count=$((count + 1))
 done
-
-printf 'DEREGISTERED=%s\n' "$count"
