@@ -75,7 +75,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 |---|---|
 | `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
 | `make test` | App unit tests |
-| `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint |
+| `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint, CI helper self-tests |
 | `make tf-check` | Offline Terraform policy rules (with their self-test), README check, `fmt`, `validate`, `terraform test` (no AWS; uses a temporary data dir, so a real S3 `init` in the checkout does not break it) |
 | `make docs` | Regenerate the `terraform-docs` tables in Terraform READMEs |
 | `make check` | All of the above checks; what a PR must pass |
@@ -94,8 +94,9 @@ account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap
 
 | Workflow | Trigger | Does |
 |---|---|---|
-| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint, trigger allowlist, account-ID guard), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID) |
-| | push to `main` touching `envs/dev` or `modules/`, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
+| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
+| | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
+| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist (every workflow: only `pull_request`, `push`, `workflow_dispatch`) and the CI helper self-tests. Its name must never be added to the bootstrap `workflow_names` |
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
 | | `workflow_dispatch` (run it with `--ref main`) | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
 
@@ -131,6 +132,7 @@ The full checkpoint (log checks, CloudTrail cross-check) is in
 | Repo | `AWS_REGION` | variable |
 | Environment `dev` | `AWS_APPLY_ROLE_ARN` | secret |
 | Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
+| Repo | ruleset on the default branch: PR required, no force push, no deletion | ruleset |
 
 The state bucket name is derived from the account ID and region, so it is not stored anywhere (ADR 0004 E22).
 Workflow `name:` values are part of the AWS trust: `terraform-iac` and `terraform-destroy` may use the apply
