@@ -59,12 +59,6 @@ variable "container_image" {
   }
 }
 
-variable "container_command" {
-  type        = list(string)
-  description = "Optional command override. Null keeps the image entrypoint and command."
-  default     = null
-}
-
 variable "container_port" {
   type        = number
   description = "Port the container listens on."

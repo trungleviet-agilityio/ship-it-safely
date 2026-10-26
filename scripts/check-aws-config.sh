@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Check the GitHub configuration of an AWS job before any credential is requested (ADR 0005, F15 step 7).
+# Reads ROLE_ARN, ACCOUNT and REGION from the environment, masks the account for the rest of the job, and
+# checks that the role ARN names exactly <role name> in exactly that account. It never prints the values.
+#
+# Usage: ROLE_ARN=... ACCOUNT=... REGION=... scripts/check-aws-config.sh <role name>
+
+# shellcheck source=scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
+
+[ $# -eq 1 ] || die "usage: scripts/check-aws-config.sh <role name>"
+role_name="$1"
+role_arn="${ROLE_ARN:-}" account="${ACCOUNT:-}" region="${REGION:-}"
+
+# Workflow commands go to stdout, where the runner reads them.
+fail() {
+  printf '::error::%s\n' "$1"
+  exit 1
+}
+
+if [ -z "$role_arn" ] || [ -z "$account" ]; then
+  fail "The role ARN secret or the account ID secret is empty or not set"
+fi
+printf '::add-mask::%s\n' "$account"
+[ -n "$region" ] || fail "Variable AWS_REGION is empty or not set"
+
+printf '%s' "$account" | grep -Eq '^[0-9]{12}$' || fail "the account ID secret is not a 12-digit account ID"
+printf '%s' "$role_arn" | grep -Eq "^arn:aws:iam::[0-9]{12}:role/${role_name}\$" \
+  || fail "the role ARN secret is not the ${role_name} role ARN"
+
+role_account="${role_arn#arn:aws:iam::}"
+role_account="${role_account%%:*}"
+[ "$role_account" = "$account" ] || fail "the account ID secret differs from the account in the role ARN"
+printf '%s' "$region" | grep -Eq '^[a-z]{2}-[a-z]+-[0-9]$' || fail "AWS_REGION is not a region name"
+ok "configuration present and well formed"

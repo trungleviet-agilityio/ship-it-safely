@@ -7,7 +7,6 @@ module "app_ecs" {
   azs                         = var.azs
   vpc_cidr                    = var.vpc_cidr
   container_image             = var.container_image
-  container_command           = var.container_command
   desired_count               = var.desired_count
   task_cpu                    = var.task_cpu
   task_memory                 = var.task_memory

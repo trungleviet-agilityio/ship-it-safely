@@ -26,29 +26,26 @@ resource "aws_ecs_task_definition" "app" {
     name = "tmp"
   }
 
-  container_definitions = jsonencode([merge(
-    {
-      name                   = local.container_name
-      image                  = var.container_image
-      essential              = true
-      user                   = "10001:10001"
-      readonlyRootFilesystem = true
-      portMappings           = [{ containerPort = var.container_port, protocol = "tcp" }]
-      mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
-      environment            = [{ name = "APP_ENV", value = var.env }]
-      # valueFrom is the secret ARN. The value is injected at container start (FR-8).
-      secrets = [{ name = "APP_API_KEY", valueFrom = aws_secretsmanager_secret.app.arn }]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.app.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "app"
-        }
+  container_definitions = jsonencode([{
+    name                   = local.container_name
+    image                  = var.container_image
+    essential              = true
+    user                   = "10001:10001"
+    readonlyRootFilesystem = true
+    portMappings           = [{ containerPort = var.container_port, protocol = "tcp" }]
+    mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
+    environment            = [{ name = "APP_ENV", value = var.env }]
+    # valueFrom is the secret ARN. The value is injected at container start (FR-8).
+    secrets = [{ name = "APP_API_KEY", valueFrom = aws_secretsmanager_secret.app.arn }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.app.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "app"
       }
-    },
-    var.container_command == null ? {} : { command = var.container_command },
-  )])
+    }
+  }])
 }
 
 resource "aws_ecs_service" "app" {
