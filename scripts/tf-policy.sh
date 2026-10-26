@@ -128,6 +128,15 @@ fi
 report 6 "provider or backend block under modules/ (modules take them from the root)" \
   "$(scan '^[[:space:]]*(provider|backend)[[:space:]]+"' "$root/modules")"
 
+# (9) No code execution outside the providers (ADR 0006, I1): a provisioner or the external data source runs commands
+# on the runner during plan or apply, with the CI role credentials in the environment.
+for dir in "$root/modules" "$root/envs"; do
+  report 9 "provisioner blocks are forbidden under modules/ and envs/ (they run commands on the CI runner)" \
+    "$(scan '^[[:space:]]*provisioner[[:space:]]+"' "$dir")"
+  report 9 "data \"external\" is forbidden under modules/ and envs/ (it runs a program on the CI runner)" \
+    "$(scan '^[[:space:]]*data[[:space:]]+"external"' "$dir")"
+done
+
 if [ ${#failures[@]} -gt 0 ]; then
   for f in "${failures[@]}"; do printf '  - %s\n' "$f" >&2; done
   die "${#failures[@]} Terraform policy violation(s)"

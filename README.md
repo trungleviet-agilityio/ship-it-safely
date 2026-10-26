@@ -82,67 +82,17 @@ Day to day, run everything through `make` (`make help` lists the targets):
 | `make verify` (or `make image` / `make smoke` / `make scan`) | Build the app image the way CI does, run it like Fargate (read-only, UID 10001, root-owned `/tmp`), scan it with Trivy (fixable HIGH or CRITICAL fails). The same recipe as `app-ci` (`scripts/image-verify.sh`). Not part of `make check` |
 | `make check` | All of the above checks; what a PR must pass |
 
-There is no `apply` or `destroy` target: you run those by hand at the checkpoint (ADR 0001, D15).
+There is no `apply` or `destroy` target (ADR 0001, D15): `envs/dev` is applied by `terraform-iac` and destroyed
+by `terraform-destroy`, both after your approval; only the bootstrap stack is applied and destroyed by hand.
 
 Then in Claude Code: `/sis-team:run 0` to build Phase 0 (local app).
 
 ## Infrastructure
 
 Terraform lives in [`infra/terraform/`](infra/terraform/), and each root and module documents itself in its own
-`README.md`: start with [`infra/terraform/README.md`](infra/terraform/README.md). Phase 1 (bootstrap a dev
-account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap/README.md).
-
-## Pipelines (`.github/workflows/`)
-
-| Workflow | Trigger | Does |
-|---|---|---|
-| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
-| | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
-| [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
-| [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, then the deploy role pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). Fails clearly if the dev stack is down. `name:` must stay `app-deploy` (deploy role trust) |
-| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist (every workflow: only `pull_request`, `push`, `workflow_dispatch`) and the CI helper self-tests. Its name must never be added to the bootstrap `workflow_names` |
-| [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
-| | `workflow_dispatch` (run it with `--ref main`) | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
-
-Repo configuration it reads: secret `AWS_PLAN_ROLE_ARN_DEV` (a secret, not a variable, so the account ID in
-the ARN never shows in public logs; ADR 0003 C10) and variable `AWS_REGION`. No AWS keys are stored anywhere.
-Fork and Dependabot PRs skip the job, since GitHub gives them no OIDC token. The workflow is a diagnostic,
-not a required status check.
-
-Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA,
-and pre-commit runs [zizmor](https://docs.zizmor.sh/) on workflows (rejects `pull_request_target`, unpinned
-actions, template injection). After the Phase 1 checkpoint, set the secret (you run this, not Claude; the
-bootstrap state is in S3, so log in with `aws sso login --profile sis-dev-admin` and export
-`AWS_PROFILE=sis-dev-admin` first):
-
-```bash
-terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV
-```
-
-After merge, run the negative test from `main`:
-
-```bash
-gh workflow run oidc-smoke-test.yml --ref main
-```
-
-The full checkpoint (log checks, CloudTrail cross-check) is in
-[ADR 0003](docs/adr/0003-phase-2-oidc-smoke-test.md#checkpoint-steps-the-user-runs-these-claude-never-does-nfr-9).
-
-### Repo configuration the pipelines read
-
-| Where | Name | Kind |
-|---|---|---|
-| Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID) |
-| Repo | `AWS_REGION` | variable |
-| Environment `dev` | `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets |
-| Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
-| Repo | ruleset on the default branch: PR required, no force push, no deletion | ruleset |
-
-The state bucket name is derived from the account ID and region, so it is not stored anywhere (ADR 0004 E22).
-Workflow `name:` values are part of the AWS trust: `terraform-iac` and `terraform-destroy` may use the apply
-role, `app-deploy` the deploy role (ADR 0004 E2).
-
-### Dev stack, cost and teardown
+`README.md`: start with [`infra/terraform/README.md`](infra/terraform/README.md). The one-time bootstrap of an
+account (state bucket, OIDC provider, roles, budget) is in
+[`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap/README.md).
 
 `envs/dev` uses [`modules/app-ecs`](infra/terraform/modules/app-ecs/README.md): a VPC with two public subnets
 (no NAT), an internet-facing ALB on HTTP 80, one Fargate task (0.25 vCPU, 0.5 GB, `ROLLING` with circuit
@@ -150,23 +100,182 @@ breaker rollback), ECR, a 7-day log group and the secret shell `sis/dev/app-api-
 of the task definition; `app-deploy` only swaps in the app image by digest (ADR 0005 F2). The app runs as UID
 10001 with a read-only root and must never write to disk.
 
-The ALB and Fargate bill by the hour. **Destroy `envs/dev` at the end of every session** with the teardown
-steps in [ADR 0004 B8](docs/adr/0004-phase-3-infra-pipeline-ecs.md) (a local, admin-run destroy until Phase 5
-adds `terraform-destroy.yml`), and re-create it next time with **Run workflow** on `terraform-iac`. The
-bootstrap stack (state bucket, roles, budget) costs close to nothing and stays.
+## How the trust works
 
-Re-create order each session: **Run workflow** on `terraform-iac` and approve it, set the secret value (you,
-never Claude; one line in your own terminal, ADR 0004 B5), then **Run workflow** on `app-deploy` and approve it.
-Until `app-deploy` runs, the service has no app image and stays unhealthy.
+GitHub Actions never holds AWS keys. Each job asks GitHub for an OIDC token and exchanges it with AWS STS for
+one role. The role's trust policy decides which tokens it accepts (ADR 0002 B13, ADR 0004 E1 and E2):
+
+| Condition | Value | What it blocks |
+|---|---|---|
+| `aud` | `sts.amazonaws.com` | Tokens minted for another audience |
+| `sub` (immutable format) | `repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request` (plan) or `...:environment:dev` (apply, deploy) | Other repos, a renamed or re-created repo with the same name, the wrong event or environment |
+| `repository_id`, `repository_owner_id` | numeric IDs | The same, as a second check |
+| `ref` on the plan role | `StringLike refs/pull/*/merge` | `pull_request_target` runs and dispatched runs, which carry `refs/heads/main` |
+| `ref` on apply and deploy | `refs/heads/main` | A branch run that adds `environment: dev` to a job |
+| `workflow` | `terraform-iac`, `terraform-destroy` (apply); `app-deploy` (deploy) | An approved job in one workflow using the other workflow's role |
+
+Gates outside the trust policy:
+
+- **Environment `dev`:** your approval, and deployments only from `main`.
+- **Guardrails** on every GitHub role: no secret values, no SSM parameters, no role chaining, no writes to the
+  GitHub roles, guardrails, boundary or OIDC provider, no access to the bootstrap state.
+- **ECS role boundary:** any role the apply role creates is capped by `sis-dev-ecs-boundary`.
+- **Exact `iam:PassRole`:** only the two ECS roles, only to `ecs-tasks.amazonaws.com`.
+- **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch`.
+
+## Pipelines (`.github/workflows/`)
+
+| Workflow | Trigger | Does |
+|---|---|---|
+| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
+| | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
+| [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev`) and `confirm`, which must be typed as `destroy-dev` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
+| [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
+| [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). `name:` must stay `app-deploy` (deploy role trust) |
+| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist and the CI helper self-tests. Its name must never be added to the bootstrap `workflow_names` |
+| [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file; `workflow_dispatch` | Diagnostic: assumes the plan role on a PR; the dispatch job (N1) passes only when the plan role refuses the non-PR token |
+
+Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA, and
+tools (Terraform, tflint, Trivy, hadolint) are checksum-verified binaries. Fork and Dependabot PRs get no OIDC
+token, so the jobs that assume a role skip them.
+
+### Repo configuration the pipelines read
+
+| Where | Name | Kind |
+|---|---|---|
+| Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID; variables would print unmasked in public logs) |
+| Repo | `AWS_REGION` | variable |
+| Environment `dev` | `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets, only readable by jobs you approved |
+| Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
+| Repo | ruleset on the default branch: PR required, no force push, no deletion | ruleset |
+
+The state bucket name is derived from the account ID and region, so it is not stored anywhere (ADR 0004 E22).
+
+## Session flow
+
+Re-create the dev stack:
+
+1. **Run workflow** on `terraform-iac` (branch `main`), then approve it in `dev`. About 4 minutes.
+2. Set the secret value, you and never Claude, in your own terminal, in one line so the key never lands in
+   history or another shell:
+
+```bash
+APP_API_KEY_VALUE="$(openssl rand -hex 24)" && AWS_PROFILE=sis-dev-admin aws secretsmanager put-secret-value --region ap-southeast-1 --secret-id sis/dev/app-api-key --secret-string "$APP_API_KEY_VALUE" --query VersionId --output text && unset APP_API_KEY_VALUE
+```
+
+3. **Run workflow** on `app-deploy` (branch `main`), then approve the `deploy` job. If you skipped step 2, the
+   deploy stops at the preflight with a message saying so, instead of a failed rollout.
+
+End of the session:
+
+4. **Run workflow** on `terraform-destroy`: `env` = `dev`, `confirm` = `destroy-dev`, then approve.
+
+Wait about a minute after a destroy before re-creating. Before merging an infra PR while the stack is torn
+down, reject the pending `terraform-iac` apply run (or merge later), otherwise approving it re-creates the stack.
+
+## Cost
+
+Prices for `ap-southeast-1`, on demand, at the time of writing (see the AWS pricing pages for
+[Elastic Load Balancing](https://aws.amazon.com/elasticloadbalancing/pricing/),
+[Fargate](https://aws.amazon.com/fargate/pricing/),
+[public IPv4 addresses](https://aws.amazon.com/vpc/pricing/) and
+[Secrets Manager](https://aws.amazon.com/secrets-manager/pricing/)):
+
+| Item | Hourly (USD) |
+|---|---|
+| ALB | 0.0252 |
+| ALB capacity (LCU, upper bound: lab traffic is a small fraction of one LCU) | up to 0.008 |
+| Fargate task: 0.25 vCPU x 0.05056 + 0.5 GB x 0.00553 | 0.0154 |
+| Public IPv4: two ALB nodes and one task, 3 x 0.005 | 0.015 |
+| Secret | about 0.0006 |
+| **Total while the stack is up** | **about 0.056 to 0.064** |
+
+That is 0.17 to 0.19 USD for a 3-hour session, or 1.35 to 1.54 USD a day. Left running for 30 days it would
+cost about 40 to 46 USD, twice the 20 USD budget; the 80% budget alert would fire after about 10 to 12 days.
+ECR storage, logs, the S3 state bucket and the budget cost cents, and GitHub-hosted minutes are free on a
+public repo. **Destroy `envs/dev` at the end of every session.**
+
+## Teardown order
+
+Every session: `terraform-destroy` for `dev`, as in the session flow above. The bootstrap stack stays.
+
+End of the lab (PLAN §9), in this order:
+
+1. `terraform-destroy` for every environment (prod first, once Phase 7 exists). Run it once more and check it
+   reports "nothing to destroy".
+2. Bootstrap, per account, as admin, locally (CI can never touch the bootstrap state). From
+   `infra/terraform/bootstrap`, with `AWS_PROFILE=sis-dev-admin`:
+   1. Move the state back to local: write a `backend_override.tf` containing `terraform { backend "local" {} }`,
+      run `terraform init -migrate-state -force-copy`, and check `terraform state list`.
+   2. Before emptying anything, check that nothing is left: `terraform -chdir=infra/terraform/envs/dev state list`
+      prints nothing (after an `init` with the backend config), and the Resource Groups Tagging API shows only
+      bootstrap resources for `Project=ship-it-safely` (ADR 0006 checkpoint step 8). Then empty the state bucket
+      `sis-dev-tfstate-<DEV_ACCOUNT_ID>-ap-southeast-1-an`, including every object version and delete marker (the
+      bucket has `force_destroy = false`): list them with `aws s3api list-object-versions` and remove them with
+      `aws s3api delete-objects`, at most 1000 keys per call. Double-check the bucket name: deleted versions
+      cannot be recovered.
+   3. `terraform plan -destroy -var-file=accounts/dev.tfvars -out=destroy.tfplan`, read it, then apply that
+      saved plan.
+   4. Delete `backend_override.tf`, `destroy.tfplan` and the local state files.
+3. Optionally delete the GitHub environment `dev` and the repo and environment secrets, which now point at
+   deleted roles. Service-linked roles and `INACTIVE` task definitions cost nothing and can stay.
+
+Troubleshooting:
+
+- **Stale state lock** after a cancelled or crashed run: first check in Actions that no `terraform-iac` or
+  `terraform-destroy` run is running or waiting (a destroy can legitimately hold the lock for over 30 minutes
+  while the ALB network interfaces drain), and that the lock's `Who` and `Created` match the run that died.
+  Only then, as admin: `terraform -chdir=infra/terraform/envs/dev init -backend-config="bucket=<state bucket>"`
+  and `terraform -chdir=infra/terraform/envs/dev force-unlock <lock id>`. Never from CI. Unlocking a live lock
+  lets two runs write the state, which can orphan billable resources.
+- **A pending run disappeared:** `terraform-iac` apply and `terraform-destroy` share one concurrency group, so
+  a newer pending run replaces an older pending one. Start the one you want again.
+- **Re-create fails on the secret name:** wait a minute after a destroy; the secret is deleted immediately
+  (`recovery_window_in_days = 0`), but the name can take a moment to free up.
+
+## Release strategy
+
+| Env | Strategy | Why |
+|---|---|---|
+| dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `ecs-wait-deployment.sh` fails the run on a rollback |
+| prod (Phase 7) | ECS built-in `BLUE_GREEN`: two target groups, bake time, CloudWatch alarm rollback | All traffic moves once green is healthy; fast rollback during the bake time; needs up to twice the tasks during a deploy |
+| Later | ECS built-in `CANARY` or `LINEAR` | Needs real traffic and alarms that mean something: 10% of almost no requests gives no signal |
+
+Branching is trunk-based (FR-14): merge to `main` deploys dev; a release tag or `workflow_dispatch` promotes the
+same image digest to prod. No `develop` or per-env branches.
+
+## When to move to CodeBuild runners or CodePipeline
+
+**Stay on GitHub-hosted runners and GitHub Actions for this lab.** They are free on a public repo, and every
+trust condition above is built on their OIDC token.
+
+**CodeBuild-hosted runners** keep these workflows and change `runs-on` to a CodeBuild project label. Move when
+jobs need private VPC access (database migrations, private endpoints), larger, ARM or GPU compute, or egress
+control inside your VPC. Trade-offs:
+
+- They cost build minutes, while hosted minutes are free here.
+- GitHub advises against self-hosted runners on public repos, and this repo is public.
+- The CodeBuild project's service role gives credentials to any job that targets its label, which bypasses the
+  `sub`, `ref` and `workflow` trust. If you move, give that role nothing beyond logs and keep assuming the OIDC
+  roles from the job.
+- A GitHub connection credential then lives in AWS.
+
+**CodePipeline (V2)** fits when the organisation needs AWS-native approvals and audit (CloudTrail),
+cross-account promotion with AWS identities only (the Phase 7 prod account), or deploys that must not depend
+on GitHub Actions being available. The pieces would be a CodeConnections GitHub source (push, PR and tag
+triggers), a manual approval action, and the ECS deploy action (or CodeDeploy for blue/green). Its ECS action
+builds from the service's current revision, not Terraform's latest family revision, which differs from how
+`app-deploy` works here (ADR 0005 F3).
 
 ## Phases
+
+Status per phase: [`PROGRESS.md`](PROGRESS.md).
 
 | Phase | Needs AWS? | You do by hand |
 |---|---|---|
 | 0 Scaffold + local app | No | `docker compose up`, check `/`, `/admin`, `BREAK=true` |
-| 1 Bootstrap dev account | **Yes**: dev account ID, SSO admin login, budget email | `terraform apply` bootstrap, migrate state, GitHub environment `dev` + variables |
+| 1 Bootstrap dev account | **Yes**: dev account ID, SSO admin login, budget email | Apply bootstrap, migrate state, GitHub environment `dev` and secrets |
 | 2 OIDC smoke test | Yes (roles from Phase 1) | Set secret `AWS_PLAN_ROLE_ARN_DEV`, read the assumed-role ARN in the PR run, run N1 after merge |
-| 3 Infra pipeline + ECS | Yes | Re-apply bootstrap (PR 1), environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
+| 3 Infra pipeline + ECS | Yes | Re-apply bootstrap, environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
 | 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
-
-Cost: ALB + Fargate bill hourly. Destroy `envs/dev` at the end of every session.
+| 5 Hardening and teardown | Yes | Re-apply bootstrap (deploy role reads secret metadata), re-create, negative tests N5 and N6, destroy through `terraform-destroy`, N7 |

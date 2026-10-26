@@ -7,7 +7,7 @@ only through `terraform.tfvars`.
 ## Run
 
 CI plans on every pull request that touches `infra/**` and applies on `main` after approval of the `dev`
-environment (`.github/workflows/terraform-iac.yml`). To run it by hand (checkpoint or teardown, with SSO
+environment (`.github/workflows/terraform-iac.yml`). To run it by hand (checkpoint, with SSO
 admin; the account ID comes from your shell, never from a file in git):
 
 ```bash
@@ -30,8 +30,10 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
   it never serves. The first deployment after a create stalls by design (ADR 0005, F2) until app-deploy sets
   the real image.
 - **First apply.** Run `put-secret-value`, then run the `app-deploy` workflow (no forced deployment). The state of `bootstrap/` is not readable by the CI roles.
-- **Teardown.** `terraform plan -destroy` and `apply` by hand (admin), every session until Phase 5. A local
-  `init` here does not disturb `make tf-check`.
+- **Teardown.** Run the `terraform-destroy` workflow (Run workflow, env `dev`, confirm `destroy-dev`, then
+  approve `dev`). It plans the destroy, refuses anything but deletes under `module.app_ecs`, applies the saved
+  plan and deregisters the task definition revisions (ADR 0006). An admin can still run `plan -destroy` by hand;
+  a local `init` here does not disturb `make tf-check`.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

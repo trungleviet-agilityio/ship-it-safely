@@ -14,7 +14,7 @@ account="${ACCOUNT:-}"
 if [ -n "$account" ] && grep -qF -- "$account" <<<"$text"; then
   die "summary contains the account ID; not publishing"
 fi
-if grep -Eq '(^|[^0-9A-Za-z])[0-9]{12}([^0-9A-Za-z]|$)' <<<"$text"; then
+if grep -Eq "$ACCOUNT_ID_RE" <<<"$text"; then
   die "summary contains a 12-digit number (possible account ID); not publishing"
 fi
 printf '%s\n' "$text"

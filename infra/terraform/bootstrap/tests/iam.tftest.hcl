@@ -173,9 +173,40 @@ run "deploy_scope" {
 
   assert {
     condition = alltrue([
-      for s in data.aws_iam_policy_document.deploy.statement : !anytrue([for a in s.actions : startswith(a, "secretsmanager:") || startswith(a, "s3:")])
+      for s in data.aws_iam_policy_document.deploy.statement : !anytrue([for a in s.actions : startswith(a, "s3:")])
     ])
-    error_message = "deploy has no Secrets Manager or state access"
+    error_message = "deploy has no state access"
+  }
+}
+
+# ADR 0006, G14: the deploy preflight may read the metadata of the one app secret, never its value.
+run "deploy_secret_metadata_only" {
+  command = plan
+
+  assert {
+    condition = (
+      length([for s in data.aws_iam_policy_document.deploy.statement : s if s.sid == "DescribeAppSecretMetadata"]) == 1
+      && alltrue([
+        for s in data.aws_iam_policy_document.deploy.statement :
+        s.effect == "Allow" && toset(s.actions) == toset(["secretsmanager:DescribeSecret"]) && toset(s.resources) == toset(["arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:sis/dev/app-api-key-??????"])
+        if s.sid == "DescribeAppSecretMetadata"
+      ])
+    )
+    error_message = "DescribeAppSecretMetadata must allow exactly secretsmanager:DescribeSecret on the one app secret name (-?????? suffix)"
+  }
+
+  assert {
+    condition = (
+      length(flatten([
+        for s in data.aws_iam_policy_document.deploy.statement : [for a in s.actions : a if startswith(a, "secretsmanager:")]
+      ])) == 1
+    )
+    error_message = "the only Secrets Manager action in the deploy policy is DescribeSecret"
+  }
+
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.guardrails.statement : tolist(s.actions) if s.effect == "Deny"]), "secretsmanager:GetSecretValue")
+    error_message = "the guardrail must still deny GetSecretValue, which wins over the DescribeSecret allow"
   }
 }
 

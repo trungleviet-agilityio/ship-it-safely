@@ -17,8 +17,11 @@ on:
       - scripts/ci-requirements.txt
       - scripts/check-workflow-triggers.sh
       - scripts/tf-plan-summary.sh
+      - scripts/tf-init.sh
       - scripts/check-aws-config.sh
       - scripts/assert-no-account-id.sh
+      - scripts/assumed-role-name.sh
+      - scripts/plan-role-guardrails.sh
       - scripts/redact-account-ids.sh
       - scripts/lib.sh
       - mise.toml
@@ -43,7 +46,8 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
-  TF_DIR: infra/terraform/envs/dev
+  # The single key: the scripts and the steps derive the environment root, the role names and the titles from it.
+  ENV: dev
 
 jobs:
   checks:
@@ -105,6 +109,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select the environment root
+        run: echo "TF_DIR=infra/terraform/envs/${ENV}" >> "$GITHUB_ENV"
+
       - name: Install Terraform and tflint (checksum verified)
         run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
 
@@ -113,7 +120,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-plan
+        run: scripts/check-aws-config.sh "sis-${ENV}-gha-plan"
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -124,15 +131,12 @@ jobs:
           mask-aws-account-id: true
           retry-max-attempts: 3
 
-      # The state bucket name is derived (ADR 0002, B8), so there is no bucket secret.
+      # tf-init.sh derives the state bucket name (ADR 0002, B8), so there is no bucket secret.
       - name: Terraform init
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
-          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
-          terraform -chdir="$TF_DIR" validate
+        run: scripts/tf-init.sh
 
       - name: Terraform plan
         env:
@@ -188,7 +192,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-plan
+        run: scripts/check-aws-config.sh "sis-${ENV}-gha-plan"
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -199,48 +203,9 @@ jobs:
           mask-aws-account-id: true
           retry-max-attempts: 3
 
-      # Only reads and dry runs: nothing that writes for real is tried, because a wrong pass would damage state.
-      # Error text is printed only after 12-digit runs are replaced.
+      # Only reads and dry runs (scripts/plan-role-guardrails.sh): nothing that writes for real is tried.
       - name: Plan role is denied what it must not do (N2, N3)
-        env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
-        run: |
-          set -euo pipefail
-          echo "::add-mask::$ACCOUNT"
-          err_file="$(mktemp)"
-          redact() { scripts/redact-account-ids.sh; }
-
-          # N2: the plan role must not read a secret value (explicit deny, FR-3).
-          rc=0
-          aws secretsmanager get-secret-value --secret-id sis/dev/app-api-key >/dev/null 2>"$err_file" || rc=$?
-          err="$(redact <"$err_file")"
-          if [[ $rc -eq 0 ]]; then
-            echo "::error::plan role read a secret value"
-            exit 1
-          elif [[ "$err" == *AccessDeniedException* ]]; then
-            echo "Denied as designed (N2): GetSecretValue returned AccessDeniedException"
-          elif [[ "$err" == *ResourceNotFoundException* ]]; then
-            echo "::warning::secret does not exist yet; N2 is inconclusive, the checkpoint simulator covers it"
-          else
-            echo "::error::N2 failed for a reason other than access denied (exit code $rc)"
-            echo "$err"
-            exit 1
-          fi
-
-          # N3: the plan role must not create a VPC. A dry run creates nothing either way.
-          rc=0
-          aws ec2 create-vpc --cidr-block 10.255.0.0/16 --dry-run >/dev/null 2>"$err_file" || rc=$?
-          err="$(redact <"$err_file")"
-          if [[ "$err" == *DryRunOperation* ]]; then
-            echo "::error::plan role could create a VPC"
-            exit 1
-          elif [[ "$err" == *UnauthorizedOperation* ]]; then
-            echo "Denied as designed (N3): CreateVpc dry run returned UnauthorizedOperation"
-          else
-            echo "::error::N3 failed for a reason other than unauthorized (exit code $rc)"
-            echo "$err"
-            exit 1
-          fi
+        run: scripts/plan-role-guardrails.sh
 
   comment:
     name: sticky plan comment
@@ -253,14 +218,25 @@ jobs:
       && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # The only job with a write token: no checkout and no AWS credentials.
+    # The only job with a write token: no AWS credentials, and a checkout that holds scripts/ only (the shared
+    # account-ID check), without persisting the token.
     permissions:
+      contents: read
       pull-requests: write # create or update the sticky plan comment
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
+
+      - name: Check out the helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The base commit, not the PR head: this job holds a write token, so it must run only scripts that were
+          # already reviewed and merged. With the head, a PR could change scripts/ and run its own code here.
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
 
       - name: Post or update the plan comment
         env:
@@ -273,14 +249,10 @@ jobs:
           SUMMARY: ${{ needs.plan.outputs.summary }}
         run: |
           set -euo pipefail
-          marker='<!-- terraform-iac:plan:dev -->'
-          pattern='(^|[^0-9A-Za-z])[0-9]{12}([^0-9A-Za-z]|$)'
+          marker="<!-- terraform-iac:plan:${ENV} -->"
 
           # The summary was checked in the plan job; check again before it reaches a public comment.
-          if grep -Eq "$pattern" <<<"$SUMMARY"; then
-            echo "::error::summary contains a 12-digit number (possible account ID); not posting"
-            exit 1
-          fi
+          printf '%s\n' "$SUMMARY" | scripts/assert-no-account-id.sh >/dev/null
           if [[ -z "$SUMMARY" ]]; then
             SUMMARY="No plan summary was produced. Open the run log."
           fi
@@ -327,6 +299,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select the environment root
+        run: echo "TF_DIR=infra/terraform/envs/${ENV}" >> "$GITHUB_ENV"
+
       - name: Install Terraform and tflint (checksum verified)
         run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
 
@@ -335,7 +310,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-apply
+        run: scripts/check-aws-config.sh "sis-${ENV}-gha-apply"
 
       - name: Assume the apply role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -350,10 +325,7 @@ jobs:
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
-          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
-          terraform -chdir="$TF_DIR" validate
+        run: scripts/tf-init.sh
 
       # A fresh plan of main inside the approved job, not a saved PR plan (ADR 0004, E24, R5).
       - name: Terraform plan
@@ -372,17 +344,18 @@ jobs:
       - name: Terraform apply
         run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m -no-color tfplan
 
-      # configure-aws-credentials masks the whole assumed-role ARN in logs, so the summary shows which role ran.
+      # configure-aws-credentials masks the whole assumed-role ARN in logs, so the summary shows which role ran (role
+      # name only, never the session).
       - name: Report the result
         run: |
           set -euo pipefail
           alb_url="$(terraform -chdir="$TF_DIR" output -raw alb_url)"
-          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          role="$(scripts/assumed-role-name.sh 2>/dev/null)" || role="not assumed"
           {
             echo "### Applied"
             echo "ALB URL: ${alb_url}"
-            echo "Role: \`${arn#*:assumed-role/}\`"
-            echo "The service stays unhealthy until the secret value is set and a new deployment is forced."
+            echo "Role: \`${role}\`"
+            echo "The service stays unhealthy until the secret value is set and app-deploy runs (Run workflow)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove the plan file
