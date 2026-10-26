@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Offline self-test of the CI helper scripts (ADR 0004, L1; ADR 0005, F22): the plan summary, the workflow trigger
-# allowlist, the tool installer, the AWS config check, and the task definition render and rollout evaluation.
+# allowlist, the tool installer, the AWS config check, the task definition render and rollout evaluation, and the
+# deploy helpers (push, preflight, image archive, summary guard) against stub aws and docker commands.
 # A bad fixture must fail with its message; the real workflow must pass.
 #
 # Usage: scripts/ci-selftest.sh
@@ -105,18 +106,21 @@ cat >"$tmp/td-good.json" <<EOF
   "containerDefinitions": [{
     "name": "app", "image": "public.ecr.aws/docker/library/python:3.13-slim@sha256:${digest}",
     "essential": true, "user": "10001:10001", "readonlyRootFilesystem": true,
+    "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+    "mountPoints": [{"sourceVolume": "tmp", "containerPath": "/tmp", "readOnly": false}],
     "environment": [{"name": "APP_ENV", "value": "dev"}],
+    "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/ecs/sis-dev-app", "awslogs-region": "ap-southeast-1", "awslogs-stream-prefix": "app"}},
     "secrets": [{"name": "APP_API_KEY", "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:${acct}:secret:sis/dev/app-api-key-AbC123"}]
   }]
 }
 EOF
-render() { "$ROOT/scripts/render-task-def.sh" "$1" "$image" "$commit"; }
+render() { "$ROOT/scripts/render-task-def.sh" --env dev "$1" "$image" "$commit"; }
 # mutate <name> <jq filter>: a copy of the good fixture with one thing broken.
 mutate() { jq "$2" "$tmp/td-good.json" >"$tmp/td-$1.json"; }
 
 render "$tmp/td-good.json" >"$tmp/td-out.json" 2>/dev/null || die "selftest: good task definition rejected"
-jq -e --arg image "$image" --arg sha "$commit" --arg acct "$acct" '
-  (keys - ["containerDefinitions","cpu","enableFaultInjection","ephemeralStorage","executionRoleArn","family","inferenceAccelerators","ipcMode","memory","networkMode","pidMode","placementConstraints","proxyConfiguration","requiresCompatibilities","runtimePlatform","tags","taskRoleArn","volumes"]) == []
+jq -e --arg image "$image" --arg sha "$commit" --arg acct "$acct" --argjson req "$REQUEST_KEYS_JSON" '
+  (keys - $req) == []
   and (has("deleteRequestedAt") | not) and (has("revision") | not) and (has("taskDefinitionArn") | not)
   and .containerDefinitions[0].image == $image
   and (.tags | map({(.key): .value}) | add) == {"Project": "ship-it-safely", "Env": "dev", "ManagedBy": "app-deploy", "GitSha": $sha}
@@ -150,11 +154,45 @@ mutate secret '.containerDefinitions[0].secrets[0].valueFrom |= sub("app-api-key
 expect_fail "render with another secret" "secrets must be exactly APP_API_KEY" render "$tmp/td-secret.json"
 mutate secret2 '.containerDefinitions[0].secrets += [.containerDefinitions[0].secrets[0]]'
 expect_fail "render with two secrets" "secrets must be exactly APP_API_KEY" render "$tmp/td-secret2.json"
+# One fixture per rule on the container shape Terraform owns (ADR 0005, M1).
+mutate ckey '.containerDefinitions[0].privileged = true'
+expect_fail "render with an unknown container key" "unknown container key: privileged" render "$tmp/td-ckey.json"
+mutate user '.containerDefinitions[0].user = "0:0"'
+expect_fail "render with another user" "user must be 10001:10001" render "$tmp/td-user.json"
+mutate nouser 'del(.containerDefinitions[0].user)'
+expect_fail "render without a user" "user must be 10001:10001" render "$tmp/td-nouser.json"
+mutate rw '.containerDefinitions[0].readonlyRootFilesystem = false'
+expect_fail "render with a writable root" "readonlyRootFilesystem must be true" render "$tmp/td-rw.json"
+mutate env2 '.containerDefinitions[0].environment += [{"name": "DEBUG", "value": "1"}]'
+expect_fail "render with an extra environment variable" "environment must be exactly APP_ENV" render "$tmp/td-env2.json"
+mutate env0 '.containerDefinitions[0].environment = []'
+expect_fail "render with no environment" "environment must be exactly APP_ENV" render "$tmp/td-env0.json"
+mutate logg '.containerDefinitions[0].logConfiguration.options["awslogs-group"] = "/ecs/other"'
+expect_fail "render with another log group" "logConfiguration must be awslogs with the group /ecs/sis-dev-app" render "$tmp/td-logg.json"
+mutate logd '.containerDefinitions[0].logConfiguration.logDriver = "splunk"'
+expect_fail "render with another log driver" "logConfiguration must be awslogs" render "$tmp/td-logd.json"
+mutate mnt '.containerDefinitions[0].mountPoints[0].containerPath = "/data"'
+expect_fail "render with another mount path" "exactly the /tmp volume" render "$tmp/td-mnt.json"
+mutate mnt2 '.containerDefinitions[0].mountPoints += [{"sourceVolume": "tmp", "containerPath": "/var", "readOnly": false}]'
+expect_fail "render with a second mount" "exactly the /tmp volume" render "$tmp/td-mnt2.json"
+mutate vol '.volumes += [{"name": "data"}]'
+expect_fail "render with a second volume" "exactly the /tmp volume" render "$tmp/td-vol.json"
+mutate nocontainers '.containerDefinitions = []'
+expect_fail "render with no containers" "exactly one container" render "$tmp/td-nocontainers.json"
+# A task definition for another environment renders for that environment only.
+sed 's/sis-dev/sis-prod/g; s#sis/dev#sis/prod#g' "$tmp/td-good.json" >"$tmp/td-prod.json"
+image_prod="${image/sis-dev-app/sis-prod-app}"
+"$ROOT/scripts/render-task-def.sh" --env prod "$tmp/td-prod.json" "$image_prod" "$commit" 2>/dev/null \
+  | jq -e '(.tags | map({(.key): .value}) | add).Env == "prod"' >/dev/null || die "selftest: the prod task definition was not rendered with Env prod"
+expect_fail "render of the dev task definition for prod" "the group /ecs/sis-prod-app" \
+  "$ROOT/scripts/render-task-def.sh" --env prod "$tmp/td-good.json" "$image_prod" "$commit"
+expect_fail "render without --env" "usage:" "$ROOT/scripts/render-task-def.sh" "$tmp/td-good.json" "$image" "$commit"
+expect_fail "render with an invalid env" "ENV must be lowercase" "$ROOT/scripts/render-task-def.sh" --env "../x" "$tmp/td-good.json" "$image" "$commit"
 expect_fail "render with a tag instead of a digest" "image argument" \
-  "$ROOT/scripts/render-task-def.sh" "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app:latest" "$commit"
+  "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app:latest" "$commit"
 expect_fail "render with another repository" "image argument" \
-  "$ROOT/scripts/render-task-def.sh" "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/other@sha256:${digest}" "$commit"
-expect_fail "render with a short commit" "40 hex" "$ROOT/scripts/render-task-def.sh" "$tmp/td-good.json" "$image" abc123
+  "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/other@sha256:${digest}" "$commit"
+expect_fail "render with a short commit" "40 hex" "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "$image" abc123
 # A describe-task-definition response (wrapped in "taskDefinition") renders the same as the bare object.
 jq '{taskDefinition: ., tags: []}' "$tmp/td-good.json" >"$tmp/td-wrapped.json"
 render "$tmp/td-wrapped.json" 2>/dev/null | jq -e '.family == "sis-dev-app"' >/dev/null || die "selftest: wrapped describe output rejected"
@@ -192,31 +230,210 @@ ok "evaluate: failure prints the reason and redacts digits"
 
 expect_fail "evaluate a rolled-back rollout" "rolled back by the circuit breaker" \
   eval_json "$(svc ACTIVE "[$(dep PRIMARY COMPLETED "$td_old")]")"
-expect_fail "evaluate an empty services list" "dev stack is not up" eval_json '{"services":[],"failures":[]}'
-expect_fail "evaluate a MISSING failure" "dev stack is not up" eval_json '{"services":[],"failures":[{"reason":"MISSING"}]}'
-expect_fail "evaluate an inactive service" "dev stack is not up" eval_json "$(svc DRAINING "[$(dep PRIMARY COMPLETED "$td_new")]")"
+expect_fail "evaluate an empty services list" "stack is not up" eval_json '{"services":[],"failures":[]}'
+expect_fail "evaluate a MISSING failure" "stack is not up" eval_json '{"services":[],"failures":[{"reason":"MISSING"}]}'
+expect_fail "evaluate an inactive service" "stack is not up" eval_json "$(svc DRAINING "[$(dep PRIMARY COMPLETED "$td_new")]")"
 
-# The polling loop, with a stub aws: IN_PROGRESS for the first answers, then COMPLETED; and a rollout that never ends.
+# --- Stub aws and docker: file-driven replies, so the scripts that call them run offline.
+# The stub answers a call from files in $sd: <key>.out (stdout), <key>.err (stderr) and <key>.rc (exit code, default
+# 0). A suffix .N applies to the N-th call only (0-based). The key is aws-<service>-<operation> or docker-<command>.
 mkdir -p "$tmp/stub"
-cat >"$tmp/stub/aws" <<EOF
+cat >"$tmp/stub/aws" <<'EOF'
 #!/usr/bin/env bash
-n=\$(cat "\$STUB_COUNT" 2>/dev/null || echo 0)
-echo \$((n + 1)) >"\$STUB_COUNT"
-if [ "\$n" -ge "\${STUB_DONE_AFTER:-1}" ]; then state=COMPLETED; else state=IN_PROGRESS; fi
-printf '{"services":[{"status":"ACTIVE","events":[],"deployments":[{"status":"PRIMARY","rolloutState":"%s","taskDefinition":"$td_new"}]}],"failures":[]}' "\$state"
+dir="${STUB_DIR:?}" name="$(basename "$0")"
+key="$name-$1"
+[ "$name" = aws ] && key="$key-$2"
+n="$(cat "$dir/$key.n" 2>/dev/null || echo 0)"
+echo $((n + 1)) >"$dir/$key.n"
+echo "$name $*" >>"$dir/calls"
+[ "$name" = docker ] && echo "${DOCKER_CONFIG:-}" >>"$dir/docker-config"
+[ "$key" = docker-login ] && cat >/dev/null
+[ "$key" = docker-save ] && printf 'image tar' >"$3"
+pick() { if [ -f "$dir/$key.$1.$n" ]; then echo "$dir/$key.$1.$n"; elif [ -f "$dir/$key.$1" ]; then echo "$dir/$key.$1"; fi; }
+f="$(pick out)"; [ -z "$f" ] || cat "$f"
+f="$(pick err)"; [ -z "$f" ] || cat "$f" >&2
+f="$(pick rc)"; [ -z "$f" ] || exit "$(cat "$f")"
+exit 0
 EOF
 chmod +x "$tmp/stub/aws"
-env PATH="$tmp/stub:$PATH" ECS_WAIT_POLL=0 STUB_COUNT="$tmp/stub/count1" "$ROOT/scripts/ecs-wait-deployment.sh" c s "$td_new" 30 >/dev/null 2>&1 \
-  || die "selftest: the wait loop should succeed after one poll"
-expect_fail "wait that never completes" "timeout after 0s" env PATH="$tmp/stub:$PATH" ECS_WAIT_POLL=0 STUB_DONE_AFTER=99 \
-  STUB_COUNT="$tmp/stub/count2" "$ROOT/scripts/ecs-wait-deployment.sh" c s "$td_new" 0
-ok "wait loop polls and times out"
+cp "$tmp/stub/aws" "$tmp/stub/docker"
+sd=""
+# stub_reset: a fresh reply directory. stub <key> <out|err|rc> <content> [call number]: set one reply.
+stub_reset() { sd="$(mktemp -d "$tmp/stub-replies.XXXXXX")"; }
+stub() { printf '%s' "$3" >"$sd/$1.$2${4:+.$4}"; }
+# stubbed <command...>: run with the stubs first on PATH.
+stubbed() { env PATH="$tmp/stub:$PATH" STUB_DIR="$sd" "$@"; }
+# calls_have <text>: did the stubs see a call containing it?
+calls_have() { grep -qF -- "$1" "$sd/calls" 2>/dev/null; }
+
+# --- ecs-wait-deployment.sh polling loop
+progress="$(svc ACTIVE "[$(dep PRIMARY IN_PROGRESS "$td_new")]")"
+completed="$(svc ACTIVE "[$(dep PRIMARY COMPLETED "$td_new")]")"
+wait_script() { stubbed env ECS_WAIT_POLL=0 "$ROOT/scripts/ecs-wait-deployment.sh" c s "$td_new" "$@"; }
+stub_reset
+stub aws-ecs-describe-services out "$progress" 0
+stub aws-ecs-describe-services out "$completed"
+wait_script 30 >/dev/null 2>&1 || die "selftest: the wait loop should succeed after one poll"
+stub_reset
+stub aws-ecs-describe-services out "$progress"
+expect_fail "wait that never completes" "timeout after 0s" wait_script 0
+throttle="An error occurred (ThrottlingException) when calling the DescribeServices operation for ${acct}"
+stub_reset
+for n in 0 1; do
+  stub aws-ecs-describe-services rc 255 "$n"
+  stub aws-ecs-describe-services err "$throttle" "$n"
+done
+stub aws-ecs-describe-services out "$completed"
+out="$(wait_script 30 2>&1)" || die "selftest: two describe-services failures in a row must be tolerated: $out"
+case "$out" in *"ThrottlingException"*"<redacted>"*) ;; *) die "selftest: the redacted failure text was not printed: $out" ;; esac
+stub_reset
+stub aws-ecs-describe-services rc 255
+stub aws-ecs-describe-services err "An error occurred (AccessDeniedException) for ${acct}"
+out="$(wait_script 30 2>&1 || true)"
+case "$out" in
+  *"failed 3 times in a row"*"AccessDeniedException"*) ;;
+  *) die "selftest: three describe-services failures must stop the wait with the error: $out" ;;
+esac
+case "$out" in *"stack is not up"* | *"$acct"*) die "selftest: the failure must not blame the stack or print digits: $out" ;; esac
+ok "wait loop polls, tolerates two failures, stops on three, and times out"
+
+# --- ecr-push.sh
+ref_digest="sha256:${digest}"
+oci="application/vnd.oci.image.manifest.v1+json"
+ecr_line() { printf '%s\t%s\n' "$1" "$2"; }
+ecr_push() { stubbed env ACCOUNT="$acct" REGION=ap-southeast-1 "$ROOT/scripts/ecr-push.sh" sis-dev-app "$commit" sis-app:local; }
+stub_reset
+stub aws-ecr-describe-images out "$(ecr_line "$ref_digest" "$oci")"
+out="$(ecr_push 2>/dev/null)" || die "selftest: ecr-push of an existing tag failed"
+[ "$out" = "$(printf 'IMAGE_DIGEST=%s\nIMAGE_REF=%s.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app@%s' "$ref_digest" "$acct" "$ref_digest")" ] \
+  || die "selftest: unexpected ecr-push output: $out"
+! calls_have "docker push" || die "selftest: an existing tag must not be pushed again"
+ok "ecr-push reuses an existing tag"
+stub_reset
+stub aws-ecr-describe-images rc 254 0
+stub aws-ecr-describe-images err "An error occurred (ImageNotFoundException) when calling DescribeImages" 0
+stub aws-ecr-describe-images out "$(ecr_line "$ref_digest" "$oci")" 1
+ecr_push >/dev/null 2>&1 || die "selftest: ecr-push of a new tag failed"
+calls_have "docker push --quiet ${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app:${commit}" || die "selftest: the image was not pushed"
+login_dir="$(head -n1 "$sd/docker-config")"
+{ [ -n "$login_dir" ] && [ ! -e "$login_dir" ]; } || die "selftest: the temporary registry login was not removed"
+ok "ecr-push pushes a new tag with a temporary docker config that is removed"
+stub_reset
+stub aws-ecr-describe-images rc 254
+stub aws-ecr-describe-images err "An error occurred (AccessDeniedException) for ${acct}"
+expect_fail "ecr-push on another error" "describe-images failed (exit code 254): An error occurred (AccessDeniedException) for <redacted>" ecr_push
+stub_reset
+stub aws-ecr-describe-images out "$(ecr_line "$ref_digest" "application/vnd.oci.image.index.v1+json")"
+expect_fail "ecr-push of an image index" "not a single image manifest" ecr_push
+stub_reset
+stub aws-ecr-describe-images out "$(ecr_line "sha256:abc" "$oci")"
+expect_fail "ecr-push with a malformed digest" "unexpected format" ecr_push
+expect_fail "ecr-push without arguments" "usage:" "$ROOT/scripts/ecr-push.sh"
+expect_fail "ecr-push without ACCOUNT" "ACCOUNT and REGION" env -u ACCOUNT "$ROOT/scripts/ecr-push.sh" r t i
+
+# --- ecs-preflight.sh
+secret_denied="An error occurred (AccessDeniedException) when calling the GetSecretValue operation for ${acct}"
+preflight() { stubbed env ENV="${PREFLIGHT_ENV:-dev}" "$ROOT/scripts/ecs-preflight.sh"; }
+preflight_ready() {
+  stub_reset
+  stub aws-ecs-describe-services out ACTIVE
+  stub aws-secretsmanager-get-secret-value rc 254
+  stub aws-secretsmanager-get-secret-value err "$secret_denied"
+}
+preflight_ready
+preflight >/dev/null 2>&1 || die "selftest: the preflight of a healthy stack failed"
+calls_have "--cluster sis-dev-cluster --services sis-dev-app" || die "selftest: the preflight did not derive the dev names"
+calls_have "--secret-id sis/dev/app-api-key" || die "selftest: the preflight did not derive the dev secret"
+PREFLIGHT_ENV=prod preflight >/dev/null 2>&1 || die "selftest: the prod preflight failed"
+calls_have "--cluster sis-prod-cluster" || die "selftest: the preflight did not derive the prod names"
+ok "preflight passes for an active stack and a denied secret"
+preflight_ready
+stub aws-ecs-describe-services rc 254
+stub aws-ecs-describe-services err "An error occurred (ClusterNotFoundException) when calling DescribeServices"
+expect_fail "preflight without a cluster" "the dev stack is not up" preflight
+preflight_ready
+stub aws-ecs-describe-services rc 254
+stub aws-ecs-describe-services err "An error occurred (ThrottlingException) for ${acct}"
+expect_fail "preflight with throttling" "describe-services failed (exit code 254): An error occurred (ThrottlingException) for <redacted>" preflight
+for status in INACTIVE None; do
+  preflight_ready
+  stub aws-ecs-describe-services out "$status"
+  expect_fail "preflight with service status $status" "the dev stack is not up" preflight
+done
+preflight_ready
+stub aws-secretsmanager-get-secret-value rc 0
+stub aws-secretsmanager-get-secret-value out "sis/dev/app-api-key"
+expect_fail "preflight when the deploy role can read the secret" "N4 failed: the deploy role can call GetSecretValue" preflight
+preflight_ready
+stub aws-secretsmanager-get-secret-value err "An error occurred (ResourceNotFoundException)"
+expect_fail "preflight with another N4 error" "N4 failed for a reason other than access denied" preflight
+
+# --- image-export.sh, image-import.sh
+stub_reset
+export_out="$(stubbed "$ROOT/scripts/image-export.sh" "$commit" "$tmp/export" 2>/dev/null)" || die "selftest: image-export failed"
+[ "$export_out" = "sha256=$(sha256_of "$tmp/export/image.tar")" ] || die "selftest: image-export printed: $export_out"
+calls_have "docker save -o $tmp/export/image.tar sis-app:${commit}" || die "selftest: image-export saved the wrong image"
+tar_sum="$(sha256_of "$tmp/export/image.tar")"
+stub_reset
+stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" "$tar_sum" >/dev/null 2>&1 || die "selftest: image-import of the right archive failed"
+calls_have "docker load -i $tmp/export/image.tar" || die "selftest: image-import did not load the archive"
+stub_reset
+expect_fail "image-import with the wrong sha256" "differs from the build job output" stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" "$digest"
+! calls_have "docker load" || die "selftest: a tampered archive must not be loaded"
+expect_fail "image-import with a malformed sha256" "64 hex" stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" abc
+expect_fail "image-import without arguments" "usage:" "$ROOT/scripts/image-import.sh"
+ok "image export and import verify the archive before docker load"
+
+# --- assert-no-account-id.sh
+[ "$(printf 'commit %s\nok\n' "$commit" | "$ROOT/scripts/assert-no-account-id.sh")" = "$(printf 'commit %s\nok' "$commit")" ] \
+  || die "selftest: assert-no-account-id must pass clean text through"
+[ "$(printf 'run 0123456789012345678901234567890123456789' | "$ROOT/scripts/assert-no-account-id.sh")" = "run 0123456789012345678901234567890123456789" ] \
+  || die "selftest: a long digit string inside a hash must pass"
+# shellcheck disable=SC2016  # the inner script is meant to expand in the child shell
+expect_fail "summary with a 12-digit run" "12-digit" bash -c 'printf "%s" "$1" | "$2"' _ "role ${leak_id}" "$ROOT/scripts/assert-no-account-id.sh"
+# shellcheck disable=SC2016
+expect_fail "summary with the exact account" "contains the account ID" bash -c 'printf "%s" "$1" | ACCOUNT=acct-x "$2"' _ "role acct-x" "$ROOT/scripts/assert-no-account-id.sh"
+ok "assert-no-account-id passes clean text and refuses account IDs"
+
+# --- lib.sh helpers: die annotation, run_capture, names
+# shellcheck disable=SC2016
+expect_fail "die inside GitHub Actions" "::error::boom" env GITHUB_ACTIONS=true bash -c 'source "$1/scripts/lib.sh"; die boom' _ "$ROOT"
+run_capture bash -c "echo out; echo 'bad ${acct}' >&2; exit 3"
+{ [ "$RUN_RC" -eq 3 ] && [ "$RUN_OUT" = "out" ] && [ "$RUN_ERR" = "bad <redacted>" ]; } || die "selftest: run_capture recorded rc=$RUN_RC out=$RUN_OUT err=$RUN_ERR"
+names="$(ENV=prod "$ROOT/scripts/app-names.sh")"
+[ "$names" = "$(printf 'CLUSTER=sis-prod-cluster\nSERVICE=sis-prod-app\nFAMILY=sis-prod-app\nREPOSITORY=sis-prod-app')" ] || die "selftest: app-names printed: $names"
+[ "$("$ROOT/scripts/app-names.sh" | head -n1)" = "CLUSTER=sis-dev-cluster" ] || die "selftest: app-names must default to dev"
+[ "$("$ROOT/scripts/image-name.sh" "$commit")" = "sis-app:${commit}" ] || die "selftest: image-name printed the wrong name"
+ok "lib helpers: die, run_capture and names"
+
+# --- workflows: path filters list every script the pipeline runs, and build-scan holds no deploy credentials
+# check_paths <workflow>: every scripts/*.sh the workflow reaches (directly or through other scripts) is a path filter.
+script_refs() { { grep -Eo 'scripts/[a-z0-9-]+\.sh([^a-z0-9]|$)' "$1" || true; } | sed -E 's/[^a-z0-9]$//' | sort -u; }
+check_paths() {
+  local wf="$1" seen="" queue next s
+  queue="$(script_refs "$wf")"
+  while [ -n "$queue" ]; do
+    next=""
+    for s in $queue; do
+      case " $seen " in *" $s "*) continue ;; esac
+      seen="$seen $s"
+      next="$next $(script_refs "$ROOT/$s")"
+    done
+    queue="$next"
+  done
+  for s in $seen scripts/lib.sh; do
+    grep -qxF "      - $s" "$wf" || die "selftest: ${wf##*/} runs $s but does not list it under paths"
+  done
+}
+check_paths "$ROOT/.github/workflows/app-ci.yml"
+check_paths "$ROOT/.github/workflows/app-deploy.yml"
+if sed -n '/^  build-scan:/,/^  deploy:/p' "$ROOT/.github/workflows/app-deploy.yml" | grep -Eq 'id-token|environment:|secrets\.'; then
+  die "selftest: the build-scan job must hold no OIDC token, environment or secret"
+fi
+ok "workflow path filters and build-scan isolation"
 
 # --- install-ci-tools.sh on scratch copies: nothing here touches the network (CI_TOOLS_BASE_URL is a directory)
 mkdir -p "$tmp/mirror" "$tmp/pack"
-sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
-}
 for t in terraform tflint trivy hadolint; do
   printf '#!/bin/sh\necho "fake %s"\n' "$t" >"$tmp/pack/$t"
   chmod +x "$tmp/pack/$t"
@@ -283,6 +500,13 @@ expect_fail "app-smoke without arguments" "usage:" "$ROOT/scripts/app-smoke.sh"
 expect_fail "scan-image with one argument" "usage:" "$ROOT/scripts/scan-image.sh" image-only
 expect_fail "ecs-wait with two arguments" "usage:" "$ROOT/scripts/ecs-wait-deployment.sh" cluster service
 expect_fail "render-task-def without arguments" "usage:" "$ROOT/scripts/render-task-def.sh"
+expect_fail "image-verify without arguments" "usage:" "$ROOT/scripts/image-verify.sh"
+expect_fail "image-export without arguments" "usage:" "$ROOT/scripts/image-export.sh"
+expect_fail "image-name without arguments" "usage:" "$ROOT/scripts/image-name.sh"
+expect_fail "app-names with an argument" "usage:" "$ROOT/scripts/app-names.sh" x
+expect_fail "ecs-preflight with an argument" "usage:" "$ROOT/scripts/ecs-preflight.sh" x
+expect_fail "assert-no-account-id with an argument" "usage:" "$ROOT/scripts/assert-no-account-id.sh" x
+expect_fail "check-aws-config without arguments" "usage:" "$ROOT/scripts/check-aws-config.sh"
 
 "$ROOT/scripts/check-workflow-triggers.sh"
 ok "ci helper self-tests pass"

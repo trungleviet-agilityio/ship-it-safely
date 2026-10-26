@@ -6,4 +6,4 @@
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-sed -E 's/[0-9]{12}/<redacted>/g'
+redact_ids
