@@ -38,11 +38,17 @@ override_resource {
 }
 override_resource {
   target = aws_iam_role.exec
-  values = { arn = "arn:aws:iam::123456789012:role/sis-dev-ecs-exec" }
+  values = {
+    id  = "sis-dev-ecs-exec"
+    arn = "arn:aws:iam::123456789012:role/sis-dev-ecs-exec"
+  }
 }
 override_resource {
   target = aws_iam_role.task
-  values = { arn = "arn:aws:iam::123456789012:role/sis-dev-ecs-task" }
+  values = {
+    id  = "sis-dev-ecs-task"
+    arn = "arn:aws:iam::123456789012:role/sis-dev-ecs-task"
+  }
 }
 
 variables {
@@ -69,5 +75,10 @@ run "roles_use_the_rendered_documents" {
   assert {
     condition     = aws_iam_role_policy.exec.policy == data.aws_iam_policy_document.exec.json && aws_iam_role_policy.exec.policy == "{\"doc\":\"exec_policy\"}"
     error_message = "the exec inline policy must be the exec document"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.exec.role == aws_iam_role.exec.id && aws_iam_role_policy.exec.role != aws_iam_role.task.id
+    error_message = "the exec inline policy must be attached to the exec role, not the task role"
   }
 }
