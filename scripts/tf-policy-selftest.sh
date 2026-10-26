@@ -51,6 +51,7 @@ expect_fail() {
 
 d="$(fixture good)"
 printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["ecs-tasks.amazonaws.com"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
+printf 'output "name" {\n  # comments may mention module.x.role_arn and account_id\n  value = module.m.name\n}\n' >"$d/envs/dev/outputs.tf"
 "$policy" "$d" >/dev/null 2>&1 || die "good fixture must pass"
 ok "good fixture passes"
 
@@ -115,6 +116,38 @@ expect_fail "$d" 7
 d="$(fixture r7b)"
 printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["arn:aws:iam::1:root"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
 expect_fail "$d" 7
+
+d="$(fixture r7c)"
+printf 'locals {\n  trust = { Principal = { AWS = "x" } }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
+
+d="$(fixture r7d)"
+printf 'locals {\n  trust = { Principal = "*" }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
+
+d="$(fixture r7e)"
+printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type = "*"\n      identifiers = ["*"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
+
+d="$(fixture r7f)"
+printf 'locals {\n  trust = { Federated = "x" }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
+
+d="$(fixture r8a)"
+printf 'output "a" {\n  value = module.m.role.arn\n}\n' >"$d/envs/dev/outputs.tf"
+expect_fail "$d" 8
+
+d="$(fixture r8b)"
+printf 'output "a" {\n  value = module.m.ecr_repository_url\n}\n' >"$d/envs/dev/outputs.tf"
+expect_fail "$d" 8
+
+d="$(fixture r8c)"
+printf 'output "a" {\n  value = module.m.role_arn\n}\n' >"$d/envs/dev/outputs.tf"
+expect_fail "$d" 8
+
+d="$(fixture r8d)"
+printf 'output "a" {\n  value = data.aws_caller_identity.current.account_id\n}\n' >"$d/envs/dev/outputs.tf"
+expect_fail "$d" 8
 
 d="$(fixture r6a)"
 printf 'provider "aws" {}\n' >"$d/modules/m/prov.tf"

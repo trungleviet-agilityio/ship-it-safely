@@ -45,12 +45,30 @@ run "committed_tfvars_plan_the_dev_stack" {
   }
 }
 
-run "outputs_hold_no_account_id" {
+# terraform test cannot enumerate `output`, so the declared names are read from outputs.tf and the values are pinned.
+run "root_outputs_are_exactly_the_account_free_set" {
   command = plan
 
   assert {
-    condition     = !anytrue([for o in [output.cluster_name, output.service_name, output.task_family, output.ecr_repository_name, output.log_group_name, output.secret_name] : strcontains(o, "123456789012")])
-    error_message = "root outputs must not carry the account ID (public logs)"
+    condition = (
+      toset([for m in regexall("(?m)^output \"([a-z_]+)\"", file("outputs.tf")) : m[0]]) == toset([
+        "alb_url", "cluster_name", "service_name", "task_family", "ecr_repository_name", "log_group_name", "secret_name",
+      ])
+      && output.cluster_name != ""
+    )
+    error_message = "root outputs must be exactly this set; ARNs, the ECR URL and account IDs stay module outputs (public logs)"
+  }
+
+  assert {
+    condition = (
+      output.cluster_name == "sis-dev-cluster"
+      && output.service_name == "sis-dev-app"
+      && output.task_family == "sis-dev-app"
+      && output.ecr_repository_name == "sis-dev-app"
+      && output.log_group_name == "/ecs/sis-dev-app"
+      && output.secret_name == "sis/dev/app-api-key"
+    )
+    error_message = "output values must be the plain names from the bootstrap contract"
   }
 }
 
