@@ -280,6 +280,25 @@ stubbed() { env PATH="$tmp/stub:$PATH" STUB_DIR="$sd" "$@"; }
 # calls_have <text>: did the stubs see a call containing it?
 calls_have() { grep -qF -- "$1" "$sd/calls" 2>/dev/null; }
 
+# --- build-image.sh retry policy: only transient registry errors are retried, and a bounded number of times.
+build() { stubbed env BUILD_RETRY_DELAYS="0 0" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
+rate_limited="failed to resolve source metadata: 429 Too Many Requests"
+stub_reset
+stub docker-buildx rc 1 0
+stub docker-buildx err "$rate_limited" 0
+build >/dev/null 2>&1 || die "selftest: build should succeed after one rate-limited attempt"
+[ "$(cat "$sd/docker-buildx.n")" = 2 ] || die "selftest: build should have run twice"
+ok "build retries a rate-limited registry"
+stub_reset
+stub docker-buildx rc 1
+stub docker-buildx err "FAIL: test_health_ok (test_app.BoardTest)"
+expect_fail "build with a failing test" "not a transient registry error" build
+[ "$(cat "$sd/docker-buildx.n")" = 1 ] || die "selftest: a failing test must not be retried"
+stub_reset
+stub docker-buildx rc 1
+stub docker-buildx err "$rate_limited"
+expect_fail "build when the registry keeps refusing" "kept refusing after 3 attempts" build
+
 # --- ecs-wait-deployment.sh polling loop
 progress="$(svc ACTIVE "[$(dep PRIMARY IN_PROGRESS "$td_new")]")"
 completed="$(svc ACTIVE "[$(dep PRIMARY COMPLETED "$td_new")]")"
