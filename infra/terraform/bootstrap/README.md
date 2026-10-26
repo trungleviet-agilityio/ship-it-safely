@@ -18,12 +18,17 @@ Terraform need before any app infrastructure exists. Design and decisions: [ADR 
 
 ## Trust conditions
 
-All `StringEquals`:
+All `StringEquals`, except one `StringLike` on the plan role's `ref` (the only wildcard in any trust policy, and
+it covers only the PR number):
 
-| Role | `sub` | Also checked |
-|---|---|---|
-| plan | `repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request` | `aud`, `repository_id`, `repository_owner_id` |
-| apply, deploy | `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:dev` | the same, plus `ref = refs/heads/main` |
+| Role | `sub` | `ref` | Also checked |
+|---|---|---|---|
+| plan | `repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request` | `StringLike refs/pull/*/merge` | `aud`, `repository_id`, `repository_owner_id` |
+| apply, deploy | `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:dev` | `StringEquals refs/heads/main` | the same |
+
+IAM has no `event_name` condition key for GitHub OIDC. A `pull_request` run has ref `refs/pull/<N>/merge`; a
+`pull_request_target` run has the base ref `refs/heads/main`, so the plan role refuses it even though its `sub`
+matches.
 
 The `sub` uses GitHub's immutable format with numeric IDs, so a renamed or re-created repo with the same name
 cannot assume the roles. The PR plan job must not set `environment:`, or its `sub` stops being `pull_request`.

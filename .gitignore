@@ -20,6 +20,9 @@ override.tf.json
 # Account-specific inputs stay local; commit the *.example files
 infra/terraform/bootstrap/accounts/*.tfvars
 !infra/terraform/bootstrap/accounts/*.tfvars.example
+# Backend configs may hold account IDs; commit only *.tfbackend.example
+*.tfbackend
+!*.tfbackend.example
 
 # Claude Code personal files
 .claude/settings.local.json
