@@ -76,7 +76,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 | `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
 | `make test` | App unit tests |
 | `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint |
-| `make tf-check` | Offline Terraform README check, `fmt`, `validate`, `terraform test` (no AWS) |
+| `make tf-check` | Offline Terraform policy rules (with their self-test), README check, `fmt`, `validate`, `terraform test` (no AWS; uses a temporary data dir, so a real S3 `init` in the checkout does not break it) |
 | `make docs` | Regenerate the `terraform-docs` tables in Terraform READMEs |
 | `make check` | All of the above checks; what a PR must pass |
 
