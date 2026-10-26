@@ -67,5 +67,20 @@ expect_fail "flow-style trigger" "pull_request_target" "$ROOT/scripts/check-work
 printf 'name: bad\non: pull_request_target\njobs: {}\n' >"$tmp/scalar.yml"
 expect_fail "scalar trigger" "pull_request_target" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/scalar.yml"
 
+printf 'name: bad\non:\n  pull_request:\n  "pull_request_target":\njobs: {}\n' >"$tmp/qd.yml"
+expect_fail "double-quoted key" "pull_request_target" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/qd.yml"
+printf "name: bad\non:\n  push:\n  'workflow_run':\n    workflows: [x]\njobs: {}\n" >"$tmp/qs.yml"
+expect_fail "single-quoted key" "workflow_run" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/qs.yml"
+printf 'name: bad\n"on": {push: {}, issue_comment: {}}\njobs: {}\n' >"$tmp/fm.yml"
+expect_fail "flow map" "issue_comment" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/fm.yml"
+
+# No arguments: every file under .github/workflows is scanned, including .yaml and path-filtered ones.
+mkdir -p "$tmp/repo/.github/workflows" "$tmp/repo/scripts"
+cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
+cp "$tmp/good.yml" "$tmp/repo/.github/workflows/a.yml"
+"$tmp/repo/scripts/check-workflow-triggers.sh" >/dev/null 2>&1 || die "selftest: default scan rejected a good tree"
+printf 'name: sneaky\non:\n  pull_request_target:\njobs: {}\n' >"$tmp/repo/.github/workflows/b.yaml"
+expect_fail "default scan of a .yaml file" "b.yaml" "$tmp/repo/scripts/check-workflow-triggers.sh"
+
 "$ROOT/scripts/check-workflow-triggers.sh"
 ok "ci helper self-tests pass"
