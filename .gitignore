@@ -23,6 +23,11 @@ infra/terraform/bootstrap/accounts/*.tfvars
 # Backend configs may hold account IDs; commit only *.tfbackend.example
 *.tfbackend
 !*.tfbackend.example
+# Plan JSON, JSON vars and local auto vars can hold values; envs/*/terraform.tfvars stays committed (FR-6)
+*.tfvars.json
+infra/terraform/envs/*/*.auto.tfvars
+*.tfplan.json
+tfplan.json
 
 # Claude Code personal files
 .claude/settings.local.json
