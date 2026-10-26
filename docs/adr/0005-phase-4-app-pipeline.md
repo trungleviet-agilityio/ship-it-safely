@@ -1,6 +1,7 @@
 # ADR 0005: Phase 4 app pipeline
 
 - Status: accepted
+- F23 (deploy-registered revisions left at teardown) is resolved by ADR 0006 G12.
 - Date: 2026-10-26 (accepted the same day)
 
 ## Context

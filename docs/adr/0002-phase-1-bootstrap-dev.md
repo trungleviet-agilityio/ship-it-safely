@@ -1,6 +1,7 @@
 # ADR 0002: Phase 1 bootstrap dev account
 
 - Status: accepted
+- Deploy role policy amended by ADR 0006 G14: `secretsmanager:DescribeSecret` (metadata only) on the app secret.
 - Date: 2026-10-22
 
 ## Context

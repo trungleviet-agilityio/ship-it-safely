@@ -119,6 +119,8 @@ disagree, the ADR wins; update this file.
 - IAM roles that a GitHub role creates carry the bootstrap permissions boundary
   (`iam:PermissionsBoundary` condition).
 - `iam:PassRole` names the exact role ARNs and sets `iam:PassedToService`.
+- The deploy role may call `secretsmanager:DescribeSecret` (metadata only) on the one app secret, matched as
+  `sis/<env>/app-api-key-??????`, so the deploy preflight can refuse a secret with no value (ADR 0006 G14).
 - Plan, apply and deploy roles carry an explicit deny on `secretsmanager:GetSecretValue`
   (FR-3, FR-4, FR-5), through the shared guardrail policy.
 - OIDC trust policies match `sub` exactly (`StringEquals`, never a wildcard on the repo) and check
@@ -176,6 +178,14 @@ disagree, the ADR wins; update this file.
 - Images are single-platform `linux/amd64`, built once, pushed once by an immutable git-SHA tag, and deployed by
   digest. Never print the registry host, image URI or any ARN with the account ID.
 
+- **Destructive workflows** run on `workflow_dispatch` only. A typed confirmation is checked in a job with
+  no credentials before the approval is requested; the credentialed job plans the destroy, refuses any action
+  other than delete, and applies that same saved plan in the same job (ADR 0006).
+- One concurrency group per Terraform state (`terraform-envs-<env>`), shared by every job that writes that
+  state; never cancel in progress. Do not use `queue:` until actionlint accepts it.
+- Jobs that hold AWS credentials set `timeout-minutes` below the 60-minute role session (NFR-7), so a stuck
+  job fails while it can still release a lock.
+
 ## App runtime (Fargate)
 
 - The app runs as UID 10001 with a read-only root filesystem and a root-owned `/tmp`: it must never write to
@@ -188,8 +198,8 @@ disagree, the ADR wins; update this file.
 - Every CLI the repo runs locally (Terraform, linters, scanners, pre-commit, uv) is pinned to an exact
   version in `mise.toml`, and `mise install` sets up a machine. Do not document `brew install` for
   them.
-- CI pins the same versions (Terraform in `a checksum-verified Terraform binary (`scripts/install-ci-tools.sh`)`, tools by version and
-  checksum), so local and CI results match (NFR-3).
+- CI installs the same versions as checksum-verified binaries (`scripts/install-ci-tools.sh`, sums in
+  `scripts/ci-tools.sha256`), so local and CI results match (NFR-3).
 - Bump a version in its own `chore(repo)` commit and run `make check` before pushing.
 - Python packages stay in `pyproject.toml` and run through `uv` / `uvx`, not mise.
 
