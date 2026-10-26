@@ -8,10 +8,10 @@ PYTHON ?= python3.13
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
 
 FULL_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo local)
-IMAGE ?= sis-app:local
+IMAGE := $(shell scripts/image-name.sh $(FULL_SHA))
 
 .DEFAULT_GOAL := help
-.PHONY: help up down test image smoke scan lint tf-check docs check
+.PHONY: help up down test image smoke scan verify lint tf-check docs check
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -36,6 +36,9 @@ smoke: ## Run the built image like Fargate and check it (run make image first)
 
 scan: ## Scan the built image with trivy; fixable HIGH or CRITICAL fails (run make image first)
 	scripts/scan-image.sh $(IMAGE) "$$(mktemp -d)"
+
+verify: ## Build, smoke test and scan in one go (what app-ci runs)
+	scripts/image-verify.sh $(FULL_SHA) "$$(mktemp -d)"
 
 lint: ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files

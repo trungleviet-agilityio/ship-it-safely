@@ -4,7 +4,7 @@
 # secrets fail the scan; exceptions belong in app/.trivyignore with a reason and an exp: date.
 #
 # Writes <out dir>/trivy.json and <out dir>/counts.txt ("critical=N high=N secrets=N") and appends the counts to
-# the step summary when GITHUB_STEP_SUMMARY is set. Needs docker, trivy and jq.
+# the step summary (with the vulnerability DB version and update time) when GITHUB_STEP_SUMMARY is set. Needs docker, trivy and jq.
 #
 # Usage: scripts/scan-image.sh <image> <out dir>
 
@@ -43,8 +43,14 @@ critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL"
 high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$out/trivy.json")"
 secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$out/trivy.json")"
 printf 'critical=%s high=%s secrets=%s\n' "$critical" "$high" "$secrets" >"$out/counts.txt"
+# The vulnerability DB version and age, so a stale or odd DB shows in the run (read after the scan downloaded it).
+db="$(trivy version --cache-dir "$cache" --format json 2>/dev/null \
+  | jq -r '.VulnerabilityDB | "version \(.Version), updated \(.UpdatedAt)"' 2>/dev/null)" || db="unknown"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  printf 'Trivy: %s critical, %s high, %s secrets (fixable only)\n' "$critical" "$high" "$secrets" >>"$GITHUB_STEP_SUMMARY"
+  {
+    printf 'Trivy: %s critical, %s high, %s secrets (fixable only)\n\n' "$critical" "$high" "$secrets"
+    printf 'Trivy vulnerability DB: %s\n' "$db"
+  } >>"$GITHUB_STEP_SUMMARY"
 fi
 
 [ "$rc" -eq 0 ] || die "trivy found fixable HIGH or CRITICAL issues, or secrets (exit code $rc)"

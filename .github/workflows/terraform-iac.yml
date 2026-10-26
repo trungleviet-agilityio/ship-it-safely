@@ -17,6 +17,9 @@ on:
       - scripts/ci-requirements.txt
       - scripts/check-workflow-triggers.sh
       - scripts/tf-plan-summary.sh
+      - scripts/check-aws-config.sh
+      - scripts/assert-no-account-id.sh
+      - scripts/lib.sh
       - mise.toml
       - .tflint.hcl
   push:
@@ -109,31 +112,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" ]]; then
-            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV or AWS_ACCOUNT_ID_DEV is empty or not set"
-            exit 1
-          fi
-          if [[ -z "$REGION" ]]; then
-            echo "::error::Variable AWS_REGION is empty or not set"
-            exit 1
-          fi
-          echo "::add-mask::$ACCOUNT"
-          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
-            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
-            exit 1
-          fi
-          if [[ ! "$ACCOUNT" =~ ^[0-9]{12}$ ]]; then
-            echo "::error::AWS_ACCOUNT_ID_DEV is not a 12-digit account ID"
-            exit 1
-          fi
-          role_account="${ROLE_ARN#arn:aws:iam::}"
-          role_account="${role_account%%:*}"
-          if [[ "$role_account" != "$ACCOUNT" ]]; then
-            echo "::error::AWS_ACCOUNT_ID_DEV differs from the account in AWS_PLAN_ROLE_ARN_DEV"
-            exit 1
-          fi
-          echo "Configuration present and well formed"
+        run: scripts/check-aws-config.sh sis-dev-gha-plan
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -166,11 +145,7 @@ jobs:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
         run: |
           set -euo pipefail
-          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
-          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
-            echo "::error::summary contains the account ID; not publishing"
-            exit 1
-          fi
+          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh | scripts/assert-no-account-id.sh)"
           printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
           delimiter="EOF_$(openssl rand -hex 8)"
           {
@@ -192,8 +167,9 @@ jobs:
       && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # No checkout and no write token: this job only talks to AWS with the plan role.
+    # No write token: this job only talks to AWS with the plan role. The checkout is for the config check script.
     permissions:
+      contents: read
       id-token: write # OIDC token for the role assumed by configure-aws-credentials
     steps:
       - name: Harden runner
@@ -201,22 +177,17 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Check configuration
         env:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" || -z "$REGION" ]]; then
-            echo "::error::AWS_PLAN_ROLE_ARN_DEV, AWS_ACCOUNT_ID_DEV or AWS_REGION is empty or not set"
-            exit 1
-          fi
-          echo "::add-mask::$ACCOUNT"
-          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
-            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
-            exit 1
-          fi
-          echo "Configuration present and well formed"
+        run: scripts/check-aws-config.sh sis-dev-gha-plan
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -233,10 +204,10 @@ jobs:
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           echo "::add-mask::$ACCOUNT"
           err_file="$(mktemp)"
-          redact() { sed -E 's/[0-9]{12}/<redacted>/g'; }
+          redact() { scripts/redact-account-ids.sh; }
 
           # N2: the plan role must not read a secret value (explicit deny, FR-3).
           rc=0
@@ -363,31 +334,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" ]]; then
-            echo "::error::Secret AWS_APPLY_ROLE_ARN (environment dev) or AWS_ACCOUNT_ID_DEV is empty or not set"
-            exit 1
-          fi
-          if [[ -z "$REGION" ]]; then
-            echo "::error::Variable AWS_REGION is empty or not set"
-            exit 1
-          fi
-          echo "::add-mask::$ACCOUNT"
-          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-apply$ ]]; then
-            echo "::error::AWS_APPLY_ROLE_ARN is not the sis-dev-gha-apply role ARN"
-            exit 1
-          fi
-          if [[ ! "$ACCOUNT" =~ ^[0-9]{12}$ ]]; then
-            echo "::error::AWS_ACCOUNT_ID_DEV is not a 12-digit account ID"
-            exit 1
-          fi
-          role_account="${ROLE_ARN#arn:aws:iam::}"
-          role_account="${role_account%%:*}"
-          if [[ "$role_account" != "$ACCOUNT" ]]; then
-            echo "::error::AWS_ACCOUNT_ID_DEV differs from the account in AWS_APPLY_ROLE_ARN"
-            exit 1
-          fi
-          echo "Configuration present and well formed"
+        run: scripts/check-aws-config.sh sis-dev-gha-apply
 
       - name: Assume the apply role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -418,11 +365,7 @@ jobs:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
         run: |
           set -euo pipefail
-          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
-          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
-            echo "::error::summary contains the account ID; not publishing"
-            exit 1
-          fi
+          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh | scripts/assert-no-account-id.sh)"
           printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Terraform apply

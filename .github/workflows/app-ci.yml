@@ -9,10 +9,14 @@ on:
     paths:
       - app/**
       - .github/workflows/app-ci.yml
-      - scripts/install-ci-tools.sh
-      - scripts/ci-tools.sha256
-      - scripts/build-image.sh
+      - scripts/lib.sh
       - scripts/app-smoke.sh
+      - scripts/build-image.sh
+      - scripts/ci-requirements.txt
+      - scripts/ci-tools.sha256
+      - scripts/image-name.sh
+      - scripts/image-verify.sh
+      - scripts/install-ci-tools.sh
       - scripts/scan-image.sh
       - mise.toml
 
@@ -22,6 +26,9 @@ permissions: {}
 concurrency:
   group: app-ci-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  GIT_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   build-test-scan:
@@ -59,36 +66,19 @@ jobs:
           pre-commit run ruff-format --all-files --show-diff-on-failure
           pre-commit run mypy --all-files --show-diff-on-failure
 
-      # The tests run inside the build (the runtime stage copies from the test stage); one platform, one digest.
-      - name: Build the image (runs the unit tests)
-        env:
-          GIT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: scripts/build-image.sh "$GIT_SHA"
+      # Build (the unit tests run inside, one platform, one digest), smoke test like Fargate, scan.
+      - name: Build, smoke test and scan the image
+        run: scripts/image-verify.sh "$GIT_SHA" "$RUNNER_TEMP/scan"
 
-      - name: Smoke test the image like Fargate
-        env:
-          GIT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: scripts/app-smoke.sh "sis-app:${GIT_SHA}" "$GIT_SHA"
-
-      - name: Scan the image (trivy)
-        env:
-          GIT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: scripts/scan-image.sh "sis-app:${GIT_SHA}" "$RUNNER_TEMP/scan"
-
+      # The scan step writes the Trivy counts and database version to the job summary.
       - name: Summary
         if: always()
         env:
-          GIT_SHA: ${{ github.event.pull_request.head.sha }}
           JOB_STATUS: ${{ job.status }}
         run: |
-          counts="n/a"
-          if [[ -f "$RUNNER_TEMP/scan/counts.txt" ]]; then
-            counts="$(cat "$RUNNER_TEMP/scan/counts.txt")"
-          fi
           {
             echo "### app-ci"
             echo "Commit: \`${GIT_SHA}\`"
             echo "Result: ${JOB_STATUS}"
-            echo "Trivy (fixable HIGH and CRITICAL, secrets): ${counts}"
             echo "The image was not pushed."
           } >> "$GITHUB_STEP_SUMMARY"
