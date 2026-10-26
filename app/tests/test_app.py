@@ -45,7 +45,7 @@ class BoardTest(unittest.TestCase):
     def test_index(self) -> None:
         status, body = get(self.port, "/")
         self.assertEqual(status, 200)
-        for text in ("test", "abc1234", "secret_loaded: yes", "n/a"):
+        for text in ("test", "abc1234", "secret_loaded: yes", "n/a", "shipped by: app-deploy"):
             self.assertIn(text, body)
         self.assertNotIn(KEY, body)
 

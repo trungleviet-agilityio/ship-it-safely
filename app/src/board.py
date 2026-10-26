@@ -43,6 +43,7 @@ def page() -> str:
         ("GIT_SHA", os.environ.get("GIT_SHA", "unknown")),
         ("started", STARTED),
         ("image digest", image_digest()),
+        ("shipped by", "app-deploy (digest-pinned)"),
         ("secret_loaded: " + key_set, ""),
     ]
     body = "".join(f"<p>{html.escape(': '.join(r) if r[1] else r[0])}</p>" for r in rows)
