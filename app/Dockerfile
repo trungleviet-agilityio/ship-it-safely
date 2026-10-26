@@ -1,17 +1,21 @@
-# python:3.13-slim, pinned by digest (index digest, multi-arch).
-FROM python:3.13-slim@sha256:57b29a7c050c4e679e4bea572e14b3965cf4b5839de2da49d55e49ffc4024f39 AS test
+# ECR Public mirror of python:3.13-slim, pinned by index digest (multi-arch, same digest as Docker Hub).
+FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS test
 WORKDIR /app
 COPY src ./src
 COPY tests ./tests
 RUN python -m unittest discover -s tests
 
-FROM python:3.13-slim@sha256:57b29a7c050c4e679e4bea572e14b3965cf4b5839de2da49d55e49ffc4024f39 AS runtime
+FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS runtime
 ARG GIT_SHA=local
+LABEL org.opencontainers.image.revision=${GIT_SHA} \
+      org.opencontainers.image.source=https://github.com/trungleviet-agilityio/ship-it-safely
 ENV GIT_SHA=${GIT_SHA} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 app \
  && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+# The app is stdlib only: remove pip and setuptools (and the libraries they vendor) from the runtime image.
+RUN python -m pip uninstall --yes pip setuptools wheel
 WORKDIR /app
 # Copy from the test stage so the final image is only built if tests passed.
 COPY --from=test --chown=app:app /app/src ./src

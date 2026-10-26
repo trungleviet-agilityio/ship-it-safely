@@ -39,12 +39,14 @@ module "app_ecs" {
 - **Task size.** `task_cpu` (256 or 512) and `task_memory` (512 to 1024) are set on the task, not the
   container, because the apply role's `ecs:task-cpu` and `ecs:task-memory` keys read the task level.
 - **Secret first deployment.** Secrets are injected at container start. Until someone runs
-  `put-secret-value`, tasks fail and the first deployment stalls (circuit breaker). Set the value, then force
-  a new deployment. `wait_for_steady_state` is `false` for this reason.
+  `put-secret-value`, tasks fail and the first deployment stalls (circuit breaker). Set the value, then run
+  app-deploy. `wait_for_steady_state` is `false` for this reason.
 - **`ignore_changes = [task_definition]`.** Phase 4 deploys register new task definition revisions; the
   service must not revert them. Terraform revisions reach the service only through the next deploy.
-- **Image.** `container_image` must be pinned by digest. `container_command` is a placeholder aid until the
-  app image exists (Phase 4 removes it).
+- **Image.** `container_image` must be pinned by digest. The task definition has no `command`: app-deploy
+  replaces only the `image` field of the latest revision (ADR 0005, F2) and fails if a command is present.
+  The placeholder image therefore exits at once, and the first deployment after a create stalls until the
+  first app-deploy.
 - **Secret recovery window.** Defaults to 0 so a torn-down stack can be re-created in the same session.
 - **ALB ingress.** Open to `0.0.0.0/0` by default (ADR 0004, Q1); the listener is plain HTTP (R6).
 
@@ -104,7 +106,6 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | env | Environment name. | `string` | n/a | yes |
 | prefix | Name prefix for every resource. Must equal the bootstrap prefix (name contract, ADR 0002). | `string` | n/a | yes |
 | alb_ingress_cidrs | CIDR blocks allowed to reach the ALB on port 80. Open by default (ADR 0004, Q1); restrict it when the lab is not being demoed. | `list(string)` | ```[ "0.0.0.0/0" ]``` | no |
-| container_command | Optional command override. Null keeps the image entrypoint and command. | `list(string)` | `null` | no |
 | container_port | Port the container listens on. | `number` | `8080` | no |
 | desired_count | Number of tasks. | `number` | `1` | no |
 | ecr_keep_images | Number of images the ECR lifecycle rule keeps. | `number` | `10` | no |

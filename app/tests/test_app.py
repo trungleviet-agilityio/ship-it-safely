@@ -2,8 +2,12 @@
 
 import json
 import os
+import signal
+import socket
+import subprocess  # noqa: S404
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -119,6 +123,53 @@ class BoardTest(unittest.TestCase):
             mock.patch("urllib.request.urlopen", side_effect=OSError),
         ):
             self.assertEqual(board.image_digest(), "n/a")
+
+    def test_image_uri_never_shown(self) -> None:
+        uri = "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app@sha256:aa"
+
+        class Resp:
+            def __enter__(self) -> "Resp":
+                return self
+
+            def __exit__(self, *a: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"Image": uri, "ImageID": "sha256:bb"}).encode()
+
+        with (
+            mock.patch.dict(os.environ, {"ECS_CONTAINER_METADATA_URI_V4": "http://x"}),
+            mock.patch("urllib.request.urlopen", return_value=Resp()),
+        ):
+            for path in ("/", "/version"):
+                body = get(self.port, path)[1]
+                self.assertIn("sha256:bb", body)
+                self.assertNotIn("dkr.ecr", body)
+                self.assertNotIn("123456789012", body)
+
+
+class SigtermTest(unittest.TestCase):
+    def test_sigterm_stops_server(self) -> None:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        src = os.path.join(os.path.dirname(__file__), "..", "src", "board.py")
+        env = {**os.environ, "PORT": str(port), "PYTHONUNBUFFERED": "1"}
+        proc = subprocess.Popen([sys.executable, "-B", src], env=env)  # noqa: S603
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 10
+        while get_status(port) != 200:
+            self.assertLess(time.monotonic(), deadline, "server did not start")
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=5), 0)
+
+
+def get_status(port: int) -> int:
+    try:
+        return get(port, "/health")[0]
+    except OSError:
+        return 0
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ import hmac
 import html
 import json
 import os
+import signal
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -99,5 +101,18 @@ def make_server(port: int) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(("0.0.0.0", port), Handler)  # noqa: S104
 
 
+def main() -> None:
+    server = make_server(int(os.environ.get("PORT", "8080")))
+    # shutdown() blocks until serve_forever() returns, so run it off the main thread.
+    # As PID 1 the default SIGTERM action is ignored, so without this ECS waits for SIGKILL.
+    signal.signal(
+        signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start()
+    )
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
-    make_server(int(os.environ.get("PORT", "8080"))).serve_forever()
+    main()

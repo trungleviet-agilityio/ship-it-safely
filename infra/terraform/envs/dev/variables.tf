@@ -35,13 +35,7 @@ variable "vpc_cidr" {
 
 variable "container_image" {
   type        = string
-  description = "Container image pinned by digest. A public placeholder until Phase 4 builds the app image."
-}
-
-variable "container_command" {
-  type        = list(string)
-  description = "Command override for the placeholder image. Null for the real app image (Phase 4 removes it)."
-  default     = null
+  description = "Container image pinned by digest. A public placeholder that never serves: app-deploy sets the real image by digest."
 }
 
 variable "desired_count" {
