@@ -82,7 +82,8 @@ Day to day, run everything through `make` (`make help` lists the targets):
 | `make verify` (or `make image` / `make smoke` / `make scan`) | Build the app image the way CI does, run it like Fargate (read-only, UID 10001, root-owned `/tmp`), scan it with Trivy (fixable HIGH or CRITICAL fails). The same recipe as `app-ci` (`scripts/image-verify.sh`). Not part of `make check` |
 | `make check` | All of the above checks; what a PR must pass |
 
-There is no `apply` or `destroy` target: you run those by hand at the checkpoint (ADR 0001, D15).
+There is no `apply` or `destroy` target (ADR 0001, D15): `envs/dev` is applied by `terraform-iac` and destroyed
+by `terraform-destroy`, both after your approval; only the bootstrap stack is applied and destroyed by hand.
 
 Then in Claude Code: `/sis-team:run 0` to build Phase 0 (local app).
 
@@ -206,9 +207,13 @@ End of the lab (PLAN §9), in this order:
    `infra/terraform/bootstrap`, with `AWS_PROFILE=sis-dev-admin`:
    1. Move the state back to local: write a `backend_override.tf` containing `terraform { backend "local" {} }`,
       run `terraform init -migrate-state -force-copy`, and check `terraform state list`.
-   2. Empty the state bucket, including every object version and delete marker (the bucket has
-      `force_destroy = false`): list them with `aws s3api list-object-versions` and remove them with
-      `aws s3api delete-objects`.
+   2. Before emptying anything, check that nothing is left: `terraform -chdir=infra/terraform/envs/dev state list`
+      prints nothing (after an `init` with the backend config), and the Resource Groups Tagging API shows only
+      bootstrap resources for `Project=ship-it-safely` (ADR 0006 checkpoint step 8). Then empty the state bucket
+      `sis-dev-tfstate-<DEV_ACCOUNT_ID>-ap-southeast-1-an`, including every object version and delete marker (the
+      bucket has `force_destroy = false`): list them with `aws s3api list-object-versions` and remove them with
+      `aws s3api delete-objects`, at most 1000 keys per call. Double-check the bucket name: deleted versions
+      cannot be recovered.
    3. `terraform plan -destroy -var-file=accounts/dev.tfvars -out=destroy.tfplan`, read it, then apply that
       saved plan.
    4. Delete `backend_override.tf`, `destroy.tfplan` and the local state files.
@@ -217,8 +222,12 @@ End of the lab (PLAN §9), in this order:
 
 Troubleshooting:
 
-- **Stale state lock** after a cancelled or crashed run: only you, as admin, run
-  `terraform force-unlock <lock id>` in the affected root; never from CI.
+- **Stale state lock** after a cancelled or crashed run: first check in Actions that no `terraform-iac` or
+  `terraform-destroy` run is running or waiting (a destroy can legitimately hold the lock for over 30 minutes
+  while the ALB network interfaces drain), and that the lock's `Who` and `Created` match the run that died.
+  Only then, as admin: `terraform -chdir=infra/terraform/envs/dev init -backend-config="bucket=<state bucket>"`
+  and `terraform -chdir=infra/terraform/envs/dev force-unlock <lock id>`. Never from CI. Unlocking a live lock
+  lets two runs write the state, which can orphan billable resources.
 - **A pending run disappeared:** `terraform-iac` apply and `terraform-destroy` share one concurrency group, so
   a newer pending run replaces an older pending one. Start the one you want again.
 - **Re-create fails on the secret name:** wait a minute after a destroy; the secret is deleted immediately

@@ -175,6 +175,7 @@ account's environment visible in CloudTrail and keeps them outside the apply rol
 | DescribeTaskDef | `ecs:DescribeTaskDefinition` | `*` | (no resource-level support) |
 | DeployOneService | `ecs:UpdateService`, `ecs:DescribeServices` | `service/sis-dev-cluster/sis-dev-app` | UpdateService: `ArnLike ecs:task-definition = task-definition/sis-dev-app:*` |
 | PassTaskRoles | `iam:PassRole` | exactly `role/sis-dev-ecs-exec`, `role/sis-dev-ecs-task` | `iam:PassedToService = ecs-tasks.amazonaws.com` |
+| DescribeAppSecretMetadata (added by ADR 0006 G14) | `secretsmanager:DescribeSecret` | `secret:sis/dev/app-api-key-??????` | (metadata only; G1 still denies value read and write) |
 
 ECS condition key types (`ecs:task-cpu` and `ecs:task-memory` numeric, `ecs:task-definition` an ARN) come from
 the official Service Reference JSON.
