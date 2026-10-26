@@ -515,3 +515,20 @@ run "apply_e3_additions" {
     error_message = "iam:ListRoleTags must be in IamEcsRolesRead on the two exact ecs role ARNs"
   }
 }
+
+run "apply_sgs_for_vpc" {
+  command = plan
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.apply.statement : s
+      if s.sid == "Ec2SgsForTaggedVpc"
+      && s.effect == "Allow"
+      && s.actions == toset(["ec2:GetSecurityGroupsForVpc"])
+      && s.resources == toset(["arn:aws:ec2:ap-southeast-1:123456789012:vpc/*"])
+      && anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Project" && toset(c.values) == toset(["ship-it-safely"])])
+      && anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Env" && toset(c.values) == toset(["dev"])])
+    ]) == 1
+    error_message = "Ec2SgsForTaggedVpc: GetSecurityGroupsForVpc on vpc/* with ResourceTag Project and Env"
+  }
+}

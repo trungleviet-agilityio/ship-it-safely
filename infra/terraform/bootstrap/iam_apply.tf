@@ -236,6 +236,26 @@ data "aws_iam_policy_document" "apply" {
     }
   }
 
+  # ELB calls this with the caller's identity when it creates a load balancer. Its only resource type is vpc.
+  statement {
+    sid       = "Ec2SgsForTaggedVpc"
+    effect    = "Allow"
+    actions   = ["ec2:GetSecurityGroupsForVpc"]
+    resources = [local.ec2_type_arn["vpc"]]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.tag_project]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Env"
+      values   = [var.env]
+    }
+  }
+
   statement {
     sid       = "ElbRead"
     effect    = "Allow"
