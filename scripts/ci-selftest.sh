@@ -280,24 +280,27 @@ stubbed() { env PATH="$tmp/stub:$PATH" STUB_DIR="$sd" "$@"; }
 # calls_have <text>: did the stubs see a call containing it?
 calls_have() { grep -qF -- "$1" "$sd/calls" 2>/dev/null; }
 
-# --- build-image.sh retry policy: only transient registry errors are retried, and a bounded number of times.
-build() { stubbed env BUILD_RETRY_DELAYS="0 0" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
-rate_limited="failed to resolve source metadata: 429 Too Many Requests"
+# --- build-image.sh mirror policy: a registry refusal moves to the next mirror (same digest); other failures are final.
+build() { stubbed env BUILD_RETRY_DELAYS="0" PYTHON_IMAGE_MIRRORS="mirror-a mirror-b" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
+data_limit="429 Too Many Requests - Server message: toomanyrequests: Data limit exceeded"
 stub_reset
 stub docker-buildx rc 1 0
-stub docker-buildx err "$rate_limited" 0
-build >/dev/null 2>&1 || die "selftest: build should succeed after one rate-limited attempt"
+stub docker-buildx err "$data_limit" 0
+build >/dev/null 2>&1 || die "selftest: build should succeed from the second mirror"
 [ "$(cat "$sd/docker-buildx.n")" = 2 ] || die "selftest: build should have run twice"
-ok "build retries a rate-limited registry"
+for m in mirror-a mirror-b; do
+  grep -q "PYTHON_IMAGE=$m" "$sd/calls" || die "selftest: build should have tried $m"
+done
+ok "build falls back to the next mirror on a registry refusal"
 stub_reset
 stub docker-buildx rc 1
 stub docker-buildx err "FAIL: test_health_ok (test_app.BoardTest)"
-expect_fail "build with a failing test" "not a transient registry error" build
+expect_fail "build with a failing test" "not a registry refusal" build
 [ "$(cat "$sd/docker-buildx.n")" = 1 ] || die "selftest: a failing test must not be retried"
 stub_reset
 stub docker-buildx rc 1
-stub docker-buildx err "$rate_limited"
-expect_fail "build when the registry keeps refusing" "kept refusing after 3 attempts" build
+stub docker-buildx err "$data_limit"
+expect_fail "build when every registry keeps refusing" "kept refusing after 4 attempts" build
 
 # --- ecs-wait-deployment.sh polling loop
 progress="$(svc ACTIVE "[$(dep PRIMARY IN_PROGRESS "$td_new")]")"
