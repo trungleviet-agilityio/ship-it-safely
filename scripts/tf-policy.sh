@@ -46,6 +46,8 @@ report 2 "aws_security_group_rule is forbidden under modules/ (use aws_vpc_secur
   "$(scan '^[[:space:]]*resource[[:space:]]+"aws_security_group_rule"' "$root/modules")"
 report 2 "inline ingress/egress block under modules/ (use standalone rule resources)" \
   "$(scan '^[[:space:]]*(ingress|egress)[[:space:]]*\{' "$root/modules")"
+report 2 "dynamic or list-valued ingress/egress under modules/ (use standalone rule resources)" \
+  "$(scan '^[[:space:]]*(dynamic[[:space:]]+"(ingress|egress)"|(ingress|egress)[[:space:]]*=[[:space:]]*\[)' "$root/modules")"
 
 # (3) Inline role policies only; no managed ECS execution policy.
 report 3 "AmazonECSTaskExecutionRolePolicy is forbidden under modules/ (inline least-privilege policy)" \
@@ -71,6 +73,19 @@ if [ -d "$root/modules" ]; then
   report 4 "aws_iam_role without permissions_boundary under modules/" "$missing"
 fi
 
+# (7) Role trust: a module role may only be assumed by the ECS tasks service principal. Grep level, not a
+# policy parser: in any module directory that declares an aws_iam_role, no "AWS" or "Federated" principal type
+# and no identifiers holding an ARN or :root may appear. Cross-account or user trust would show up as one of those.
+if [ -d "$root/modules" ]; then
+  trust_out=""
+  while IFS= read -r mdir; do
+    [ -n "$mdir" ] || continue
+    trust_out="$trust_out$(scan '("AWS"|"Federated"|identifiers[[:space:]]*=.*(arn:|:root))' "$mdir")"$'\n'
+  done < <(grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*resource[[:space:]]+"aws_iam_role"[[:space:]]' "$root/modules" 2>/dev/null | xargs -n1 dirname 2>/dev/null | sort -u)
+  trust_out="$(printf '%s' "$trust_out" | grep -v '^$' || true)"
+  report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated principals, no arn: or :root identifiers)" "$trust_out"
+fi
+
 # (5) Backends: the bucket (it holds the account ID) is never in a file; envs use the state key contract.
 while IFS= read -r f; do
   [ -n "$f" ] || continue
@@ -79,9 +94,16 @@ while IFS= read -r f; do
 done < <(find "$root" -name backend.tf -not -path '*/.terraform/*' 2>/dev/null)
 
 if [ -d "$root/envs" ]; then
-  for f in "$root"/envs/*/backend.tf; do
-    [ -f "$f" ] || continue
-    env_dir="$(basename "$(dirname "$f")")"
+  for d in "$root"/envs/*/; do
+    [ -d "$d" ] || continue
+    env_dir="$(basename "$d")"
+    f="${d}backend.tf"
+    if [ ! -f "$f" ]; then
+      if compgen -G "${d}*.tf" >/dev/null; then
+        fail 5 "envs/$env_dir has Terraform files but no backend.tf" "${d#"$ROOT"/}"
+      fi
+      continue
+    fi
     grep -Eq '^[[:space:]]*use_lockfile[[:space:]]*=[[:space:]]*true' "$f" ||
       fail 5 "envs/$env_dir/backend.tf needs use_lockfile = true" "${f#"$ROOT"/}"
     grep -Eq "^[[:space:]]*key[[:space:]]*=[[:space:]]*\"envs/$env_dir/terraform.tfstate\"" "$f" ||

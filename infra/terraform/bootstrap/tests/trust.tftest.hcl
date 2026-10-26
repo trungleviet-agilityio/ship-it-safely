@@ -186,18 +186,18 @@ run "workflow_names_pinned" {
   command = plan
 
   assert {
-    condition = flatten([
+    condition = toset(flatten([
       for c in data.aws_iam_policy_document.trust["apply"].statement[0].condition : c.values
       if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
-    ]) == ["terraform-iac", "terraform-destroy"]
+    ])) == toset(["terraform-iac", "terraform-destroy"])
     error_message = "apply workflow must be exactly terraform-iac and terraform-destroy"
   }
 
   assert {
-    condition = flatten([
+    condition = toset(flatten([
       for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
       if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
-    ]) == ["app-deploy"]
+    ])) == toset(["app-deploy"])
     error_message = "deploy workflow must be exactly app-deploy"
   }
 

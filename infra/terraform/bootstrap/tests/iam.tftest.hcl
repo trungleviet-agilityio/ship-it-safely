@@ -198,12 +198,29 @@ run "apply_iam_requires_boundary" {
       anytrue([
         for s in data.aws_iam_policy_document.apply.statement : (
           contains(s.actions, a)
-          && toset(s.resources) == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-*"])
+          && toset(s.resources) == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-exec", "arn:aws:iam::123456789012:role/sis-dev-ecs-task"])
           && anytrue([for c in s.condition : c.variable == "iam:PermissionsBoundary"])
         ) if s.effect == "Allow"
       ])
     ])
-    error_message = "every mutating IAM role action must sit under the boundary condition on the ecs role pattern"
+    error_message = "every mutating IAM role action must sit under the boundary condition on exactly the two ecs role ARNs"
+  }
+
+  # No IAM write or read on roles may target a wildcard role pattern (M1).
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : alltrue([for r in s.resources : !strcontains(r, "role/") || !strcontains(r, "*") || strcontains(r, "role/aws-service-role/")])
+      if s.effect == "Allow" && anytrue([for a in s.actions : startswith(a, "iam:") && a != "iam:CreateServiceLinkedRole"])
+    ])
+    error_message = "no IAM action may target a wildcard role pattern (service-linked roles excepted)"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : toset(s.resources) == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-exec", "arn:aws:iam::123456789012:role/sis-dev-ecs-task"])
+      if contains(["IamEcsRolesBounded", "IamEcsRolesRead", "PassEcsRoles"], s.sid)
+    ])
+    error_message = "ecs role statements must target exactly sis-dev-ecs-exec and sis-dev-ecs-task"
   }
 
   assert {
@@ -493,8 +510,8 @@ run "apply_e3_additions" {
       for s in data.aws_iam_policy_document.apply.statement : s
       if s.sid == "IamEcsRolesRead"
       && contains(s.actions, "iam:ListRoleTags")
-      && s.resources == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-*"])
+      && s.resources == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-exec", "arn:aws:iam::123456789012:role/sis-dev-ecs-task"])
     ]) == 1
-    error_message = "iam:ListRoleTags must be in IamEcsRolesRead on role/sis-dev-ecs-*"
+    error_message = "iam:ListRoleTags must be in IamEcsRolesRead on the two exact ecs role ARNs"
   }
 }
