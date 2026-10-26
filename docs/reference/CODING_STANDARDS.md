@@ -174,7 +174,7 @@ disagree, the ADR wins; update this file.
 - Prefer the runner's AWS CLI over third-party actions for steps that hold credentials; install scanners as
   checksum-verified binaries, never through their actions.
 - Workflow steps stay short: logic longer than a few lines lives in `scripts/` with a usage line and a
-  `ci-selftest.sh` case, so it can run and be tested outside CI.
+  case in `scripts/selftest/<area>.sh` (run by `scripts/ci-selftest.sh`), so it can run and be tested outside CI.
 - Images are single-platform `linux/amd64`, built once, pushed once by an immutable git-SHA tag, and deployed by
   digest. Never print the registry host, image URI or any ARN with the account ID.
 

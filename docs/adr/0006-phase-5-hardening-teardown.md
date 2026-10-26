@@ -183,6 +183,8 @@ only one that changes bootstrap, so it adds one re-apply to the checkpoint.
 | Security L1, L2: README `force-unlock` and bucket emptying had no preconditions | **Fix (docs)**: check no run is active and the lock matches the dead run; check `state list` is empty and only bootstrap resources remain; name the bucket and the 1000-key batch limit | Prevents two writers on the state and deleting the last record of live resources | Longer instructions |
 | Reviewer: summary after the guard, lost count on a mid-loop failure, no retry on ECS eventual consistency | **Fix**: summary first, count from an EXIT trap, one retry after a short sleep | A refused plan still shows its table; a partial cleanup reports what it did; fewer false reds | Slightly longer cleanup script |
 | Simplifier: `ENV` as the one key, `tf-init.sh` by ENV, `assert_denied`, N2 and N3 into a tested script, one account-ID regex, one role-name helper, split `ci-selftest.sh` by area, ARN locals | **Fix now** (senior clean-code standard) | Prod in Phase 7 becomes a short addition, not a copy; every guard is tested offline | A large mechanical diff in this phase |
+| Security re-check Low: policy rule 9 misses unquoted labels (`provisioner local-exec {`), `*.tf.json` files and remote module sources | **Defer to Phase 6** (two fix rounds used): match optional quotes, scan `*.tf.json`, require local module sources, with self-tests | Phase 5 ships with the guard and the quoted-form rule; the gap needs a reviewed merge plus an approval | Until then a reviewer must spot an unquoted provisioner by eye |
+| Security re-check cosmetic: a failed destroy still has the heading "Destroyed" | **Defer to Phase 6** with the item above | The body already says "planned; apply failed" | A skimmer could misread the heading on a red run |
 | Simplifier: composite action for the AWS preamble of every job | **Defer to Phase 7** | Each job's role, environment and `id-token` stay visible in its own file; pin and zizmor checks need no extension now | About 60 duplicated workflow lines remain until prod forces the refactor |
 
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
@@ -307,6 +309,13 @@ Re-create next session: G18. Bootstrap teardown happens only at the end of the l
   - https://api.github.com/repos/actions/checkout/releases/latest (v7.0.1)
 
 ## Build briefs
+
+> **As built (fix rounds, 2026-10-26):** `scripts/tf-init.sh` takes no argument and derives `infra/terraform/envs/$ENV`
+> from `ENV` (validated by `valid_env`, so bootstrap is unreachable); workflows export `TF_DIR` in a step;
+> `tf-destroy-check.sh` and `ecs-deregister-revisions.sh` are not in the `terraform-iac` path filter because that
+> workflow never runs them; self-test cases live in `scripts/selftest/<area>.sh`, run by `scripts/ci-selftest.sh`.
+> Where the brief below differs, the verify table above and the code win.
+
 
 ### devops-engineer (owns `infra/**`, `.github/**`, `scripts/**`, `Makefile`, `.pre-commit-config.yaml`)
 

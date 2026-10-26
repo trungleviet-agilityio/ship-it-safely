@@ -14,7 +14,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 2 OIDC smoke test | ✅ | 0003 | #9 | PR run assumed `sis-dev-gha-plan`; N1 (`workflow_dispatch` on main) refused with `AccessDenied`, both seen in CloudTrail |
 | 3 Infra pipeline + ECS | ✅ | 0004 | #10, #11, #13 | PR plan comment, approved apply (27 resources), `/health` 200 `ok`; plan role: `explicitDeny` on `GetSecretValue`, `implicitDeny` on creates |
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
-| 5 Hardening & teardown | ⏳ | 0006 (planned) | | |
+| 5 Hardening & teardown | ⏳ | 0006 | (open after push) | Built and verified (2 fix rounds, `make check` green); checkpoint pending: bootstrap re-apply (`DescribeSecret`), N5 to N7, destroy through `terraform-destroy` |
 | 6 Supply-chain hardening | 🟡 | | | Done early: SHA pins, checksum-verified tools, harden-runner (audit) in every job, gitleaks pre-commit and push protection, multi-platform lock files. Left: Dependabot (NFR-5), harden-runner `block` with an allowlist, Q1 exposure check |
 | 7 Stretch: prod account | ⏸ | | | Needs AWS Organizations and a prod account (user). Deploy scripts are already parameterized by `ENV` |
 
@@ -34,9 +34,11 @@ own terminal), Run workflow on `app-deploy` and approve. Tear down at the end of
 |---|---|---|
 | Pin `job_workflow_ref` instead of the workflow `name:` in deploy/apply trust (reusable workflows) | ADR 0005 L2 | Phase 6 |
 | harden-runner insights may show hostnames with the account ID (Q1) | ADR 0005 Q1 | Phase 6 check |
-| YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Phase 5 or 6 |
-| Wire `TF_VAR_alb_ingress_cidrs` from a secret to narrow the ALB | ADR 0004 L4 | Phase 5 |
-| Deploy preflight: check the secret has an `AWSCURRENT` version (needs `DescribeSecret` in bootstrap) | Phase 4 run 3 | Phase 5 |
-| Deregister deploy-registered task definition revisions at teardown | ADR 0005 F23 | Phase 5 |
+| YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Phase 6 (moved by ADR 0006) |
+| Wire `TF_VAR_alb_ingress_cidrs` from a secret to narrow the ALB | ADR 0004 L4 | Phase 6 (moved by ADR 0006) |
+| Deploy preflight: check the secret has an `AWSCURRENT` version (needs `DescribeSecret` in bootstrap) | Phase 4 run 3 | Built in Phase 5 (G14); proven live by N5 at the checkpoint |
+| Deregister deploy-registered task definition revisions at teardown | ADR 0005 F23 | Built in Phase 5 (G12, `terraform-destroy`) |
 | Make `guard (no AWS)` a required status check in the `main` ruleset | ADR 0004 L-b | User setting |
-| 10 code-simplifier suggestions from Phase 3 (workflow duplication) | ADR 0004 | Mostly fixed in Phase 4; re-check in Phase 5 |
+| 10 code-simplifier suggestions from Phase 3 (workflow duplication) | ADR 0004 | Fixed in Phases 4 and 5; the composite action for the AWS preamble is deferred to Phase 7 |
+| `tf-policy.sh` rule 9 misses unquoted labels, `*.tf.json` and remote module sources | ADR 0006 security re-check | Phase 6 |
+| Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Phase 6 |
