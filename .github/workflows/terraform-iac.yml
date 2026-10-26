@@ -19,6 +19,7 @@ on:
       - scripts/tf-plan-summary.sh
       - scripts/check-aws-config.sh
       - scripts/assert-no-account-id.sh
+      - scripts/redact-account-ids.sh
       - scripts/lib.sh
       - mise.toml
       - .tflint.hcl
