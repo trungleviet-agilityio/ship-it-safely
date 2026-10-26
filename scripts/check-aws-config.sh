@@ -12,24 +12,17 @@ source "$(dirname "$0")/lib.sh"
 role_name="$1"
 role_arn="${ROLE_ARN:-}" account="${ACCOUNT:-}" region="${REGION:-}"
 
-# Workflow commands go to stdout, where the runner reads them.
-fail() {
-  printf '::error::%s\n' "$1"
-  exit 1
-}
-
-if [ -z "$role_arn" ] || [ -z "$account" ]; then
-  fail "The role ARN secret or the account ID secret is empty or not set"
-fi
+[ -n "$role_arn" ] && [ -n "$account" ] || die "The role ARN secret or the account ID secret is empty or not set"
+# A workflow command, so it stays on stdout where the runner reads it.
 printf '::add-mask::%s\n' "$account"
-[ -n "$region" ] || fail "Variable AWS_REGION is empty or not set"
+[ -n "$region" ] || die "Variable AWS_REGION is empty or not set"
 
-printf '%s' "$account" | grep -Eq '^[0-9]{12}$' || fail "the account ID secret is not a 12-digit account ID"
+printf '%s' "$account" | grep -Eq '^[0-9]{12}$' || die "the account ID secret is not a 12-digit account ID"
 printf '%s' "$role_arn" | grep -Eq "^arn:aws:iam::[0-9]{12}:role/${role_name}\$" \
-  || fail "the role ARN secret is not the ${role_name} role ARN"
+  || die "the role ARN secret is not the ${role_name} role ARN"
 
 role_account="${role_arn#arn:aws:iam::}"
 role_account="${role_account%%:*}"
-[ "$role_account" = "$account" ] || fail "the account ID secret differs from the account in the role ARN"
-printf '%s' "$region" | grep -Eq '^[a-z]{2}-[a-z]+-[0-9]$' || fail "AWS_REGION is not a region name"
+[ "$role_account" = "$account" ] || die "the account ID secret differs from the account in the role ARN"
+printf '%s' "$region" | grep -Eq '^[a-z]{2}-[a-z]+-[0-9]$' || die "AWS_REGION is not a region name"
 ok "configuration present and well formed"
