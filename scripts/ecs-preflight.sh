@@ -20,8 +20,8 @@ require_cmd jq "apt-get install jq"
 app_names
 
 not_up="the ${ENV} stack is not up. Re-create it (terraform-iac, Run workflow), set the secret value, then run app-deploy (Run workflow)."
-status="$(ecs_service_status "$CLUSTER" "$SERVICE")" || exit 1
-[ "$status" = "ACTIVE" ] || die "$not_up"
+ecs_service_status "$CLUSTER" "$SERVICE"
+[ "$SERVICE_STATUS" = "ACTIVE" ] || die "$not_up"
 ok "service is ACTIVE"
 
 run_capture aws secretsmanager describe-secret --secret-id "$SECRET_ID" --query VersionIdsToStages --output json
@@ -37,9 +37,5 @@ printf '%s' "$RUN_OUT" | jq -e '[(. // {})[]] | flatten | index("AWSCURRENT") !=
   || die "secret ${SECRET_ID} has no current value: set it with put-secret-value in your own terminal, then Re-run failed jobs"
 ok "secret has a current value"
 
-run_capture aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query Name --output text
-[ "$RUN_RC" -ne 0 ] || die "N4 failed: the deploy role can call GetSecretValue"
-case "$RUN_ERR" in
-  *AccessDeniedException*) ok "denied as designed (N4): GetSecretValue returned AccessDeniedException" ;;
-  *) die "N4 failed for a reason other than access denied (exit code $RUN_RC): $RUN_ERR" ;;
-esac
+assert_denied "N4 (deploy role, GetSecretValue)" AccessDeniedException \
+  aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query Name --output text
