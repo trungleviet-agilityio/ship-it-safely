@@ -27,13 +27,21 @@ printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || die "commit sha must be 40 hex
 
 # Read-only keys of DescribeTaskDefinition (ADR 0005, Finding 6); the request keys live in lib.sh.
 readonly_keys='["taskDefinitionArn","revision","status","requiresAttributes","compatibilities","registeredAt","registeredBy","deregisteredAt","deleteRequestedAt"]'
-# Container keys: the ones Terraform sets, plus the defaults the API adds when it describes the definition.
-container_keys='["name","image","essential","user","readonlyRootFilesystem","portMappings","mountPoints","environment","secrets","logConfiguration","cpu","volumesFrom","systemControls"]'
+# Container keys, rule: a key must be in the schema AND not denied.
+# Schema: every member of the ContainerDefinition shape (42 members) in botocore ecs/2014-11-13/service-2.json at
+# commit 4cee49b4bc3f84b39b611583f6eba09e1de5fcc6 (boto/botocore, 2026-10-20), which mirrors
+# https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html. A key outside it is a
+# new API field: review it, then add it here. Refresh with:
+#   jq -c '.shapes.ContainerDefinition.members | keys' service-2.json
+schema_container_keys='["command","cpu","credentialSpecs","dependsOn","disableNetworking","dnsSearchDomains","dnsServers","dockerLabels","dockerSecurityOptions","entryPoint","environment","environmentFiles","essential","extraHosts","firelensConfiguration","healthCheck","hostname","image","interactive","links","linuxParameters","logConfiguration","memory","memoryReservation","mountPoints","name","portMappings","privileged","pseudoTerminal","readonlyRootFilesystem","repositoryCredentials","resourceRequirements","restartPolicy","secrets","startTimeout","stopTimeout","systemControls","ulimits","user","versionConsistency","volumesFrom","workingDirectory"]'
+# Denied even though the schema has them: each widens what the container may do or where its secrets come from.
+# Not listed here, with their own rules below: user (must be 10001:10001) and volumesFrom (empty array only).
+denied_container_keys='["privileged","linuxParameters","entryPoint","command","environmentFiles","repositoryCredentials","dockerSecurityOptions","links"]'
 
 jq -e 'type == "object"' "$input" >/dev/null 2>&1 || die "task definition file is not a JSON object"
 
 # First failing rule wins. Messages carry rule names and key names only, never values from the input.
-problem="$(jq -r --argjson req "$REQUEST_KEYS_JSON" --argjson ro "$readonly_keys" --argjson ckeys "$container_keys" \
+problem="$(jq -r --argjson req "$REQUEST_KEYS_JSON" --argjson ro "$readonly_keys" --argjson schema "$schema_container_keys" --argjson denied "$denied_container_keys" \
   --arg exec_role "$EXEC_ROLE" --arg task_role "$TASK_ROLE" --arg secret "$SECRET_ID" --arg log_group "$LOG_GROUP" \
   --argjson cpu_max "$TASK_CPU_MAX" --argjson mem_max "$TASK_MEMORY_MAX" '
   (.taskDefinition // .) as $t
@@ -43,8 +51,9 @@ problem="$(jq -r --argjson req "$REQUEST_KEYS_JSON" --argjson ro "$readonly_keys
       (($t | keys) - $req - $ro | if length > 0 then "unknown top-level key: " + join(", ") + " (new API field; review it before deploying)" else null end),
       (if ($c | length) != 1 then "task definition must have exactly one container" else null end),
       (if $c0.name != "app" then "the container must be named app" else null end),
-      (if ($c0 | has("command")) or ($c0 | has("entryPoint")) then "Terraform task definition still has a command or entryPoint; merge and apply the infra change first" else null end),
-      (($c0 | keys) - $ckeys | if length > 0 then "unknown container key: " + join(", ") + " (new API field; review it before deploying)" else null end),
+      (($c0 | keys) - $schema | if length > 0 then "unknown container key: " + join(", ") + " (new API field; review it before deploying)" else null end),
+      (($c0 | keys) - ($c0 | keys - $denied) | if length > 0 then "denied container key: " + join(", ") + " (Terraform does not set it; merge and apply the infra change first)" else null end),
+      (if ($c0.volumesFrom // []) != [] then "denied container key: volumesFrom (only an empty array is allowed)" else null end),
       (if $c0.user != "10001:10001" then "the container user must be 10001:10001" else null end),
       (if $c0.readonlyRootFilesystem != true then "readonlyRootFilesystem must be true" else null end),
       (if ($c0.environment // [] | map(.name)) != ["APP_ENV"] then "environment must be exactly APP_ENV" else null end),

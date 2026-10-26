@@ -84,7 +84,8 @@ cp "$tmp/good.yml" "$tmp/repo/.github/workflows/a.yml"
 printf 'name: sneaky\non:\n  pull_request_target:\njobs: {}\n' >"$tmp/repo/.github/workflows/b.yaml"
 expect_fail "default scan of a .yaml file" "b.yaml" "$tmp/repo/scripts/check-workflow-triggers.sh"
 
-# --- render-task-def.sh (fixtures built at run time; 123456789012 is the AWS documentation account)
+# --- render-task-def.sh (fixtures built at run time; 123456789012 is the AWS documentation account).
+# td-good.json mimics describe-task-definition for the Terraform revision, with the defaults ECS adds.
 acct=123456789012
 digest="$(printf 'a%.0s' $(seq 1 64))"
 image="${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app@sha256:${digest}"
@@ -93,7 +94,7 @@ cat >"$tmp/td-good.json" <<EOF
 {
   "taskDefinitionArn": "arn:aws:ecs:ap-southeast-1:${acct}:task-definition/sis-dev-app:7",
   "family": "sis-dev-app", "revision": 7, "status": "ACTIVE",
-  "requiresAttributes": [{"name": "x"}], "compatibilities": ["FARGATE"],
+  "requiresAttributes": [{"name": "com.amazonaws.ecs.capability.logging-driver.awslogs"}, {"name": "ecs.capability.execution-role-awslogs"}, {"name": "ecs.capability.secrets.asm.environment-variables"}], "compatibilities": ["FARGATE"],
   "registeredAt": "2026-10-26T00:00:00Z", "registeredBy": "arn:aws:sts::${acct}:assumed-role/x/y",
   "deregisteredAt": null, "deleteRequestedAt": null,
   "taskRoleArn": "arn:aws:iam::${acct}:role/sis-dev-ecs-task",
@@ -101,13 +102,14 @@ cat >"$tmp/td-good.json" <<EOF
   "networkMode": "awsvpc", "cpu": "256", "memory": "512",
   "requiresCompatibilities": ["FARGATE"],
   "runtimePlatform": {"operatingSystemFamily": "LINUX", "cpuArchitecture": "X86_64"},
-  "volumes": [{"name": "tmp"}],
+  "volumes": [{"name": "tmp", "host": {}}],
   "tags": [{"key": "ManagedBy", "value": "terraform"}],
   "containerDefinitions": [{
     "name": "app", "image": "public.ecr.aws/docker/library/python:3.13-slim@sha256:${digest}",
-    "essential": true, "user": "10001:10001", "readonlyRootFilesystem": true,
-    "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+    "cpu": 0, "essential": true, "user": "10001:10001", "readonlyRootFilesystem": true,
+    "portMappings": [{"containerPort": 8080, "hostPort": 8080, "protocol": "tcp"}],
     "mountPoints": [{"sourceVolume": "tmp", "containerPath": "/tmp", "readOnly": false}],
+    "volumesFrom": [], "systemControls": [], "versionConsistency": "enabled",
     "environment": [{"name": "APP_ENV", "value": "dev"}],
     "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/ecs/sis-dev-app", "awslogs-region": "ap-southeast-1", "awslogs-stream-prefix": "app"}},
     "secrets": [{"name": "APP_API_KEY", "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:${acct}:secret:sis/dev/app-api-key-AbC123"}]
@@ -124,16 +126,16 @@ jq -e --arg image "$image" --arg sha "$commit" --arg acct "$acct" --argjson req 
   and (has("deleteRequestedAt") | not) and (has("revision") | not) and (has("taskDefinitionArn") | not)
   and .containerDefinitions[0].image == $image
   and (.tags | map({(.key): .value}) | add) == {"Project": "ship-it-safely", "Env": "dev", "ManagedBy": "app-deploy", "GitSha": $sha}
-  and .cpu == "256" and .memory == "512" and .volumes == [{"name": "tmp"}]
+  and .cpu == "256" and .memory == "512" and .volumes == [{"name": "tmp", "host": {}}]
   and .containerDefinitions[0].secrets[0].valueFrom == "arn:aws:secretsmanager:ap-southeast-1:\($acct):secret:sis/dev/app-api-key-AbC123"
   and .executionRoleArn == "arn:aws:iam::\($acct):role/sis-dev-ecs-exec"
 ' "$tmp/td-out.json" >/dev/null || die "selftest: rendered task definition is not as expected"
 ok "render keeps the shape and sets image and tags"
 
 mutate cmd '.containerDefinitions[0].command = ["sh"]'
-expect_fail "render with a command" "still has a command" render "$tmp/td-cmd.json"
+expect_fail "render with a command" "denied container key: command" render "$tmp/td-cmd.json"
 mutate ep '.containerDefinitions[0].entryPoint = ["sh"]'
-expect_fail "render with an entryPoint" "still has a command or entryPoint" render "$tmp/td-ep.json"
+expect_fail "render with an entryPoint" "denied container key: entryPoint" render "$tmp/td-ep.json"
 mutate two '.containerDefinitions += [.containerDefinitions[0]]'
 expect_fail "render with two containers" "exactly one container" render "$tmp/td-two.json"
 mutate name '.containerDefinitions[0].name = "web"'
@@ -155,8 +157,20 @@ expect_fail "render with another secret" "secrets must be exactly APP_API_KEY" r
 mutate secret2 '.containerDefinitions[0].secrets += [.containerDefinitions[0].secrets[0]]'
 expect_fail "render with two secrets" "secrets must be exactly APP_API_KEY" render "$tmp/td-secret2.json"
 # One fixture per rule on the container shape Terraform owns (ADR 0005, M1).
-mutate ckey '.containerDefinitions[0].privileged = true'
-expect_fail "render with an unknown container key" "unknown container key: privileged" render "$tmp/td-ckey.json"
+mutate ckey '.containerDefinitions[0].fooBar = true'
+expect_fail "render with an unknown container key" "unknown container key: fooBar" render "$tmp/td-ckey.json"
+# Every denied key is refused, even though the ECS schema has it (the list is read from the script).
+denied_keys="$(sed -n "s/^denied_container_keys='\(.*\)'\$/\1/p" "$ROOT/scripts/render-task-def.sh" | jq -r '.[]')"
+[ "$(printf '%s\n' "$denied_keys" | wc -l | tr -d ' ')" -ge 8 ] || die "selftest: could not read the denied container keys"
+for k in $denied_keys; do
+  mutate "deny-$k" ".containerDefinitions[0].$k = true"
+  expect_fail "render with the denied key $k" "denied container key: $k" render "$tmp/td-deny-$k.json"
+done
+mutate vfrom '.containerDefinitions[0].volumesFrom = [{"sourceContainer": "other"}]'
+expect_fail "render with a non-empty volumesFrom" "denied container key: volumesFrom" render "$tmp/td-vfrom.json"
+# A schema key that is not denied is accepted.
+mutate schemakey '.containerDefinitions[0].workingDirectory = "/"'
+render "$tmp/td-schemakey.json" >/dev/null 2>&1 || die "selftest: a schema key that is not denied (workingDirectory) was refused"
 mutate user '.containerDefinitions[0].user = "0:0"'
 expect_fail "render with another user" "user must be 10001:10001" render "$tmp/td-user.json"
 mutate nouser 'del(.containerDefinitions[0].user)'
@@ -421,16 +435,33 @@ check_paths() {
     done
     queue="$next"
   done
-  for s in $seen scripts/lib.sh; do
+  [ -n "$seen" ] && seen="$seen scripts/lib.sh"  # every script sources lib.sh
+  for s in $seen; do
     grep -qxF "      - $s" "$wf" || die "selftest: ${wf##*/} runs $s but does not list it under paths"
   done
 }
 check_paths "$ROOT/.github/workflows/app-ci.yml"
 check_paths "$ROOT/.github/workflows/app-deploy.yml"
-if sed -n '/^  build-scan:/,/^  deploy:/p' "$ROOT/.github/workflows/app-deploy.yml" | grep -Eq 'id-token|environment:|secrets\.'; then
-  die "selftest: the build-scan job must hold no OIDC token, environment or secret"
-fi
-ok "workflow path filters and build-scan isolation"
+check_paths "$ROOT/.github/workflows/terraform-iac.yml"
+check_paths "$ROOT/.github/workflows/oidc-smoke-test.yml"
+# build_scan_isolated <workflow>: the build-scan job holds no OIDC token, environment or secret.
+build_scan_isolated() {
+  ! sed -n '/^  build-scan:/,/^  deploy:/p' "$1" | grep -Eq 'id-token|environment:|secrets\.'
+}
+deploy_wf="$ROOT/.github/workflows/app-deploy.yml"
+build_scan_isolated "$deploy_wf" || die "selftest: the build-scan job must hold no OIDC token, environment or secret"
+# The check must fail on a copy of the workflow with each credential added to build-scan.
+sed 's/^  build-scan:$/  build-scan:\n    permissions:\n      id-token: write/' "$deploy_wf" >"$tmp/wf-idtoken.yml"
+grep -q 'id-token: write' "$tmp/wf-idtoken.yml" || die "selftest: could not mutate build-scan (id-token)"
+! build_scan_isolated "$tmp/wf-idtoken.yml" || die "selftest: the isolation check missed id-token in build-scan"
+sed 's/^  build-scan:$/  build-scan:\n    env:\n      X: ${{ secrets.X }}/' "$deploy_wf" >"$tmp/wf-secret.yml"
+grep -q 'secrets\.X' "$tmp/wf-secret.yml" || die "selftest: could not mutate build-scan (secrets)"
+! build_scan_isolated "$tmp/wf-secret.yml" || die "selftest: the isolation check missed secrets in build-scan"
+# One source for the task caps: the iam_deploy.tf conditions equal lib.sh.
+tf_cap() { grep -A3 "variable = \"ecs:$1\"" "$ROOT/infra/terraform/bootstrap/iam_deploy.tf" | sed -n 's/.*values *= *\["\([0-9]*\)"\].*/\1/p'; }
+[ "$(tf_cap task-cpu)" = "$TASK_CPU_MAX" ] || die "selftest: TASK_CPU_MAX in lib.sh differs from iam_deploy.tf"
+[ "$(tf_cap task-memory)" = "$TASK_MEMORY_MAX" ] || die "selftest: TASK_MEMORY_MAX in lib.sh differs from iam_deploy.tf"
+ok "workflow path filters, build-scan isolation and cap parity"
 
 # --- install-ci-tools.sh on scratch copies: nothing here touches the network (CI_TOOLS_BASE_URL is a directory)
 mkdir -p "$tmp/mirror" "$tmp/pack"
