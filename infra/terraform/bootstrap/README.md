@@ -49,7 +49,7 @@ they carry the tags the apply role checks.
 
 `accounts/dev.tfvars` is gitignored: copy `accounts/dev.tfvars.example` and fill in the account ID, budget
 email and the two GitHub IDs. No account ID is committed (ADR 0001, D2); a pre-commit hook rejects a bare
-12-digit number in `.tf`, `.hcl` and `.tfvars.example` files under `infra/`.
+12-digit number in every text file except the provider lock file (`.terraform.lock.hcl`).
 
 ## Run it (you, never Claude: NFR-9)
 

@@ -33,7 +33,7 @@ repos:
         # Alphanumeric boundaries: a digit run inside a 40-hex SHA pin is bounded by letters or digits.
         entry: '(?<![0-9A-Za-z])(?!123456789012|111111111111|222222222222)[0-9]{12}(?![0-9A-Za-z])'
         types: [text]
-        exclude: \.terraform\.lock\.hcl$
+        exclude: (^|/)\.terraform\.lock\.hcl$
 
   # Workflow security audits (offline): dangerous-triggers (ADR 0002 L3), template-injection,
   # excessive-permissions, unpinned-uses. No ignores.

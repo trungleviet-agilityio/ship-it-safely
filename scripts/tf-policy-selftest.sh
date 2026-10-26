@@ -50,6 +50,7 @@ expect_fail() {
 }
 
 d="$(fixture good)"
+printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["ecs-tasks.amazonaws.com"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
 "$policy" "$d" >/dev/null 2>&1 || die "good fixture must pass"
 ok "good fixture passes"
 
@@ -68,6 +69,14 @@ expect_fail "$d" 2
 
 d="$(fixture r2b)"
 printf 'resource "aws_security_group" "s" {\n  ingress {\n  }\n}\n' >"$d/modules/m/sg.tf"
+expect_fail "$d" 2
+
+d="$(fixture r2c)"
+printf 'resource "aws_security_group" "s" {\n  dynamic "ingress" {\n  }\n}\n' >"$d/modules/m/sg.tf"
+expect_fail "$d" 2
+
+d="$(fixture r2d)"
+printf 'resource "aws_security_group" "s" {\n  egress = [\n  ]\n}\n' >"$d/modules/m/sg.tf"
 expect_fail "$d" 2
 
 d="$(fixture r3a)"
@@ -93,6 +102,19 @@ expect_fail "$d" 5
 d="$(fixture r5c)"
 printf 'terraform {\n  backend "s3" {\n    key = "envs/prod/terraform.tfstate"\n    use_lockfile = true\n  }\n}\n' >"$d/envs/dev/backend.tf"
 expect_fail "$d" 5
+
+d="$(fixture r5d)"
+rm "$d/envs/dev/backend.tf"
+printf 'terraform {}\n' >"$d/envs/dev/main.tf"
+expect_fail "$d" 5
+
+d="$(fixture r7a)"
+printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "AWS"\n      identifiers = ["x"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
+
+d="$(fixture r7b)"
+printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["arn:aws:iam::1:root"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
+expect_fail "$d" 7
 
 d="$(fixture r6a)"
 printf 'provider "aws" {}\n' >"$d/modules/m/prov.tf"
