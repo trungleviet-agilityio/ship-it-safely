@@ -24,15 +24,15 @@ repos:
         args:
           - --args=--config=.terraform-docs.yml
 
-  # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID is allowed (tests).
+  # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID and the PLAN.md placeholders are allowed.
   - repo: local
     hooks:
       - id: no-aws-account-id
-        name: no bare 12-digit AWS account ID in infra or workflows
+        name: no bare 12-digit AWS account ID
         language: pygrep
         # Alphanumeric boundaries: a digit run inside a 40-hex SHA pin is bounded by letters or digits.
-        entry: '(?<![0-9A-Za-z])(?!123456789012)[0-9]{12}(?![0-9A-Za-z])'
-        files: ^(infra/.*\.(tf|hcl|tfvars\.example)|\.github/.*\.ya?ml)$
+        entry: '(?<![0-9A-Za-z])(?!123456789012|111111111111|222222222222)[0-9]{12}(?![0-9A-Za-z])'
+        types: [text]
         exclude: \.terraform\.lock\.hcl$
 
   # Workflow security audits (offline): dangerous-triggers (ADR 0002 L3), template-injection,
