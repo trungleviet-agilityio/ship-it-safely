@@ -233,6 +233,17 @@ Troubleshooting:
 - **Re-create fails on the secret name:** wait a minute after a destroy; the secret is deleted immediately
   (`recovery_window_in_days = 0`), but the name can take a moment to free up.
 
+## Release strategy
+
+| Env | Strategy | Why |
+|---|---|---|
+| dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `ecs-wait-deployment.sh` fails the run on a rollback |
+| prod (Phase 7) | ECS built-in `BLUE_GREEN`: two target groups, bake time, CloudWatch alarm rollback | All traffic moves once green is healthy; fast rollback during the bake time; needs up to twice the tasks during a deploy |
+| Later | ECS built-in `CANARY` or `LINEAR` | Needs real traffic and alarms that mean something: 10% of almost no requests gives no signal |
+
+Branching is trunk-based (FR-14): merge to `main` deploys dev; a release tag or `workflow_dispatch` promotes the
+same image digest to prod. No `develop` or per-env branches.
+
 ## When to move to CodeBuild runners or CodePipeline
 
 **Stay on GitHub-hosted runners and GitHub Actions for this lab.** They are free on a public repo, and every

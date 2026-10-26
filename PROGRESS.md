@@ -28,6 +28,16 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 Re-create order for a session: Run workflow on `terraform-iac` and approve, set the secret value (one line, your
 own terminal), Run workflow on `app-deploy` and approve. Tear down at the end of the session.
 
+## Plan alignment (checked 2026-10-26 after Phase 5)
+
+Compared with the original hands-on notes and the blog pattern: OIDC provider and role per account, `sub`-based
+trust (plan job without `environment`, apply/deploy with `environment:dev`), split plan/apply roles, required
+reviewer, destroy workflow, ECS Fargate instead of EKS, S3 native locking instead of DynamoDB, digest deploys,
+Secrets Manager shell plus out-of-band value, trunk-based branching and the CodeBuild/CodePipeline notes are all
+in place. Deliberate differences: no throwaway S3-bucket step (Phase 3 went straight to ECS); tools installed as
+checksum-verified binaries instead of setup actions. Still to do: the items below plus Dependabot and
+harden-runner `block` (Phase 6) and the prod account with `BLUE_GREEN` (Phase 7).
+
 ## Open items carried forward
 
 | Item | From | Target |
@@ -40,5 +50,7 @@ own terminal), Run workflow on `app-deploy` and approve. Tear down at the end of
 | Deregister deploy-registered task definition revisions at teardown | ADR 0005 F23 | Built in Phase 5 (G12, `terraform-destroy`) |
 | Make `guard (no AWS)` a required status check in the `main` ruleset | ADR 0004 L-b | User setting |
 | 10 code-simplifier suggestions from Phase 3 (workflow duplication) | ADR 0004 | Fixed in Phases 4 and 5; the composite action for the AWS preamble is deferred to Phase 7 |
+| CloudTrail trail plus a metric filter and alarm on `AssumeRoleWithWebIdentity` with an unexpected `sub` (NFR-7 stretch) | ADR 0002 Q2, hands-on notes Phase 6 | Phase 6 (decide trail cost) or Phase 7 |
+| Negative test: a PR job cannot assume the apply or deploy role (AccessDenied); demo that credentials expire after 1 hour | Hands-on notes, talk demo | Phase 6 checkpoint |
 | `tf-policy.sh` rule 9 misses unquoted labels, `*.tf.json` and remote module sources | ADR 0006 security re-check | Phase 6 |
 | Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Phase 6 |
