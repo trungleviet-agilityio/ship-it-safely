@@ -272,7 +272,7 @@ If any differs from this ADR, stop and report. Do not substitute.
 
 1. Write a throwaway bad workflow in the scratchpad, outside the repo, with `pull_request_target`, a tag-pinned `uses:`, workflow-level `id-token: write`, and `${{ github.event.pull_request.title }}` in `run:`. Confirm `zizmor --offline <file>` (via `uvx zizmor@1.31.1`) and `actionlint <file>` both fail on it.
 2. Account-ID hook:
-   - Stage a scratch copy at `.github/workflows/zz-test.yml` (never committed) containing `arn:aws:iam::111122223333:role/x`. Confirm `pre-commit run no-aws-account-id --files .github/workflows/zz-test.yml` fails.
+   - Stage a scratch copy at `.github/workflows/zz-test.yml` (never committed) containing an IAM ARN with any real-looking 12-digit account ID, built at test time. Confirm `pre-commit run no-aws-account-id --files .github/workflows/zz-test.yml` fails.
    - Replace the content with a `uses: x/y@a1234567890123b...` style 40-hex line holding a 12-digit run. Confirm it passes.
    - Confirm `123456789012` passes.
    - Delete the file.

@@ -476,7 +476,7 @@ PR 2:
    - Run `env -u AWS_PROFILE AWS_EC2_METADATA_DISABLED=true scripts/tf-check.sh <scratch dir>`. It fails before the fix and passes after.
    - After `make tf-check`, no new `.terraform/` appears under `infra/` (`git status --ignored`).
 4. Account-ID hook:
-   - A scratch file `docs-zz.md` (never committed) with `arn:aws:iam::111122223334:role/x` fails.
+   - A scratch file `docs-zz.md` (never committed) with an IAM ARN holding any real-looking 12-digit account ID (built at test time) fails.
    - `111111111111`, `123456789012`, a 40-hex SHA with a 12-digit run, and a `sha256:` digest pass.
    - `pre-commit run --all-files` passes on the whole repo. If a false positive appears, report it; do not widen the allowlist silently.
 5. Module `tests/` with `mock_provider "aws"` (`override_during = plan`; mock `aws_caller_identity` = `123456789012`, `aws_partition` = `aws`, `aws_iam_policy_document` json `{}`, and a `mock_resource "aws_secretsmanager_secret"` with a fixed ARN):
