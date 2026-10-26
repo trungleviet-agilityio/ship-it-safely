@@ -150,4 +150,25 @@ summary_wfs=("$iac_wf" "$destroy_wf" "$deploy_wf")
 ! grep -n 'assumed-role/' "${summary_wfs[@]}" || die "selftest: a workflow parses the assumed-role ARN; use scripts/assumed-role-name.sh"
 ok "workflow path filters, build-scan isolation, cap parity and one account-ID check"
 
+# The comment job holds the only write token, so its checkout must be the trusted base commit and never the PR head.
+# Coupling: the job is cut out from "  comment:" up to the next job "  apply:"; renaming or reordering them must update
+# this range (the mutations below fail if it reads nothing).
+# shellcheck disable=SC2016  # workflow text, not shell
+comment_uses_base() {
+  local job
+  job="$(sed -n '/^  comment:/,/^  apply:/p' "$1")"
+  grep -qF 'ref: ${{ github.event.pull_request.base.sha }}' <<<"$job" \
+    && ! grep -Eq 'pull_request\.head\.(sha|ref)|github\.head_ref' < <(grep -E '^\s+ref:' <<<"$job")
+}
+comment_uses_base "$iac_wf" || die "selftest: the comment job must check out github.event.pull_request.base.sha and never the head"
+# shellcheck disable=SC2016  # workflow text, not shell
+grep -v 'ref: \${{ github.event.pull_request.base.sha }}' "$iac_wf" >"$tmp/wf-noref.yml"
+! cmp -s "$iac_wf" "$tmp/wf-noref.yml" || die "selftest: could not mutate the comment checkout (no ref)"
+! comment_uses_base "$tmp/wf-noref.yml" || die "selftest: the base-ref check missed a comment checkout without ref"
+# shellcheck disable=SC2016  # workflow text, not shell
+sed 's#ref: \${{ github.event.pull_request.base.sha }}#ref: ${{ github.event.pull_request.head.sha }}#' "$iac_wf" >"$tmp/wf-head.yml"
+! cmp -s "$iac_wf" "$tmp/wf-head.yml" || die "selftest: could not mutate the comment checkout (head ref)"
+! comment_uses_base "$tmp/wf-head.yml" || die "selftest: the base-ref check missed a head ref in the comment checkout"
+ok "comment job checks out the base commit only"
+
 "$ROOT/scripts/check-workflow-triggers.sh"

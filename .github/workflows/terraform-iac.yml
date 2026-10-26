@@ -232,6 +232,9 @@ jobs:
       - name: Check out the helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The base commit, not the PR head: this job holds a write token, so it must run only scripts that were
+          # already reviewed and merged. With the head, a PR could change scripts/ and run its own code here.
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: scripts
 
