@@ -24,12 +24,19 @@ locals {
   )
   oidc_host = "token.actions.githubusercontent.com"
 
+  # Workflow names (E2): the `name:` of the workflow file. Phase 3 (terraform-iac), Phase 4 (app-deploy) and
+  # Phase 5 (terraform-destroy) must use exactly these.
+  workflow_names = {
+    apply  = ["terraform-iac", "terraform-destroy"]
+    deploy = ["app-deploy"]
+  }
+
   trust = {
     # Plan: a pull_request run has ref refs/pull/<N>/merge; a pull_request_target run has the base ref, so the
     # StringLike (the only one in any trust policy, wildcard = PR number only) refuses it even though sub matches.
-    plan   = { sub = "${local.gh_sub_prefix}:pull_request", ref = "refs/pull/*/merge", ref_test = "StringLike" }
-    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals" }
-    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals" }
+    plan   = { sub = "${local.gh_sub_prefix}:pull_request", ref = "refs/pull/*/merge", ref_test = "StringLike", workflows = null }
+    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.apply }
+    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.deploy }
   }
 
   # Name contract that Phase 3 must follow (ADR 0002).

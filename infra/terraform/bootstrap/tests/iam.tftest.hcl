@@ -471,3 +471,30 @@ run "name_contract_output" {
     error_message = "name contract"
   }
 }
+
+run "apply_e3_additions" {
+  command = plan
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.apply.statement : s
+      if s.sid == "Ec2ValidateSgQuotasOnTaggedGroup"
+      && s.effect == "Allow"
+      && s.actions == toset(["ec2:ValidateSecurityGroupQuotasForInterface"])
+      && s.resources == toset(["arn:aws:ec2:ap-southeast-1:123456789012:security-group/*"])
+      && anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Project" && toset(c.values) == toset(["ship-it-safely"])])
+      && anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/Env" && toset(c.values) == toset(["dev"])])
+    ]) == 1
+    error_message = "Ec2ValidateSgQuotasOnTaggedGroup: one action on security-group/* with ResourceTag Project and Env"
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.apply.statement : s
+      if s.sid == "IamEcsRolesRead"
+      && contains(s.actions, "iam:ListRoleTags")
+      && s.resources == toset(["arn:aws:iam::123456789012:role/sis-dev-ecs-*"])
+    ]) == 1
+    error_message = "iam:ListRoleTags must be in IamEcsRolesRead on role/sis-dev-ecs-*"
+  }
+}

@@ -48,5 +48,15 @@ data "aws_iam_policy_document" "trust" {
       variable = "${local.oidc_host}:ref"
       values   = [each.value.ref]
     }
+
+    dynamic "condition" {
+      for_each = each.value.workflows == null ? [] : [each.value.workflows]
+
+      content {
+        test     = "StringEquals"
+        variable = "${local.oidc_host}:workflow"
+        values   = condition.value
+      }
+    }
   }
 }

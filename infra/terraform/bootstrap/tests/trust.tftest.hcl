@@ -181,3 +181,53 @@ run "name_based_subject_fallback" {
     error_message = "fallback prefix must use names"
   }
 }
+
+run "workflow_names_pinned" {
+  command = plan
+
+  assert {
+    condition = flatten([
+      for c in data.aws_iam_policy_document.trust["apply"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
+    ]) == ["terraform-iac", "terraform-destroy"]
+    error_message = "apply workflow must be exactly terraform-iac and terraform-destroy"
+  }
+
+  assert {
+    condition = flatten([
+      for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
+    ]) == ["app-deploy"]
+    error_message = "deploy workflow must be exactly app-deploy"
+  }
+
+  assert {
+    condition = length([
+      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c
+      if c.variable == "token.actions.githubusercontent.com:workflow"
+    ]) == 0
+    error_message = "plan must not pin workflow (a PR controls its own workflow file)"
+  }
+
+  assert {
+    condition     = local.workflow_names == { apply = ["terraform-iac", "terraform-destroy"], deploy = ["app-deploy"] }
+    error_message = "workflow name contract"
+  }
+}
+
+run "only_documented_condition_keys" {
+  command = plan
+
+  # Documented GitHub keys in the IAM condition keys reference. event_name is not one of them.
+  assert {
+    condition = alltrue(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : contains(
+          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "workflow"],
+          trimprefix(c.variable, "token.actions.githubusercontent.com:")
+        )
+      ]
+    ]))
+    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, workflow"
+  }
+}

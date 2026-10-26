@@ -216,6 +216,26 @@ data "aws_iam_policy_document" "apply" {
     }
   }
 
+  # The provider calls this when it creates an ALB with security groups. Tag-scoped, no wildcard action.
+  statement {
+    sid       = "Ec2ValidateSgQuotasOnTaggedGroup"
+    effect    = "Allow"
+    actions   = ["ec2:ValidateSecurityGroupQuotasForInterface"]
+    resources = ["${local.svc_arn["ec2"]}:security-group/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.tag_project]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Env"
+      values   = [var.env]
+    }
+  }
+
   statement {
     sid       = "ElbRead"
     effect    = "Allow"
@@ -406,6 +426,7 @@ data "aws_iam_policy_document" "apply" {
       "iam:ListRolePolicies",
       "iam:ListAttachedRolePolicies",
       "iam:ListInstanceProfilesForRole",
+      "iam:ListRoleTags",
       "iam:TagRole",
       "iam:UntagRole",
       "iam:UpdateRole",
