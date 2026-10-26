@@ -25,10 +25,11 @@ down: ## Stop the local app
 test: ## App unit tests
 	cd app && $(PYTHON) -m unittest discover -s tests
 
-lint: ## pre-commit hooks on all files, plus hadolint, shellcheck and actionlint
+lint: ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
 	shellcheck -x scripts/*.sh
+	scripts/ci-selftest.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 
 tf-check: ## Offline Terraform policy rules (tf-policy.sh), README check, fmt, validate and test (no AWS)

@@ -1,0 +1,446 @@
+# Terraform pipeline for envs/dev (PLAN Phase 3, ADR 0004, FR-9).
+# A pull request plans with the read-only plan role and posts an account-free comment. A push to main (or a manual
+# run) applies with the apply role after approval of the `dev` environment.
+# The `name:` below is part of the apply role trust (ADR 0004, E2): the bootstrap `workflow_names` output must match.
+name: terraform-iac
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - infra/**
+      - .github/workflows/terraform-iac.yml
+      - scripts/tf-check.sh
+      - scripts/tf-policy.sh
+      - scripts/install-ci-tools.sh
+      - scripts/ci-tools.sha256
+      - scripts/ci-requirements.txt
+      - scripts/check-workflow-triggers.sh
+      - scripts/tf-plan-summary.sh
+      - mise.toml
+      - .tflint.hcl
+  push:
+    branches: [main]
+    paths:
+      - infra/terraform/envs/dev/**
+      - infra/terraform/modules/**
+      - .github/workflows/terraform-iac.yml
+  # Runs only the apply job: re-creates the stack after a teardown without re-running an old commit.
+  workflow_dispatch:
+
+permissions: {}
+
+# Nothing is cancelled mid-run: a cancelled plan can leave the state lock held, so runs queue instead.
+# The no-AWS checks job cannot hold a lock, but one setting keeps the rule simple.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TF_DIR: infra/terraform/envs/dev
+
+jobs:
+  checks:
+    name: checks (no AWS)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform and tflint (checksum verified)
+        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Terraform checks (policy rules, README, fmt, validate, test)
+        run: make tf-check
+
+      - name: Install tflint plugins
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: tflint --init
+
+      - name: tflint
+        run: tflint --recursive
+
+  plan:
+    name: plan (read-only role)
+    needs: checks
+    # Fork and Dependabot PRs get no ID token or secrets, so skip them instead of failing.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # No `environment:` here: the plan role trusts the pull_request subject only.
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    outputs:
+      summary: ${{ steps.summary.outputs.summary }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform and tflint (checksum verified)
+        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" ]]; then
+            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV or AWS_ACCOUNT_ID_DEV is empty or not set"
+            exit 1
+          fi
+          if [[ -z "$REGION" ]]; then
+            echo "::error::Variable AWS_REGION is empty or not set"
+            exit 1
+          fi
+          echo "::add-mask::$ACCOUNT"
+          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
+            exit 1
+          fi
+          if [[ ! "$ACCOUNT" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_ACCOUNT_ID_DEV is not a 12-digit account ID"
+            exit 1
+          fi
+          role_account="${ROLE_ARN#arn:aws:iam::}"
+          role_account="${role_account%%:*}"
+          if [[ "$role_account" != "$ACCOUNT" ]]; then
+            echo "::error::AWS_ACCOUNT_ID_DEV differs from the account in AWS_PLAN_ROLE_ARN_DEV"
+            exit 1
+          fi
+          echo "Configuration present and well formed"
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          retry-max-attempts: 3
+
+      # The state bucket name is derived (ADR 0002, B8), so there is no bucket secret.
+      - name: Terraform init
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
+          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
+          terraform -chdir="$TF_DIR" validate
+
+      - name: Terraform plan
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
+
+      # Counts and one row per changed address; fails if a 12-digit run shows up (the repo is public).
+      - name: Summarize the plan
+        id: summary
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: |
+          set -euo pipefail
+          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
+          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
+            echo "::error::summary contains the account ID; not publishing"
+            exit 1
+          fi
+          printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "summary<<${delimiter}"
+            echo "$summary"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Plan files hold every value and artifacts on a public repo are downloadable: nothing is uploaded.
+      - name: Remove the plan file
+        if: always()
+        run: rm -f "$TF_DIR/tfplan"
+
+  plan-role-guardrails:
+    name: plan role guardrails (negative tests)
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # No checkout and no write token: this job only talks to AWS with the plan role.
+    permissions:
+      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" || -z "$REGION" ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN_DEV, AWS_ACCOUNT_ID_DEV or AWS_REGION is empty or not set"
+            exit 1
+          fi
+          echo "::add-mask::$ACCOUNT"
+          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
+            exit 1
+          fi
+          echo "Configuration present and well formed"
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          retry-max-attempts: 3
+
+      # Only reads and dry runs: nothing that writes for real is tried, because a wrong pass would damage state.
+      # Error text is printed only after 12-digit runs are replaced.
+      - name: Plan role is denied what it must not do (N2, N3)
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: |
+          set -uo pipefail
+          echo "::add-mask::$ACCOUNT"
+          err_file="$(mktemp)"
+          redact() { sed -E 's/[0-9]{12}/<redacted>/g'; }
+
+          # N2: the plan role must not read a secret value (explicit deny, FR-3).
+          rc=0
+          aws secretsmanager get-secret-value --secret-id sis/dev/app-api-key >/dev/null 2>"$err_file" || rc=$?
+          err="$(redact <"$err_file")"
+          if [[ $rc -eq 0 ]]; then
+            echo "::error::plan role read a secret value"
+            exit 1
+          elif [[ "$err" == *AccessDeniedException* ]]; then
+            echo "Denied as designed (N2): GetSecretValue returned AccessDeniedException"
+          elif [[ "$err" == *ResourceNotFoundException* ]]; then
+            echo "::warning::secret does not exist yet; N2 is inconclusive, the checkpoint simulator covers it"
+          else
+            echo "::error::N2 failed for a reason other than access denied (exit code $rc)"
+            echo "$err"
+            exit 1
+          fi
+
+          # N3: the plan role must not create a VPC. A dry run creates nothing either way.
+          rc=0
+          aws ec2 create-vpc --cidr-block 10.255.0.0/16 --dry-run >/dev/null 2>"$err_file" || rc=$?
+          err="$(redact <"$err_file")"
+          if [[ "$err" == *DryRunOperation* ]]; then
+            echo "::error::plan role could create a VPC"
+            exit 1
+          elif [[ "$err" == *UnauthorizedOperation* ]]; then
+            echo "Denied as designed (N3): CreateVpc dry run returned UnauthorizedOperation"
+          else
+            echo "::error::N3 failed for a reason other than unauthorized (exit code $rc)"
+            echo "$err"
+            exit 1
+          fi
+
+  comment:
+    name: sticky plan comment
+    needs: plan
+    # Runs after a failed plan too, so the PR shows the failure. Skipped when the plan was skipped (fork, Dependabot).
+    if: >-
+      always()
+      && needs.plan.result != 'skipped'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # The only job with a write token: no checkout and no AWS credentials.
+    permissions:
+      pull-requests: write # create or update the sticky plan comment
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Post or update the plan comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          SUMMARY: ${{ needs.plan.outputs.summary }}
+        run: |
+          set -euo pipefail
+          marker='<!-- terraform-iac:plan:dev -->'
+          pattern='(^|[^0-9A-Za-z])[0-9]{12}([^0-9A-Za-z]|$)'
+
+          # The summary was checked in the plan job; check again before it reaches a public comment.
+          if grep -Eq "$pattern" <<<"$SUMMARY"; then
+            echo "::error::summary contains a 12-digit number (possible account ID); not posting"
+            exit 1
+          fi
+          if [[ -z "$SUMMARY" ]]; then
+            SUMMARY="No plan summary was produced. Open the run log."
+          fi
+
+          body="$(printf '%s\n\n%s\n\nPlan job result: %s. Commit: %s. [Run log](%s)\n' \
+            "$marker" "$SUMMARY" "$PLAN_RESULT" "$HEAD_SHA" "$RUN_URL")"
+
+          # Only a comment written by this workflow's bot is updated, never one that merely copies the marker.
+          existing="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id" \
+            | head -n1)"
+          if [[ -n "$existing" ]]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$body" >/dev/null
+            echo "Updated plan comment"
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" >/dev/null
+            echo "Posted plan comment"
+          fi
+
+  apply:
+    name: apply (dev, approval required)
+    # Only main applies, and only after a push or a manual run. Never a pull request.
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The environment adds the required reviewer and sets the OIDC subject the apply role trusts.
+    environment: dev
+    concurrency:
+      group: terraform-envs-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform and tflint (checksum verified)
+        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if [[ -z "$ROLE_ARN" || -z "$ACCOUNT" ]]; then
+            echo "::error::Secret AWS_APPLY_ROLE_ARN (environment dev) or AWS_ACCOUNT_ID_DEV is empty or not set"
+            exit 1
+          fi
+          if [[ -z "$REGION" ]]; then
+            echo "::error::Variable AWS_REGION is empty or not set"
+            exit 1
+          fi
+          echo "::add-mask::$ACCOUNT"
+          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-apply$ ]]; then
+            echo "::error::AWS_APPLY_ROLE_ARN is not the sis-dev-gha-apply role ARN"
+            exit 1
+          fi
+          if [[ ! "$ACCOUNT" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_ACCOUNT_ID_DEV is not a 12-digit account ID"
+            exit 1
+          fi
+          role_account="${ROLE_ARN#arn:aws:iam::}"
+          role_account="${role_account%%:*}"
+          if [[ "$role_account" != "$ACCOUNT" ]]; then
+            echo "::error::AWS_ACCOUNT_ID_DEV differs from the account in AWS_APPLY_ROLE_ARN"
+            exit 1
+          fi
+          echo "Configuration present and well formed"
+
+      - name: Assume the apply role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-apply-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          retry-max-attempts: 3
+
+      - name: Terraform init
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
+          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
+          terraform -chdir="$TF_DIR" validate
+
+      # A fresh plan of main inside the approved job, not a saved PR plan (ADR 0004, E24, R5).
+      - name: Terraform plan
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
+
+      - name: Summarize the plan
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: |
+          set -euo pipefail
+          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
+          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
+            echo "::error::summary contains the account ID; not publishing"
+            exit 1
+          fi
+          printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform apply
+        run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m -no-color tfplan
+
+      # configure-aws-credentials masks the whole assumed-role ARN in logs, so the summary shows which role ran.
+      - name: Report the result
+        run: |
+          set -euo pipefail
+          alb_url="$(terraform -chdir="$TF_DIR" output -raw alb_url)"
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          {
+            echo "### Applied"
+            echo "ALB URL: ${alb_url}"
+            echo "Role: \`${arn#*:assumed-role/}\`"
+            echo "The service stays unhealthy until the secret value is set and a new deployment is forced."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the plan file
+        if: always()
+        run: rm -f "$TF_DIR/tfplan"

@@ -75,15 +75,28 @@ fi
 
 # (7) Role trust: a module role may only be assumed by the ECS tasks service principal. Grep level, not a
 # policy parser: in any module directory that declares an aws_iam_role, no "AWS" or "Federated" principal type
-# and no identifiers holding an ARN or :root may appear. Cross-account or user trust would show up as one of those.
+# and no identifiers holding an ARN, :root or "*" may appear. Unquoted `AWS =` / `Federated =` keys and
+# `Principal = "*"` / `type = "*"` count too. Cross-account or user trust would show up as one of those.
 if [ -d "$root/modules" ]; then
   trust_out=""
   while IFS= read -r mdir; do
     [ -n "$mdir" ] || continue
-    trust_out="$trust_out$(scan '("AWS"|"Federated"|identifiers[[:space:]]*=.*(arn:|:root))' "$mdir")"$'\n'
+    trust_out="$trust_out$(scan '("AWS"|"Federated"|(^|[^A-Za-z_])(AWS|Federated)[[:space:]]*=|Principal[[:space:]]*=[[:space:]]*"\*"|type[[:space:]]*=[[:space:]]*"\*"|identifiers[[:space:]]*=.*(arn:|:root|"\*"))' "$mdir")"$'\n'
   done < <(grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*resource[[:space:]]+"aws_iam_role"[[:space:]]' "$root/modules" 2>/dev/null | xargs -n1 dirname 2>/dev/null | sort -u)
   trust_out="$(printf '%s' "$trust_out" | grep -v '^$' || true)"
-  report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated principals, no arn: or :root identifiers)" "$trust_out"
+  report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated/wildcard principals, no arn: or :root identifiers)" "$trust_out"
+fi
+
+# (8) Root outputs are public in apply logs (repo is public): envs/*/outputs.tf never references an ARN,
+# the ECR repository URL (it holds the account ID) or an account ID. Those stay module outputs.
+if [ -d "$root/envs" ]; then
+  out8=""
+  for d in "$root"/envs/*/; do
+    [ -f "${d}outputs.tf" ] || continue
+    out8="$out8$(scan '(\.arn([^A-Za-z0-9_]|$)|_arn([^A-Za-z0-9_]|$)|repository_url|account_id)' "${d%/}")"$'\n'
+  done
+  out8="$(printf '%s' "$out8" | grep 'outputs\.tf:' || true)"
+  report 8 "envs/*/outputs.tf must not reference .arn, _arn, repository_url or account_id (public apply logs)" "$out8"
 fi
 
 # (5) Backends: the bucket (it holds the account ID) is never in a file; envs use the state key contract.
