@@ -26,10 +26,10 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
   `use_lockfile = true`, key `envs/dev/terraform.tfstate`.
 - **Tags.** `default_tags` (`Project`, `Env`, `ManagedBy`) are identical to bootstrap; the apply role's EC2
   conditions depend on them, and standalone security group rules need them to be changeable.
-- **Placeholder image.** `container_image` and `container_command` in `terraform.tfvars` run a one-line
-  `/health` server until Phase 4 builds the app image. Phase 4 removes `container_command` first.
-- **First apply.** The service stalls until the secret has a value: run `put-secret-value`, then force a new
-  deployment (ADR 0004, checkpoint B5). The state of `bootstrap/` is not readable by the CI roles.
+- **Placeholder image.** `container_image` in `terraform.tfvars` is a digest-pinned image with no command, so
+  it never serves. The first deployment after a create stalls by design (ADR 0005, F2) until app-deploy sets
+  the real image.
+- **First apply.** Run `put-secret-value`, then run the `app-deploy` workflow (no forced deployment). The state of `bootstrap/` is not readable by the CI roles.
 - **Teardown.** `terraform plan -destroy` and `apply` by hand (admin), every session until Phase 5. A local
   `init` here does not disturb `make tf-check`.
 
@@ -54,7 +54,7 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
 | aws_account_id | Target AWS account ID. Never committed: CI passes TF_VAR_aws_account_id; locally use the shell or a gitignored *.auto.tfvars. | `string` | n/a | yes |
 | aws_region | AWS region for every resource. | `string` | n/a | yes |
 | azs | Two availability zones for the public subnets. | `list(string)` | n/a | yes |
-| container_image | Container image pinned by digest. A public placeholder until Phase 4 builds the app image. | `string` | n/a | yes |
+| container_image | Container image pinned by digest. A public placeholder that never serves: app-deploy sets the real image by digest. | `string` | n/a | yes |
 | desired_count | Number of Fargate tasks. | `number` | n/a | yes |
 | env | Environment name. | `string` | n/a | yes |
 | log_retention_days | Retention of the application log group. | `number` | n/a | yes |
@@ -63,7 +63,6 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
 | task_memory | Task-level memory in MiB. | `number` | n/a | yes |
 | vpc_cidr | CIDR block of the VPC. | `string` | n/a | yes |
 | alb_ingress_cidrs | CIDR blocks allowed to reach the ALB on port 80. CI can restrict it with TF_VAR_alb_ingress_cidrs (ADR 0004, Q1). | `list(string)` | ```[ "0.0.0.0/0" ]``` | no |
-| container_command | Command override for the placeholder image. Null for the real app image (Phase 4 removes it). | `list(string)` | `null` | no |
 | secret_recovery_window_days | Secrets Manager recovery window; 0 deletes at once (ADR 0004, Q3). | `number` | `0` | no |
 
 ## Outputs

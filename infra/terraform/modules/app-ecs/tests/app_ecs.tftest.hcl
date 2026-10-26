@@ -353,7 +353,7 @@ run "task_definition_maps_the_secret_by_arn" {
 
   assert {
     condition     = !contains(keys(jsondecode(aws_ecs_task_definition.app.container_definitions)[0]), "command")
-    error_message = "no command key when container_command is null"
+    error_message = "no command key (the image decides what runs)"
   }
 
   assert {
@@ -362,16 +362,17 @@ run "task_definition_maps_the_secret_by_arn" {
   }
 }
 
-run "container_command_is_passed_through" {
+# Terraform owns the shape of the task definition and app-deploy swaps only the image (ADR 0005, F2). A command or an
+# entrypoint here would make the deploy render fail, so the container must carry neither.
+run "container_has_no_command_or_entrypoint" {
   command = plan
 
-  variables {
-    container_command = ["sh", "-c", "exit 0"]
-  }
-
   assert {
-    condition     = jsondecode(aws_ecs_task_definition.app.container_definitions)[0].command == ["sh", "-c", "exit 0"]
-    error_message = "container_command reaches the container definition"
+    condition = (
+      !contains(keys(jsondecode(aws_ecs_task_definition.app.container_definitions)[0]), "command")
+      && !contains(keys(jsondecode(aws_ecs_task_definition.app.container_definitions)[0]), "entryPoint")
+    )
+    error_message = "the container definition has no command and no entryPoint"
   }
 }
 
