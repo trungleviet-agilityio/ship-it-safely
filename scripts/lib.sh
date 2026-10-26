@@ -74,6 +74,23 @@ app_names() {
   SECRET_ID="sis/${ENV}/app-api-key" LOG_GROUP="/ecs/sis-${ENV}-app"
 }
 
+# ecs_service_status <cluster> <service>: print ACTIVE, DRAINING, INACTIVE or MISSING (no cluster, no service, or
+# an empty answer). Any other error dies with redacted text. Call it as `x="$(ecs_service_status c s)" || exit 1`: the
+# helper has already printed the error.
+ecs_service_status() {
+  run_capture aws ecs describe-services --cluster "$1" --services "$2" --query 'services[0].status' --output text
+  if [ "$RUN_RC" -ne 0 ]; then
+    case "$RUN_ERR" in
+      *ClusterNotFoundException*) printf 'MISSING\n'; return 0 ;;
+      *) die "describe-services failed (exit code $RUN_RC): $RUN_ERR" ;;
+    esac
+  fi
+  case "$RUN_OUT" in
+    ACTIVE | DRAINING | INACTIVE) printf '%s\n' "$RUN_OUT" ;;
+    *) printf 'MISSING\n' ;; # "None", "MISSING" or empty: the service is not there
+  esac
+}
+
 # Seconds the rollout wait allows before it gives up.
 DEFAULT_WAIT_TIMEOUT=1200
 

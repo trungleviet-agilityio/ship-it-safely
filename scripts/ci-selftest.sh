@@ -48,6 +48,41 @@ leak_plan="{\"resource_changes\":[{\"address\":\"aws_iam_role.x-${leak_id}\",\"c
 # shellcheck disable=SC2016  # the inner script is meant to expand in the child shell
 expect_fail "plan summary with a 12-digit run" "12-digit" bash -c 'printf "%s" "$1" | "$2"' _ "$leak_plan" "$ROOT/scripts/tf-plan-summary.sh"
 
+# --title changes only the heading.
+titled="$(printf '%s' "$good_plan" | "$ROOT/scripts/tf-plan-summary.sh" --title "Terraform destroy plan (dev)")"
+[ "$(printf '%s\n' "$titled" | head -n1)" = "### Terraform destroy plan (dev)" ] || die "selftest: --title did not set the heading"
+[ "$(printf '%s\n' "$titled" | tail -n +2)" = "$(printf '%s\n' "$out" | tail -n +2)" ] || die "selftest: --title changed more than the heading"
+[ "$(printf '%s\n' "$out" | head -n1)" = "### Terraform plan (dev)" ] || die "selftest: the default heading changed"
+ok "plan summary --title replaces the heading only"
+expect_fail "plan summary with an unknown option" "usage:" "$ROOT/scripts/tf-plan-summary.sh" --heading x
+expect_fail "plan summary with --title and no text" "usage:" "$ROOT/scripts/tf-plan-summary.sh" --title
+
+# --- tf-destroy-check.sh
+# destroy_plan <actions json> <address>...: a plan with one change per address.
+destroy_plan() {
+  local actions="$1" a rows=""
+  shift
+  for a in "$@"; do rows="${rows:+$rows,}{\"address\":\"$a\",\"change\":{\"actions\":$actions}}"; done
+  printf '{"resource_changes":[%s]}' "$rows"
+}
+destroy_check() { printf '%s' "$1" | "$ROOT/scripts/tf-destroy-check.sh"; }
+[ "$(destroy_check "$(destroy_plan '["delete"]' module.app_ecs.aws_vpc.this 'module.app_ecs.aws_lb.this[0]' module.app_ecs.module.x.aws_s3_bucket.y)")" = "3" ] \
+  || die "selftest: tf-destroy-check must count the deletes under module.app_ecs."
+[ "$(destroy_check '{"resource_changes":[]}')" = "0" ] || die "selftest: an empty resource_changes must count 0"
+[ "$(destroy_check '{}')" = "0" ] || die "selftest: a plan without resource_changes must count 0"
+mixed="$(printf '%s' "$(destroy_plan '["delete"]' module.app_ecs.aws_vpc.this)" | jq -c '.resource_changes += [
+  {"address":"module.app_ecs.aws_route.r","change":{"actions":["no-op"]}},
+  {"address":"data.aws_x.y","change":{"actions":["read"]}}]')"
+[ "$(destroy_check "$mixed")" = "1" ] || die "selftest: no-op and read entries must be ignored"
+ok "tf-destroy-check counts deletes and ignores no-op and read"
+expect_fail "destroy plan with a create" "module.app_ecs.aws_vpc.this (create)" destroy_check "$(destroy_plan '["create"]' module.app_ecs.aws_vpc.this)"
+expect_fail "destroy plan with an update" "module.app_ecs.aws_vpc.this (update)" destroy_check "$(destroy_plan '["update"]' module.app_ecs.aws_vpc.this)"
+expect_fail "destroy plan with a replace" "module.app_ecs.aws_vpc.this (delete+create)" destroy_check "$(destroy_plan '["delete","create"]' module.app_ecs.aws_vpc.this)"
+expect_fail "destroy plan with a forget" "module.app_ecs.aws_vpc.this (forget)" destroy_check "$(destroy_plan '["forget"]' module.app_ecs.aws_vpc.this)"
+expect_fail "destroy plan deleting outside the module" "outside module.app_ecs.: aws_s3_bucket.x" destroy_check "$(destroy_plan '["delete"]' aws_s3_bucket.x)"
+expect_fail "destroy plan deleting a lookalike module" "outside module.app_ecs.: module.app_ecs_other.aws_vpc.this" destroy_check "$(destroy_plan '["delete"]' module.app_ecs_other.aws_vpc.this)"
+expect_fail "tf-destroy-check with an argument" "usage:" "$ROOT/scripts/tf-destroy-check.sh" x
+
 # --- check-workflow-triggers.sh
 cat >"$tmp/good.yml" <<'EOF'
 name: good
@@ -369,10 +404,13 @@ expect_fail "ecr-push without ACCOUNT" "ACCOUNT and REGION" env -u ACCOUNT "$ROO
 
 # --- ecs-preflight.sh
 secret_denied="An error occurred (AccessDeniedException) when calling the GetSecretValue operation for ${acct}"
+version_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+stages_current="{\"${version_id}\":[\"AWSCURRENT\"],\"ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee\":[\"AWSPREVIOUS\"]}"
 preflight() { stubbed env ENV="${PREFLIGHT_ENV:-dev}" "$ROOT/scripts/ecs-preflight.sh"; }
 preflight_ready() {
   stub_reset
   stub aws-ecs-describe-services out ACTIVE
+  stub aws-secretsmanager-describe-secret out "$stages_current"
   stub aws-secretsmanager-get-secret-value rc 254
   stub aws-secretsmanager-get-secret-value err "$secret_denied"
 }
@@ -403,6 +441,160 @@ expect_fail "preflight when the deploy role can read the secret" "N4 failed: the
 preflight_ready
 stub aws-secretsmanager-get-secret-value err "An error occurred (ResourceNotFoundException)"
 expect_fail "preflight with another N4 error" "N4 failed for a reason other than access denied" preflight
+
+# The secret must have an AWSCURRENT version (ADR 0006, G14); the answer is metadata and is never echoed.
+preflight_ready
+out="$(preflight 2>&1)" || die "selftest: the preflight of a secret with a current value failed: $out"
+case "$out" in *"$version_id"*) die "selftest: the preflight printed a secret version ID" ;; esac
+calls_have "describe-secret --secret-id sis/dev/app-api-key" || die "selftest: the preflight did not describe the secret"
+for stages in null '{}' '{"v1":["AWSPENDING"]}' '{"v1":["AWSPREVIOUS"],"v2":["AWSPENDING"]}'; do
+  preflight_ready
+  stub aws-secretsmanager-describe-secret out "$stages"
+  expect_fail "preflight with secret stages $stages" "secret sis/dev/app-api-key has no current value" preflight
+done
+preflight_ready
+stub aws-secretsmanager-describe-secret out ""
+expect_fail "preflight with an empty describe-secret answer" "has no current value" preflight
+preflight_ready
+stub aws-secretsmanager-describe-secret rc 254
+stub aws-secretsmanager-describe-secret err "An error occurred (AccessDeniedException) when calling DescribeSecret for ${acct}"
+out="$(preflight 2>&1 || true)"
+case "$out" in
+  *"re-apply bootstrap"*) ;;
+  *) die "selftest: describe-secret AccessDenied must ask for a bootstrap re-apply: $out" ;;
+esac
+case "$out" in *"$acct"*) die "selftest: the describe-secret failure printed a 12-digit run" ;; esac
+preflight_ready
+stub aws-secretsmanager-describe-secret rc 254
+stub aws-secretsmanager-describe-secret err "An error occurred (ResourceNotFoundException) when calling DescribeSecret"
+expect_fail "preflight with no secret" "the dev stack is not up" preflight
+preflight_ready
+stub aws-secretsmanager-describe-secret rc 254
+stub aws-secretsmanager-describe-secret err "An error occurred (ThrottlingException) for ${acct}"
+expect_fail "preflight with describe-secret throttling" "describe-secret failed (exit code 254): An error occurred (ThrottlingException) for <redacted>" preflight
+ok "preflight requires a current secret value and handles describe-secret errors"
+
+# --- ecs_service_status (lib.sh)
+# shellcheck disable=SC2016  # the inner script is meant to expand in the child shell
+service_status() { stubbed bash -c 'source "$1/scripts/lib.sh"; ecs_service_status sis-dev-cluster sis-dev-app' _ "$ROOT"; }
+for status in ACTIVE DRAINING INACTIVE; do
+  stub_reset
+  stub aws-ecs-describe-services out "$status"
+  [ "$(service_status 2>/dev/null)" = "$status" ] || die "selftest: ecs_service_status must print $status"
+done
+for answer in None MISSING ""; do
+  stub_reset
+  stub aws-ecs-describe-services out "$answer"
+  [ "$(service_status 2>/dev/null)" = "MISSING" ] || die "selftest: ecs_service_status must map '$answer' to MISSING"
+done
+stub_reset
+stub aws-ecs-describe-services rc 254
+stub aws-ecs-describe-services err "An error occurred (ClusterNotFoundException) when calling DescribeServices"
+[ "$(service_status 2>/dev/null)" = "MISSING" ] || die "selftest: ecs_service_status must map ClusterNotFoundException to MISSING"
+stub_reset
+stub aws-ecs-describe-services rc 254
+stub aws-ecs-describe-services err "An error occurred (ThrottlingException) for ${acct}"
+expect_fail "ecs_service_status with throttling" "describe-services failed (exit code 254): An error occurred (ThrottlingException) for <redacted>" service_status
+ok "ecs_service_status maps every answer to one of four states"
+
+# --- tf-init.sh (stub terraform: arguments are logged, nothing runs)
+cat >"$tmp/stub/terraform" <<'EOF'
+#!/usr/bin/env bash
+echo "terraform $*" >>"${STUB_DIR:?}/calls"
+EOF
+chmod +x "$tmp/stub/terraform"
+# tf_init_as <account> <region> [args...]; tf_init is the same with the valid account and region.
+tf_init_as() {
+  local a="$1" r="$2"
+  shift 2
+  stubbed env ACCOUNT="$a" REGION="$r" "$ROOT/scripts/tf-init.sh" "$@"
+}
+tf_init() { tf_init_as "$acct" ap-southeast-1 "$@"; }
+stub_reset
+tf_init infra/terraform/envs/dev >/dev/null 2>&1 || die "selftest: tf-init of envs/dev failed"
+[ "$(cat "$sd/calls")" = "$(printf '%s\n%s' \
+  "terraform -chdir=infra/terraform/envs/dev init -input=false -lockfile=readonly -backend-config=bucket=sis-dev-tfstate-${acct}-ap-southeast-1-an" \
+  "terraform -chdir=infra/terraform/envs/dev validate -no-color")" ] || die "selftest: tf-init ran: $(cat "$sd/calls")"
+out="$(tf_init infra/terraform/envs/dev 2>&1)"
+case "$out" in *"$acct"*) die "selftest: tf-init printed the account ID" ;; esac
+ok "tf-init derives the bucket, inits with a read-only lock file, then validates"
+stub_reset
+tf_init infra/terraform/envs/prod >/dev/null 2>&1 || die "selftest: tf-init of envs/prod failed"
+calls_have "bucket=sis-prod-tfstate-${acct}-ap-southeast-1-an" || die "selftest: tf-init did not derive the prod bucket"
+stub_reset
+for bad_dir in infra/terraform/bootstrap infra/terraform/envs infra/terraform/envs/Dev infra/terraform/envs/dev/x ../infra/terraform/envs/dev infra/terraform/modules/app-ecs; do
+  expect_fail "tf-init of $bad_dir" "only infra/terraform/envs/<env>" tf_init "$bad_dir"
+done
+expect_fail "tf-init without ACCOUNT" "ACCOUNT and REGION must be set" tf_init_as "" ap-southeast-1 infra/terraform/envs/dev
+expect_fail "tf-init without REGION" "ACCOUNT and REGION must be set" tf_init_as "$acct" "" infra/terraform/envs/dev
+expect_fail "tf-init without arguments" "usage:" tf_init
+expect_fail "tf-init with two arguments" "usage:" tf_init infra/terraform/envs/dev infra/terraform/envs/prod
+[ ! -e "$sd/calls" ] || die "selftest: tf-init must not run terraform for a refused call"
+
+# --- ecs-deregister-revisions.sh
+# dereg [env [max revisions]]
+dereg() { stubbed env ENV="${1:-dev}" MAX_REVISIONS="${2:-200}" "$ROOT/scripts/ecs-deregister-revisions.sh"; }
+client_exception="An error occurred (ClientException) when calling the DescribeTaskDefinition operation: Unable to describe task definition."
+# dereg_ready <revision>...: the service is gone, the family returns the revisions in order, then ClientException.
+dereg_ready() {
+  local n=0 r
+  stub_reset
+  stub aws-ecs-describe-services out None
+  for r in "$@"; do
+    stub aws-ecs-describe-task-definition out "$r" "$n"
+    n=$((n + 1))
+  done
+  stub aws-ecs-describe-task-definition rc 254 "$n"
+  stub aws-ecs-describe-task-definition err "$client_exception" "$n"
+  stub aws-ecs-deregister-task-definition out INACTIVE
+}
+dereg_ready 9 8 7
+out="$(dereg 2>/dev/null)" || die "selftest: ecs-deregister-revisions failed on three revisions"
+[ "$out" = "DEREGISTERED=3" ] || die "selftest: ecs-deregister-revisions printed: $out"
+[ "$(grep -c 'deregister-task-definition' "$sd/calls")" = 3 ] || die "selftest: expected three deregistrations"
+[ "$(grep 'deregister-task-definition' "$sd/calls" | sed 's/.*--task-definition //; s/ .*//' | tr '\n' ' ')" = "sis-dev-app:9 sis-dev-app:8 sis-dev-app:7 " ] \
+  || die "selftest: revisions were not deregistered newest first"
+dereg_ready
+[ "$(dereg 2>/dev/null)" = "DEREGISTERED=0" ] || die "selftest: no revisions must print DEREGISTERED=0"
+! calls_have "deregister-task-definition" || die "selftest: nothing to deregister, but a call was made"
+dereg_ready 3
+stub aws-ecs-describe-services rc 254
+stub aws-ecs-describe-services err "An error occurred (ClusterNotFoundException) when calling DescribeServices"
+[ "$(dereg 2>/dev/null)" = "DEREGISTERED=1" ] || die "selftest: a missing cluster means the service is gone"
+dereg_ready 3
+stub aws-ecs-describe-services out INACTIVE
+[ "$(dereg 2>/dev/null)" = "DEREGISTERED=1" ] || die "selftest: an INACTIVE service means the service is gone"
+dereg_ready 3
+[ "$(dereg prod 2>/dev/null)" = "DEREGISTERED=1" ] || die "selftest: the prod revision cleanup failed"
+calls_have "sis-prod-app:3" || die "selftest: ENV=prod must derive sis-prod-app"
+ok "ecs-deregister-revisions cleans every active revision once the service is gone"
+for status in ACTIVE DRAINING; do
+  dereg_ready 9
+  stub aws-ecs-describe-services out "$status"
+  expect_fail "revision cleanup with a $status service" "still exists" dereg
+  ! calls_have "deregister-task-definition" || die "selftest: a $status service must keep its revisions"
+done
+dereg_ready 9 9
+expect_fail "revision cleanup with a repeated revision" "revision 9 returned again" dereg
+dereg_ready 9 8 7
+expect_fail "revision cleanup over the cap" "more than 2 active revisions" dereg dev 2
+dereg_ready 9
+stub aws-ecs-describe-task-definition rc 254 0
+stub aws-ecs-describe-task-definition err "An error occurred (AccessDeniedException) for ${acct}" 0
+out="$(dereg 2>&1 || true)"
+case "$out" in
+  *"describe-task-definition failed (exit code 254): An error occurred (AccessDeniedException) for <redacted>"*) ;;
+  *) die "selftest: a describe error must fail with redacted text: $out" ;;
+esac
+dereg_ready 9
+stub aws-ecs-deregister-task-definition rc 254
+stub aws-ecs-deregister-task-definition err "An error occurred (AccessDeniedException) for ${acct}"
+expect_fail "revision cleanup when deregister fails" "deregister-task-definition failed (exit code 254)" dereg
+dereg_ready 9
+stub aws-ecs-deregister-task-definition out ACTIVE
+expect_fail "revision cleanup when the revision stays ACTIVE" "expected INACTIVE" dereg
+dereg_ready not-a-number
+expect_fail "revision cleanup with a non-numeric revision" "not a revision number" dereg
 
 # --- image-export.sh, image-import.sh
 stub_reset
@@ -479,6 +671,48 @@ grep -q 'id-token: write' "$tmp/wf-idtoken.yml" || die "selftest: could not muta
 sed 's/^  build-scan:$/  build-scan:\n    env:\n      X: ${{ secrets.X }}/' "$deploy_wf" >"$tmp/wf-secret.yml"
 grep -q 'secrets\.X' "$tmp/wf-secret.yml" || die "selftest: could not mutate build-scan (secrets)"
 ! build_scan_isolated "$tmp/wf-secret.yml" || die "selftest: the isolation check missed secrets in build-scan"
+
+# --- terraform-destroy.yml (ADR 0006, G16). No check_paths: the workflow has no path filters.
+destroy_wf="$ROOT/.github/workflows/terraform-destroy.yml"
+iac_wf="$ROOT/.github/workflows/terraform-iac.yml"
+# section <workflow> <first line regex> <last line regex>: the lines from the first match to the last match.
+section() { sed -n "/$2/,/$3/p" "$1"; }
+# confirm_isolated <workflow>: the credential-free job holds no OIDC token, environment, secret, checkout or AWS action.
+confirm_isolated() {
+  ! section "$1" '^  confirm:' '^  destroy:' | grep -Eq 'id-token|environment:|secrets\.|actions/checkout|aws-actions'
+}
+# only_trigger <workflow> <trigger>: the `on:` block lists exactly that trigger.
+only_trigger() {
+  [ "$(section "$1" '^on:' '^permissions:' | grep -E '^  [a-z_]+:' | tr -d ' \n')" = "$2:" ]
+}
+only_trigger "$destroy_wf" workflow_dispatch || die "selftest: terraform-destroy must have workflow_dispatch as its only trigger"
+! only_trigger "$iac_wf" workflow_dispatch || die "selftest: the trigger check must fail for a workflow with more triggers"
+confirm_isolated "$destroy_wf" || die "selftest: the confirm job must hold no OIDC token, environment, secret or checkout"
+# shellcheck disable=SC2016  # the mutations are workflow text, not shell
+for add in 'permissions:\n      id-token: write' 'environment: dev' 'env:\n      X: ${{ secrets.X }}' 'steps:\n      - uses: actions/checkout@v1'; do
+  # Each mutation adds one credential right under the confirm job header.
+  sed "s#^  confirm:\$#  confirm:\n    $add#" "$destroy_wf" >"$tmp/wf-confirm.yml"
+  ! cmp -s "$destroy_wf" "$tmp/wf-confirm.yml" || die "selftest: could not mutate confirm ($add)"
+  ! confirm_isolated "$tmp/wf-confirm.yml" || die "selftest: the isolation check missed '$add' in confirm"
+done
+# environment: and id-token: write belong to the destroy job only, never to the top level or confirm.
+! sed -n '1,/^jobs:/p' "$destroy_wf" | grep -Eq 'id-token|environment:' || die "selftest: terraform-destroy must set no id-token or environment above its jobs"
+destroy_job="$(sed -n '/^  destroy:/,$p' "$destroy_wf")" # the last job of the file
+grep -q '^    environment: dev$' <<<"$destroy_job" || die "selftest: the destroy job must use environment dev"
+grep -q 'id-token: write' <<<"$destroy_job" || die "selftest: the destroy job must have id-token: write"
+# The workflow name is in the apply role trust, and both writers of the dev state share one concurrency group.
+workflow_name="$(sed -n 's/^name: *//p' "$destroy_wf")"
+apply_names="$(sed -n 's/^ *apply *= *\[\(.*\)\].*/\1/p' "$ROOT/infra/terraform/bootstrap/locals.tf")"
+case ", $apply_names," in
+  *", \"$workflow_name\","*) ;;
+  *) die "selftest: the workflow name '$workflow_name' is not in the bootstrap workflow_names.apply ($apply_names)" ;;
+esac
+for wf in "$destroy_wf" "$iac_wf"; do
+  grep -qx '      group: terraform-envs-dev' "$wf" || die "selftest: ${wf##*/} must use the concurrency group terraform-envs-dev"
+done
+! grep -Eq '^ *queue:' "$destroy_wf" "$iac_wf" || die "selftest: no queue: in the shared concurrency group (actionlint rejects it)"
+ok "terraform-destroy: dispatch only, credential-free confirm job, trusted name, shared concurrency group"
+
 # One source for the task caps: the iam_deploy.tf conditions equal lib.sh.
 tf_cap() { grep -A3 "variable = \"ecs:$1\"" "$ROOT/infra/terraform/bootstrap/iam_deploy.tf" | sed -n 's/.*values *= *\["\([0-9]*\)"\].*/\1/p'; }
 [ "$(tf_cap task-cpu)" = "$TASK_CPU_MAX" ] || die "selftest: TASK_CPU_MAX in lib.sh differs from iam_deploy.tf"
@@ -558,6 +792,7 @@ expect_fail "image-export without arguments" "usage:" "$ROOT/scripts/image-expor
 expect_fail "image-name without arguments" "usage:" "$ROOT/scripts/image-name.sh"
 expect_fail "app-names with an argument" "usage:" "$ROOT/scripts/app-names.sh" x
 expect_fail "ecs-preflight with an argument" "usage:" "$ROOT/scripts/ecs-preflight.sh" x
+expect_fail "ecs-deregister-revisions with an argument" "usage:" "$ROOT/scripts/ecs-deregister-revisions.sh" x
 expect_fail "assert-no-account-id with an argument" "usage:" "$ROOT/scripts/assert-no-account-id.sh" x
 expect_fail "check-aws-config without arguments" "usage:" "$ROOT/scripts/check-aws-config.sh"
 

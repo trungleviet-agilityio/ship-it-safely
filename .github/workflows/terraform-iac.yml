@@ -17,6 +17,9 @@ on:
       - scripts/ci-requirements.txt
       - scripts/check-workflow-triggers.sh
       - scripts/tf-plan-summary.sh
+      - scripts/tf-init.sh
+      - scripts/tf-destroy-check.sh
+      - scripts/ecs-deregister-revisions.sh
       - scripts/check-aws-config.sh
       - scripts/assert-no-account-id.sh
       - scripts/redact-account-ids.sh
@@ -124,15 +127,12 @@ jobs:
           mask-aws-account-id: true
           retry-max-attempts: 3
 
-      # The state bucket name is derived (ADR 0002, B8), so there is no bucket secret.
+      # tf-init.sh derives the state bucket name (ADR 0002, B8), so there is no bucket secret.
       - name: Terraform init
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
-          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
-          terraform -chdir="$TF_DIR" validate
+        run: scripts/tf-init.sh "$TF_DIR"
 
       - name: Terraform plan
         env:
@@ -350,10 +350,7 @@ jobs:
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          bucket="sis-dev-tfstate-${ACCOUNT}-${REGION}-an"
-          terraform -chdir="$TF_DIR" init -lockfile=readonly -backend-config="bucket=${bucket}"
-          terraform -chdir="$TF_DIR" validate
+        run: scripts/tf-init.sh "$TF_DIR"
 
       # A fresh plan of main inside the approved job, not a saved PR plan (ADR 0004, E24, R5).
       - name: Terraform plan
@@ -382,7 +379,7 @@ jobs:
             echo "### Applied"
             echo "ALB URL: ${alb_url}"
             echo "Role: \`${arn#*:assumed-role/}\`"
-            echo "The service stays unhealthy until the secret value is set and a new deployment is forced."
+            echo "The service stays unhealthy until the secret value is set and app-deploy runs (Run workflow)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove the plan file

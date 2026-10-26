@@ -11,7 +11,7 @@ Terraform need before any app infrastructure exists. Design and decisions: [ADR 
 | GitHub OIDC provider | `token.actions.githubusercontent.com` | Audience `sts.amazonaws.com` |
 | Plan role | `sis-dev-gha-plan` | PR jobs only; `ReadOnlyAccess` + `envs/dev` state read + lock file |
 | Apply role | `sis-dev-gha-apply` | `environment: dev` on `main`; only the `sis-dev-*` resources of `modules/app-ecs` |
-| Deploy role | `sis-dev-gha-deploy` | `environment: dev` on `main`; one ECR repo, one ECS service |
+| Deploy role | `sis-dev-gha-deploy` | `environment: dev` on `main`; one ECR repo, one ECS service; may describe (not read) the app secret, so the deploy preflight can check it has a value |
 | ECS role boundary | `sis-dev-ecs-boundary` | Every ECS role the apply role creates must carry it |
 | Guardrails | `sis-dev-gha-guardrails` | On all three roles: deny secret values, SSM parameters, role chaining, bootstrap state |
 | Budget | `sis-dev-monthly-cost` | 20 USD/month, email at 80% actual |

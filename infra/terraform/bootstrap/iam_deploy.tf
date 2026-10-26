@@ -89,6 +89,15 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # Metadata only (ADR 0006, G14): the preflight checks that the secret has a current version. The G1 guardrail
+  # still denies reading or writing a value. The six "?" match the random suffix, so only this one secret matches.
+  statement {
+    sid       = "DescribeAppSecretMetadata"
+    effect    = "Allow"
+    actions   = ["secretsmanager:DescribeSecret"]
+    resources = ["${local.svc_arn["secretsmanager"]}:secret:${local.resource_names.secret}-??????"]
+  }
+
   statement {
     sid       = "PassTaskRoles"
     effect    = "Allow"

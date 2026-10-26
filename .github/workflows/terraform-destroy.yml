@@ -1,0 +1,182 @@
+# Approval-gated teardown of envs/dev (PLAN Phase 5, ADR 0006, FR-12).
+# Dispatch only. The `confirm` job checks the typed phrase without any credential, so a typo fails before an
+# approval prompt exists. The `destroy` job then needs the `dev` environment approval, plans the destroy, refuses
+# anything but deletes under module.app_ecs., applies that same saved plan and deregisters the task definition
+# revisions. Bootstrap is never destroyed here (ADR 0006, G17).
+# The `name:` below is part of the apply role trust (ADR 0004, E2): the bootstrap `workflow_names.apply` must list it.
+name: terraform-destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment to destroy
+        type: choice
+        options: [dev]
+        required: true
+        default: dev
+      confirm:
+        description: "Type destroy-<env>, for example destroy-dev"
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  confirm:
+    name: confirm (no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      # Inputs reach the script through env only. The typed phrase is never echoed.
+      - name: Check the branch, the environment and the typed confirmation
+        env:
+          ENV_INPUT: ${{ inputs.env }}
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" != "refs/heads/main" ]]; then
+            echo "::error::run this workflow from main"
+            exit 1
+          fi
+          case "$ENV_INPUT" in
+            dev) ;;
+            *)
+              echo "::error::environment must be one of: dev"
+              exit 1
+              ;;
+          esac
+          if [[ "$CONFIRM_INPUT" != "destroy-${ENV_INPUT}" ]]; then
+            echo "::error::confirmation must be destroy-${ENV_INPUT}"
+            exit 1
+          fi
+
+  destroy:
+    name: destroy (dev, approval required)
+    needs: confirm
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Below the 60-minute role session (NFR-7): a stuck destroy fails while it still has credentials.
+    timeout-minutes: 45
+    # The environment adds the required reviewer and sets the OIDC subject the apply role trusts. It is not
+    # taken from the input: the secrets and the trust are dev-only today.
+    environment: dev
+    # The group the terraform-iac apply job uses, so a destroy and an apply never hold the state lock together.
+    concurrency:
+      group: terraform-envs-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    env:
+      ENV: dev
+      TF_DIR: infra/terraform/envs/dev
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform and tflint (checksum verified)
+        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Check configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: scripts/check-aws-config.sh sis-dev-gha-apply
+
+      - name: Assume the apply role
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-destroy-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+          retry-max-attempts: 3
+
+      - name: Terraform init
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: scripts/tf-init.sh "$TF_DIR"
+
+      - name: Terraform destroy plan
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: terraform -chdir="$TF_DIR" plan -destroy -lock-timeout=5m -no-color -out=tfplan
+
+      # The approval came before this plan existed, so a script reviews it: deletes under module.app_ecs. only.
+      # An empty stack (0 deletes) skips the apply and ends green.
+      - name: Check that the plan only deletes
+        id: guard
+        run: |
+          set -euo pipefail
+          deletes="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-destroy-check.sh)"
+          echo "deletes=${deletes}" >> "$GITHUB_OUTPUT"
+          if [[ "$deletes" == "0" ]]; then
+            echo "::notice::nothing to destroy"
+          fi
+
+      - name: Summarize the plan
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIR" show -json tfplan \
+            | scripts/tf-plan-summary.sh --title "Terraform destroy plan (dev)" \
+            | scripts/assert-no-account-id.sh >> "$GITHUB_STEP_SUMMARY"
+
+      # The checked plan file is the one applied: no artifact and no second plan.
+      - name: Terraform destroy
+        if: steps.guard.outputs.deletes != '0'
+        run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m -no-color tfplan
+
+      # Runs whether or not anything was deleted; it refuses to act while the service still exists.
+      - name: Deregister the task definition revisions
+        id: revisions
+        run: scripts/ecs-deregister-revisions.sh >> "$GITHUB_OUTPUT"
+
+      # configure-aws-credentials masks the whole assumed-role ARN in logs, so the summary shows the role name only.
+      - name: Report the result
+        if: always() && steps.aws.outcome == 'success'
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          DELETES: ${{ steps.guard.outputs.deletes }}
+          DEREGISTERED: ${{ steps.revisions.outputs.DEREGISTERED }}
+        run: |
+          set -euo pipefail
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          role="${arn#*:assumed-role/}"
+          {
+            echo "### Destroyed"
+            if [[ "$DELETES" == "0" ]]; then
+              echo "Nothing to destroy."
+            else
+              echo "Resources deleted: ${DELETES:-not known (see the failed step)}"
+            fi
+            echo "Task definition revisions deregistered: ${DEREGISTERED:-not known (see the failed step)}"
+            echo "Role: \`${role%%/*}\`"
+          } | scripts/assert-no-account-id.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the plan file
+        if: always()
+        run: rm -f "$TF_DIR/tfplan"
