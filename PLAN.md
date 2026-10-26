@@ -3,6 +3,7 @@
 > Hand-off file for Claude Code. Read this whole file first, then work **one phase at a time** and stop at each checkpoint.
 > Pattern source: [Configuring Terraform IaC pipelines… (DevOps.dev, Oct 2026)](https://blog.devops.dev/configuring-terraform-iac-pipelines-to-provision-cloud-resources-in-cloud-and-kubernetes-3ff863fe983e)
 > v2 changes: ECS Fargate instead of EKS · local/dev/prod environments · multi-account-ready · Secrets Manager per env · supply-chain hardening.
+> Status per phase: [`PROGRESS.md`](PROGRESS.md). Locked decisions: [`docs/adr/`](docs/adr/). When this file and an ADR disagree, the ADR wins.
 
 ---
 
@@ -43,7 +44,7 @@ Claude Code: ask the user for any `TODO` value before writing code that depends 
 
 ## 4. Prerequisites
 
-- Docker + Docker Compose, AWS CLI v2, Terraform `>= 1.10` (S3 native locking), tflint, git, `gh` (optional).
+- Docker + Docker Compose, AWS CLI v2, Terraform `>= 1.11` (S3 native locking is GA from 1.11; ADR 0002 B1), tflint, git, `gh`. Tool versions are pinned in `mise.toml`.
 - An admin login to the dev account for the **bootstrap only**. Prefer IAM Identity Center / SSO short-lived credentials over access keys.
 - **Do not** export admin credentials in the shell where Claude Code runs.
 
@@ -63,6 +64,7 @@ prod account (stretch): same module, own state/secrets/roles; deploy = same imag
 ```
 
 Notes from official docs:
+- This repo uses GitHub's immutable OIDC subject: `repo:OWNER@OWNER_ID/REPO@REPO_ID:...` (ADR 0002 B12). Every trust also checks `aud`, `repository_id` and `repository_owner_id`; the plan role pins `ref = refs/pull/*/merge` (so `pull_request_target` is refused), and apply and deploy pin `ref = refs/heads/main` and the workflow `name:` (`terraform-iac`/`terraform-destroy`, `app-deploy`) (ADR 0004 E1, E2).
 - The OIDC `sub` claim contains the environment name when the job references an environment. It contains `pull_request` only when the job does **not** reference an environment. So PR plan jobs must not set `environment:`.
 - ECS `secrets[].valueFrom` takes the full ARN of a Secrets Manager secret or an SSM parameter.
 
@@ -87,6 +89,7 @@ Notes from official docs:
 │       └── prod/                # stretch
 └── .github/workflows/
     ├── oidc-smoke-test.yml
+    ├── repo-guard.yml           # every PR: zizmor, account-ID guard, gitleaks, trigger allowlist (no AWS)
     ├── terraform-iac.yml        # plan on PR, apply on main (per env)
     ├── app-ci.yml               # PR: build, test, scan image (no AWS)
     ├── app-deploy.yml           # main: build once → push ECR dev → deploy dev; promote digest → prod (stretch)
@@ -130,7 +133,7 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 
 | ID | Requirement |
 |---|---|
-| NFR-1 | No AWS access keys stored in GitHub. Role ARNs and region go in **GitHub environment variables** (per env), not secrets. |
+| NFR-1 | No AWS access keys stored in GitHub. Values that contain the account ID (role ARNs, account ID) are GitHub **secrets** (repo level for the PR plan job, environment level for apply and deploy), because variables print unmasked in public logs; the region is a variable (ADR 0003 C10, ADR 0004 E25). |
 | NFR-2 | Explicit `permissions:` per workflow and job. `id-token: write` only where a role is assumed. |
 | NFR-3 | All third-party actions are pinned to a commit SHA (version in a comment). Tool versions are pinned and binaries are checksum-verified. Look up current versions; do not guess. |
 | NFR-4 | `step-security/harden-runner` is the first step of every job (start in `audit` mode). |
@@ -151,7 +154,7 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 1. Write `bootstrap/` per FR-2 to FR-5, parameterized by `accounts/<env>.tfvars`. Output the role ARNs and bucket name.
 2. fmt / validate / tflint locally.
 3. **Checkpoint (user):** `terraform apply -var-file=accounts/dev.tfvars` using SSO credentials, then migrate state into the bucket (key `bootstrap/terraform.tfstate`).
-4. **Checkpoint (user):** create GitHub environment `dev` (required reviewer = self), with variables `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`. Add a repo variable `AWS_PLAN_ROLE_ARN_DEV`.
+4. **Checkpoint (user):** create GitHub environment `dev` (required reviewer = self, `main` only) with secrets `AWS_APPLY_ROLE_ARN` and `AWS_DEPLOY_ROLE_ARN`. Repo secrets `AWS_PLAN_ROLE_ARN_DEV` and `AWS_ACCOUNT_ID_DEV`, repo variable `AWS_REGION` (NFR-1).
 
 ### Phase 2 — OIDC smoke test (~15 min)
 1. `oidc-smoke-test.yml`: assume the plan role, run `aws sts get-caller-identity`.
@@ -194,7 +197,8 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 ## 10. Instructions for Claude Code
 
 - Work phase by phase. At every **Checkpoint**, stop, summarize what was created, and list the exact commands for the user.
-- Look up current versions and SHAs for: `actions/checkout`, `aws-actions/configure-aws-credentials`, `aws-actions/amazon-ecr-login`, `aws-actions/amazon-ecs-render-task-definition`, `aws-actions/amazon-ecs-deploy-task-definition`, `hashicorp/setup-terraform`, tflint setup, `step-security/harden-runner`, and the image scanner.
+- Look up current versions and SHAs for every action and tool you add; never guess. In use: `actions/checkout`, `aws-actions/configure-aws-credentials`, `actions/upload-artifact`, `actions/download-artifact`, `step-security/harden-runner`. Terraform, tflint, Trivy and hadolint are installed as checksum-verified binaries (`scripts/install-ci-tools.sh`), not through setup actions; ECR and ECS steps use the runner's AWS CLI, not the render/deploy actions (ADR 0005 F5, F8).
 - After every change, run `terraform fmt`, `validate` and `tflint`, plus `actionlint` and `hadolint` if available.
 - Never write secrets, real `.env` files or state files to git (NFR-9 applies).
 - Commit per phase, e.g. `feat(app-ecs): fargate service with secrets manager injection`.
+- After each phase checkpoint, update [`PROGRESS.md`](PROGRESS.md): status, PRs, verify result and anything deferred.
