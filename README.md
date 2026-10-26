@@ -78,6 +78,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 | `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint, CI helper self-tests |
 | `make tf-check` | Offline Terraform policy rules (with their self-test), README check, `fmt`, `validate`, `terraform test` (no AWS; uses a temporary data dir, so a real S3 `init` in the checkout does not break it) |
 | `make docs` | Regenerate the `terraform-docs` tables in Terraform READMEs |
+| `make image` / `make smoke` / `make scan` | Build the app image the way CI does, run it like Fargate (read-only, UID 10001, root-owned `/tmp`), scan it with Trivy (fixable HIGH or CRITICAL fails). Not part of `make check` |
 | `make check` | All of the above checks; what a PR must pass |
 
 There is no `apply` or `destroy` target: you run those by hand at the checkpoint (ADR 0001, D15).
@@ -96,6 +97,8 @@ account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap
 |---|---|---|
 | [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
 | | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
+| [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
+| [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**`, or `workflow_dispatch` | In environment `dev` (your approval): build, smoke and scan **before** any AWS credential, then the deploy role pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest**, updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). Fails clearly if the dev stack is down. `name:` must stay `app-deploy` (deploy role trust) |
 | [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist (every workflow: only `pull_request`, `push`, `workflow_dispatch`) and the CI helper self-tests. Its name must never be added to the bootstrap `workflow_names` |
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
 | | `workflow_dispatch` (run it with `--ref main`) | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
@@ -130,7 +133,7 @@ The full checkpoint (log checks, CloudTrail cross-check) is in
 |---|---|---|
 | Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID) |
 | Repo | `AWS_REGION` | variable |
-| Environment `dev` | `AWS_APPLY_ROLE_ARN` | secret |
+| Environment `dev` | `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets |
 | Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
 | Repo | ruleset on the default branch: PR required, no force push, no deletion | ruleset |
 
@@ -142,18 +145,20 @@ role, `app-deploy` the deploy role (ADR 0004 E2).
 
 `envs/dev` uses [`modules/app-ecs`](infra/terraform/modules/app-ecs/README.md): a VPC with two public subnets
 (no NAT), an internet-facing ALB on HTTP 80, one Fargate task (0.25 vCPU, 0.5 GB, `ROLLING` with circuit
-breaker rollback), ECR, a 7-day log group and the secret shell `sis/dev/app-api-key`. Until Phase 4 the task
-runs a pinned placeholder image that only answers `/health`.
+breaker rollback), ECR, a 7-day log group and the secret shell `sis/dev/app-api-key`. Terraform owns the shape
+of the task definition; `app-deploy` only swaps in the app image by digest (ADR 0005 F2). The app runs as UID
+10001 with a read-only root and must never write to disk.
 
 The ALB and Fargate bill by the hour. **Destroy `envs/dev` at the end of every session** with the teardown
 steps in [ADR 0004 B8](docs/adr/0004-phase-3-infra-pipeline-ecs.md) (a local, admin-run destroy until Phase 5
 adds `terraform-destroy.yml`), and re-create it next time with **Run workflow** on `terraform-iac`. The
 bootstrap stack (state bucket, roles, budget) costs close to nothing and stays.
 
-After the first apply the service waits for the secret value: set it (you, never Claude) and force a new
-deployment, as in ADR 0004 B5.
+Re-create order each session: **Run workflow** on `terraform-iac` and approve it, set the secret value (you,
+never Claude; one line in your own terminal, ADR 0004 B5), then **Run workflow** on `app-deploy` and approve it.
+Until `app-deploy` runs, the service has no app image and stays unhealthy.
 
-## Tonight (Phase 0 to 3)
+## Phases
 
 | Phase | Needs AWS? | You do by hand |
 |---|---|---|
@@ -161,5 +166,6 @@ deployment, as in ADR 0004 B5.
 | 1 Bootstrap dev account | **Yes**: dev account ID, SSO admin login, budget email | `terraform apply` bootstrap, migrate state, GitHub environment `dev` + variables |
 | 2 OIDC smoke test | Yes (roles from Phase 1) | Set secret `AWS_PLAN_ROLE_ARN_DEV`, read the assumed-role ARN in the PR run, run N1 after merge |
 | 3 Infra pipeline + ECS | Yes | Re-apply bootstrap (PR 1), environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
+| 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
 
 Cost: ALB + Fargate bill hourly. Destroy `envs/dev` at the end of every session.
