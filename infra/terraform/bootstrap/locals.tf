@@ -73,7 +73,6 @@ locals {
     "${local.iam_arn}:role/${local.resource_names.ecs_exec_role}",
     "${local.iam_arn}:role/${local.resource_names.ecs_task_role}",
   ]
-  ecs_role_pattern = "${local.iam_arn}:role/${local.name}-ecs-*"
 
   ecr_repo_pattern = "${local.svc_arn["ecr"]}:repository/${local.name}-*"
   ecr_repo_app     = "${local.svc_arn["ecr"]}:repository/${local.resource_names.ecr_repository}"

@@ -408,7 +408,7 @@ data "aws_iam_policy_document" "apply" {
       "iam:UpdateAssumeRolePolicy",
       "iam:DeleteRole",
     ]
-    resources = [local.ecs_role_pattern]
+    resources = local.ecs_role_arns
 
     condition {
       test     = "StringEquals"
@@ -432,7 +432,7 @@ data "aws_iam_policy_document" "apply" {
       "iam:UpdateRole",
       "iam:UpdateRoleDescription",
     ]
-    resources = [local.ecs_role_pattern]
+    resources = local.ecs_role_arns
   }
 
   statement {
