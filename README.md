@@ -94,6 +94,8 @@ account) is in [`infra/terraform/bootstrap/README.md`](infra/terraform/bootstrap
 
 | Workflow | Trigger | Does |
 |---|---|---|
+| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint, trigger allowlist, account-ID guard), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID) |
+| | push to `main` touching `envs/dev` or `modules/`, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file | Assumes `sis-dev-gha-plan` through OIDC and runs `aws sts get-caller-identity`; prints the assumed-role ARN with the account masked |
 | | `workflow_dispatch` (run it with `--ref main`) | Negative test N1: the plan role must refuse a non-PR token, so the job passes only when the assume step is denied |
 
@@ -121,6 +123,34 @@ gh workflow run oidc-smoke-test.yml --ref main
 The full checkpoint (log checks, CloudTrail cross-check) is in
 [ADR 0003](docs/adr/0003-phase-2-oidc-smoke-test.md#checkpoint-steps-the-user-runs-these-claude-never-does-nfr-9).
 
+### Repo configuration the pipelines read
+
+| Where | Name | Kind |
+|---|---|---|
+| Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID) |
+| Repo | `AWS_REGION` | variable |
+| Environment `dev` | `AWS_APPLY_ROLE_ARN` | secret |
+| Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
+
+The state bucket name is derived from the account ID and region, so it is not stored anywhere (ADR 0004 E22).
+Workflow `name:` values are part of the AWS trust: `terraform-iac` and `terraform-destroy` may use the apply
+role, `app-deploy` the deploy role (ADR 0004 E2).
+
+### Dev stack, cost and teardown
+
+`envs/dev` uses [`modules/app-ecs`](infra/terraform/modules/app-ecs/README.md): a VPC with two public subnets
+(no NAT), an internet-facing ALB on HTTP 80, one Fargate task (0.25 vCPU, 0.5 GB, `ROLLING` with circuit
+breaker rollback), ECR, a 7-day log group and the secret shell `sis/dev/app-api-key`. Until Phase 4 the task
+runs a pinned placeholder image that only answers `/health`.
+
+The ALB and Fargate bill by the hour. **Destroy `envs/dev` at the end of every session** with the teardown
+steps in [ADR 0004 B8](docs/adr/0004-phase-3-infra-pipeline-ecs.md) (a local, admin-run destroy until Phase 5
+adds `terraform-destroy.yml`), and re-create it next time with **Run workflow** on `terraform-iac`. The
+bootstrap stack (state bucket, roles, budget) costs close to nothing and stays.
+
+After the first apply the service waits for the secret value: set it (you, never Claude) and force a new
+deployment, as in ADR 0004 B5.
+
 ## Tonight (Phase 0 to 3)
 
 | Phase | Needs AWS? | You do by hand |
@@ -128,6 +158,6 @@ The full checkpoint (log checks, CloudTrail cross-check) is in
 | 0 Scaffold + local app | No | `docker compose up`, check `/`, `/admin`, `BREAK=true` |
 | 1 Bootstrap dev account | **Yes**: dev account ID, SSO admin login, budget email | `terraform apply` bootstrap, migrate state, GitHub environment `dev` + variables |
 | 2 OIDC smoke test | Yes (roles from Phase 1) | Set secret `AWS_PLAN_ROLE_ARN_DEV`, read the assumed-role ARN in the PR run, run N1 after merge |
-| 3 Infra pipeline + ECS | Yes | Approve apply, `put-secret-value`, negative tests |
+| 3 Infra pipeline + ECS | Yes | Re-apply bootstrap (PR 1), environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
 
 Cost: ALB + Fargate bill hourly. Destroy `envs/dev` at the end of every session.
