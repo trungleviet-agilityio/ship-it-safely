@@ -1,7 +1,7 @@
 # ADR 0004: Phase 3 infra pipeline and ECS
 
-- Status: proposed
-- Date: 2026-10-23
+- Status: accepted
+- Date: 2026-10-23 (accepted 2026-10-26)
 
 ## Context
 
@@ -206,15 +206,25 @@ Wildcards: `ecr:GetAuthorizationToken` on `*` in the execution role (B20, no res
   - README: a Phase 3 section (pipeline, secret step, cost, teardown).
   - Optionally a Phase 3 diagram.
 
-## Open questions for the user
+## Decision log (open questions resolved)
 
-- **Q1.** ALB ingress: open `0.0.0.0/0` (recommended for the lab; `/admin` is key-protected, R6), or your IP only? Your IP is personal data, so it would go in a repo secret passed as `TF_VAR_alb_ingress_cidrs`.
-- **Q2.** Deliver as two PRs, bootstrap and tooling first (E31, recommended), or one PR with the bootstrap applied from the branch before merging?
-- **Q3.** Secret `recovery_window_in_days = 0` (recommended: clean re-create, new value each session), or 7 (the value survives a teardown, but re-create needs a manual restore and import)?
-- **Q4.** Accept R4 (subnet and SG placement not checked by IAM) for the lab?
-- **Q5.** Accept E2, pinning `workflow` names on the apply and deploy trust now? It binds Phase 4 to `name: app-deploy` and Phase 5 to `name: terraform-destroy`.
-- **Q6.** Fargate `X86_64` (recommended) or `ARM64`?
-- **Q7.** Add a branch ruleset on `main` requiring a PR, so nothing reaches the apply job without a reviewed plan? The plan checks stay non-required, because path filters would leave them "Pending".
+On 2026-10-26 the user delegated these choices to the orchestrator: "decide by best practice, and record a
+pro and a con for each". Each entry below can be reversed in a later ADR. Q2 also absorbs the user's
+decisions on the Phase 2 findings (M1, M2), which this PR 1 now carries.
+
+| Q | Decision | Pro | Con | Reversal cost |
+|---|---|---|---|---|
+| Q1 | ALB ingress `0.0.0.0/0` on port 80 | The ALB URL works from any network (laptop, phone, CI checks) with no personal data in the repo or secrets; matches PLAN §2 (public ALB) | The app is reachable by anyone, so scanners will hit `/` and `/admin`; mitigated by the key check on `/admin` (constant-time compare), no data behind the app and teardown after every session | Low: set `alb_ingress_cidrs` (a repo secret passed as `TF_VAR_alb_ingress_cidrs`) and re-apply |
+| Q2 | Two PRs (E31). **PR 1** = this branch: Phase 2 findings M1 (E1) and M2 (E30), E2, E3, E27, E28 and their tests. **PR 2** = module, `envs/dev`, E29, `terraform-iac.yml` | One bootstrap re-apply covers every trust and policy change; PR 2's own plan run then proves E1 did not lock out PR plans; small, reviewable diffs | Two review and merge cycles; PR 2 must be rebased on `main` after PR 1 merges | Low |
+| Q3 | Secret `recovery_window_in_days = 0` | Teardown and re-create in one session work without "secret scheduled for deletion" errors; no manual restore or import | The value is gone at teardown: the user sets it again each session with `put-secret-value`, and an accidental destroy cannot be undone | Low: set `secret_recovery_window_days` (7 to 30) |
+| Q4 | Accept **R4**: IAM does not check which subnets and security groups the ALB and ECS service use | No IAM condition can express it (the ELB and ECS keys take IDs that do not exist when bootstrap is applied); a fake fix would add complexity without protection | An approved apply could place the ALB or tasks in another VPC's subnets; mitigated by PR plan review, the `dev` environment approval and a dedicated dev account with no other VPCs in use | Medium: needs an SCP or a post-apply check if the account ever hosts other workloads |
+| Q5 | Accept **E2**: pin `workflow` names on the apply (`terraform-iac`, `terraform-destroy`) and deploy (`app-deploy`) trust | Closes most of R2: an approved job in another workflow can no longer pick the apply or deploy role; costs one condition per role | The `workflow` claim is the file's `name:`, which any writer can set, so it narrows mistakes more than attacks; Phase 4 and 5 must use exactly these names or a bootstrap change is needed | Low: edit the list and re-apply bootstrap |
+| Q6 | Fargate `X86_64` | Matches the GitHub `ubuntu-24.04` x86 runners, so Phase 4 builds natively with no QEMU or multi-arch manifest; the `python:3.13-slim` digest already resolves for amd64 | About 20% more expensive per vCPU-hour than Graviton (`ARM64`); a few cents per session at 0.25 vCPU | Low: switch `runtime_platform` and build `linux/arm64` |
+| Q7 | Add a `main` branch ruleset: require a pull request, block force pushes and deletions; plan checks stay non-required | Nothing reaches the apply job without a reviewed plan comment; protects the state history behind the `ref = refs/heads/main` trust pin | Solo friction: even one-line fixes need a PR; required approvals are set to 0 because GitHub does not count self-approval, so review is still on the honour system | Low: delete or relax the ruleset in Settings |
+
+Defaults the orchestrator kept from the architect's recommendations without a separate question: no
+`wait_for_steady_state` on the first apply (Finding 4), no HTTPS (PLAN §2), Container Insights off (cost),
+and CloudTrail Event history instead of a trail (ADR 0002 Q2).
 
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
@@ -286,7 +296,7 @@ Web UI equivalent:
 4. **Environment secrets > Add environment secret**: `AWS_APPLY_ROLE_ARN` = the output of `terraform -chdir=infra/terraform/bootstrap output -raw apply_role_arn`.
 5. **Settings > Secrets and variables > Actions > Repository secrets > New repository secret**: `AWS_ACCOUNT_ID_DEV` = the dev account ID.
 
-**B2. (Optional, Q7) Ruleset on `main`:** Settings > Rules > Rulesets > New branch ruleset, target `main`, tick "Require a pull request before merging".
+**B2. Ruleset on `main` (decided, Q7):** Settings > Rules > Rulesets > New branch ruleset, target `main`, tick "Require a pull request before merging".
 
 **B3. Read the PR 2 plan (the orchestrator opens PR 2)**
 
