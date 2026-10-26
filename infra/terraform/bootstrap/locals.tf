@@ -24,10 +24,19 @@ locals {
   )
   oidc_host = "token.actions.githubusercontent.com"
 
+  # Workflow names (E2): the `name:` of the workflow file. Phase 3 (terraform-iac), Phase 4 (app-deploy) and
+  # Phase 5 (terraform-destroy) must use exactly these.
+  workflow_names = {
+    apply  = ["terraform-iac", "terraform-destroy"]
+    deploy = ["app-deploy"]
+  }
+
   trust = {
-    plan   = { sub = "${local.gh_sub_prefix}:pull_request", ref = null }
-    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main" }
-    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main" }
+    # Plan: a pull_request run has ref refs/pull/<N>/merge; a pull_request_target run has the base ref, so the
+    # StringLike (the only one in any trust policy, wildcard = PR number only) refuses it even though sub matches.
+    plan   = { sub = "${local.gh_sub_prefix}:pull_request", ref = "refs/pull/*/merge", ref_test = "StringLike", workflows = null }
+    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.apply }
+    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.deploy }
   }
 
   # Name contract that Phase 3 must follow (ADR 0002).
@@ -64,7 +73,6 @@ locals {
     "${local.iam_arn}:role/${local.resource_names.ecs_exec_role}",
     "${local.iam_arn}:role/${local.resource_names.ecs_task_role}",
   ]
-  ecs_role_pattern = "${local.iam_arn}:role/${local.name}-ecs-*"
 
   ecr_repo_pattern = "${local.svc_arn["ecr"]}:repository/${local.name}-*"
   ecr_repo_app     = "${local.svc_arn["ecr"]}:repository/${local.resource_names.ecr_repository}"

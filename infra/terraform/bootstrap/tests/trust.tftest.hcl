@@ -1,4 +1,5 @@
-# OIDC trust: exact subjects, StringEquals only, immutable IDs, ref pin on apply and deploy (B12, B13).
+# OIDC trust: exact subjects, immutable IDs, ref pin on every role (B12, B13). The only StringLike is the
+# plan role's pull request merge ref, which keeps pull_request_target runs (base ref) out.
 mock_provider "aws" {
   override_during = plan
 
@@ -51,11 +52,38 @@ run "conditions_are_exact" {
   command = plan
 
   assert {
-    condition = alltrue([
-      for k, d in data.aws_iam_policy_document.trust :
-      alltrue([for c in d.statement[0].condition : c.test == "StringEquals"])
-    ])
-    error_message = "every trust condition must use StringEquals"
+    condition = length(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : c if c.test == "StringLike"
+      ]
+    ])) == 1
+    error_message = "exactly one StringLike is allowed across all trust policies"
+  }
+
+  assert {
+    condition = [
+      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c.variable
+      if c.test == "StringLike"
+    ] == ["token.actions.githubusercontent.com:ref"]
+    error_message = "the only StringLike must be on the plan role ref"
+  }
+
+  assert {
+    condition = flatten([
+      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c.values
+      if c.test == "StringLike"
+    ]) == ["refs/pull/*/merge"]
+    error_message = "the only StringLike value must be exactly refs/pull/*/merge"
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : c.test == "StringEquals"
+        if !(k == "plan" && c.variable == "token.actions.githubusercontent.com:ref")
+      ]
+    ]))
+    error_message = "every condition except the plan ref must use StringEquals"
   }
 
   assert {
@@ -87,7 +115,7 @@ run "conditions_are_exact" {
   }
 }
 
-run "ref_pinned_on_apply_and_deploy_only" {
+run "ref_pinned_on_every_role" {
   command = plan
 
   assert {
@@ -101,11 +129,11 @@ run "ref_pinned_on_apply_and_deploy_only" {
   }
 
   assert {
-    condition = length([
-      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c
+    condition = flatten([
+      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c.values
       if c.variable == "token.actions.githubusercontent.com:ref"
-    ]) == 0
-    error_message = "plan must not pin ref (varies per PR)"
+    ]) == ["refs/pull/*/merge"]
+    error_message = "plan must require a pull request merge ref"
   }
 }
 
@@ -117,10 +145,10 @@ run "no_wildcards_and_session_duration" {
       for k, d in data.aws_iam_policy_document.trust : [
         for c in d.statement[0].condition : [
           for v in c.values : !strcontains(v, "*")
-        ] if c.variable == "token.actions.githubusercontent.com:sub"
+        ] if contains(["aud", "sub", "repository_id", "repository_owner_id"], trimprefix(c.variable, "token.actions.githubusercontent.com:"))
       ]
     ]))
-    error_message = "no sub value may contain a wildcard"
+    error_message = "no aud, sub or repository value may contain a wildcard"
   }
 
   assert {
@@ -151,5 +179,55 @@ run "name_based_subject_fallback" {
   assert {
     condition     = local.gh_sub_prefix == "repo:trungleviet-agilityio/ship-it-safely"
     error_message = "fallback prefix must use names"
+  }
+}
+
+run "workflow_names_pinned" {
+  command = plan
+
+  assert {
+    condition = toset(flatten([
+      for c in data.aws_iam_policy_document.trust["apply"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
+    ])) == toset(["terraform-iac", "terraform-destroy"])
+    error_message = "apply workflow must be exactly terraform-iac and terraform-destroy"
+  }
+
+  assert {
+    condition = toset(flatten([
+      for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
+    ])) == toset(["app-deploy"])
+    error_message = "deploy workflow must be exactly app-deploy"
+  }
+
+  assert {
+    condition = length([
+      for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c
+      if c.variable == "token.actions.githubusercontent.com:workflow"
+    ]) == 0
+    error_message = "plan must not pin workflow (a PR controls its own workflow file)"
+  }
+
+  assert {
+    condition     = local.workflow_names == { apply = ["terraform-iac", "terraform-destroy"], deploy = ["app-deploy"] }
+    error_message = "workflow name contract"
+  }
+}
+
+run "only_documented_condition_keys" {
+  command = plan
+
+  # Documented GitHub keys in the IAM condition keys reference. event_name is not one of them.
+  assert {
+    condition = alltrue(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : contains(
+          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "workflow"],
+          trimprefix(c.variable, "token.actions.githubusercontent.com:")
+        )
+      ]
+    ]))
+    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, workflow"
   }
 }

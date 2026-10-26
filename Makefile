@@ -31,7 +31,8 @@ lint: ## pre-commit hooks on all files, plus hadolint, shellcheck and actionlint
 	shellcheck -x scripts/*.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 
-tf-check: ## Offline Terraform README check, fmt, validate and test (no AWS)
+tf-check: ## Offline Terraform policy rules (tf-policy.sh), README check, fmt, validate and test (no AWS)
+	scripts/tf-policy-selftest.sh
 	scripts/tf-check.sh
 
 docs: ## Regenerate terraform-docs tables in every Terraform README

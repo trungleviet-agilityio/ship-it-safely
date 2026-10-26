@@ -124,7 +124,11 @@ disagree, the ADR wins; update this file.
 - OIDC trust policies match `sub` exactly (`StringEquals`, never a wildcard on the repo) and check
   `aud = sts.amazonaws.com`, `repository_id` and `repository_owner_id`. The `sub` uses GitHub's
   immutable format `repo:OWNER@OWNER_ID/REPO@REPO_ID:...`. Apply and deploy roles also pin
-  `ref = refs/heads/main`. Role `max_session_duration = 3600` (NFR-7).
+  `ref = refs/heads/main`. The plan role pins `StringLike ref = refs/pull/*/merge`, the only
+  `StringLike` allowed in a trust policy, so a `pull_request_target` run (base ref) is refused.
+  IAM has no `event_name` key for GitHub. Apply and deploy roles also pin the `workflow` name
+  (`terraform-iac`, `terraform-destroy`; `app-deploy`), so a workflow's `name:` must match the
+  bootstrap `workflow_names` output (ADR 0004 E2). Role `max_session_duration = 3600` (NFR-7).
 
 ### Secrets and state
 

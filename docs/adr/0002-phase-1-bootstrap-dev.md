@@ -81,15 +81,24 @@ Findings that change earlier assumptions:
 |---|---|---|
 | B11 | **OIDC provider**: `url = "https://token.actions.githubusercontent.com"`, `client_id_list = ["sts.amazonaws.com"]`, **no `thumbprint_list`**. For GitHub, AWS checks TLS against its own trusted root CAs and keeps any thumbprint without using it. `configure-aws-credentials` defaults its audience to `sts.amazonaws.com`. | Provider docs (`thumbprint_list` optional); IAM thumbprint page; action README |
 | B12 | **Subject format: the immutable one with IDs.** `local.gh_sub_prefix = "repo:${github_owner}@${github_owner_id}/${github_repo}@${github_repo_id}"`. If `github_immutable_subject = false` it falls back to `repo:${github_owner}/${github_repo}`. This repo already has `use_immutable_subject = true`. The checkpoint compares GitHub's `sub_claim_prefix` with the Terraform output `oidc_sub_prefix` before Phase 2. | GitHub OIDC reference and 2026-04-23 changelog; GitHub REST OIDC |
-| B13 | **Trust conditions.** All use `StringEquals`, never `StringLike`. The only `Action` is `sts:AssumeRoleWithWebIdentity`. The principal is the OIDC provider ARN. The `repository_id` and `repository_owner_id` keys are immutable IDs, which AWS recommends over names. Pinning `ref` on apply and deploy means a PR branch that adds `environment: dev` to a job still cannot assume them, even if the environment's branch rule were misconfigured (PR refs are `refs/pull/N/merge`). `job_workflow_ref` is not pinned: AWS documents it for reusable workflows only, and pinning it would tie trust to file paths that do not exist yet. | IAM "Configuring a role for GitHub OIDC"; IAM condition keys, GitHub tab |
+| B13 | **Trust conditions.** All use `StringEquals`, except one `StringLike` on the plan role's `ref` (amended after the Phase 2 review, see below). The only `Action` is `sts:AssumeRoleWithWebIdentity`. The principal is the OIDC provider ARN. The `repository_id` and `repository_owner_id` keys are immutable IDs, which AWS recommends over names. Pinning `ref` on apply and deploy means a PR branch that adds `environment: dev` to a job still cannot assume them, even if the environment's branch rule were misconfigured (PR refs are `refs/pull/N/merge`). `job_workflow_ref` is not pinned: AWS documents it for reusable workflows only, and pinning it would tie trust to file paths that do not exist yet. | IAM "Configuring a role for GitHub OIDC"; IAM condition keys, GitHub tab |
 
 Trust table (`<P>` = `gh_sub_prefix`, `<env>` = `dev`):
 
 | Role | `aud` | `sub` | `repository_id` | `repository_owner_id` | `ref` |
 |---|---|---|---|---|---|
-| `sis-dev-gha-plan` | `sts.amazonaws.com` | `<P>:pull_request` | `var.github_repo_id` | `var.github_owner_id` | not pinned (varies per PR) |
+| `sis-dev-gha-plan` | `sts.amazonaws.com` | `<P>:pull_request` | `var.github_repo_id` | `var.github_owner_id` | `StringLike refs/pull/*/merge` |
 | `sis-dev-gha-apply` | `sts.amazonaws.com` | `<P>:environment:dev` | same | same | `refs/heads/main` |
 | `sis-dev-gha-deploy` | `sts.amazonaws.com` | `<P>:environment:dev` | same | same | `refs/heads/main` |
+
+**Amended 2026-10-26 (Phase 2 security review, M1).** A `pull_request_target` run gets the same
+`sub` (`...:pull_request`) as a `pull_request` run, with secrets and an ID token even for fork PRs. IAM
+has no `event_name` condition key for GitHub (the GitHub tab of the IAM condition keys page lists actor,
+actor_id, job_workflow_ref, repository, repository_id, repository_owner_id, workflow, ref, environment and
+enterprise_id). So the plan role also requires `StringLike token.actions.githubusercontent.com:ref =
+refs/pull/*/merge`: a `pull_request` run has ref `refs/pull/<N>/merge`, while a `pull_request_target` run
+has the base ref (`refs/heads/main`) and is refused. The wildcard covers only the PR number; `sub`,
+`repository_id` and `repository_owner_id` stay `StringEquals`. The user re-applies bootstrap by hand.
 
 All three roles: `max_session_duration = 3600` (NFR-7), path `/`. Role names follow `<prefix>-<env>-<thing>`
 from CODING_STANDARDS rather than the `<prefix>-gha-*` shorthand in the PLAN §5 diagram. That keeps the
@@ -177,7 +186,7 @@ the official Service Reference JSON.
 | B22 | Outputs: `state_bucket_name`, `plan_role_arn`, `apply_role_arn`, `deploy_role_arn`, `oidc_provider_arn`, `ecs_permissions_boundary_arn`, `oidc_sub_prefix`, `aws_region`, `resource_names` (the name contract). None are sensitive. They contain the account ID, which is not a secret, but the user copies them into GitHub variables only. |
 | B23 | GitHub variables (NFR-1, never secrets). Amended by ADR 0003 C10: `AWS_PLAN_ROLE_ARN_DEV` is a repo secret, so the account ID stays out of public logs. Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`, `AWS_ACCOUNT_ID`. Repo level, because the PR plan job has no environment: `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`, `AWS_REGION`. The bucket and account variables are first used in Phase 3 (`-backend-config` and `TF_VAR_aws_account_id`, D2). Environment `dev` gets: required reviewer = the user, `prevent_self_review = false` (solo lab), and a custom deployment branch policy allowing only `main`. |
 | B24 | **Tests**: `terraform test` with `mock_provider "aws"` (D12). Use `mock_data "aws_caller_identity"` with `account_id = "123456789012"`, `mock_data "aws_partition"` with `partition = "aws"`, and `mock_data "aws_iam_policy_document"` with `json = "{}"`. Assertions read locals and the `statement` arguments of the policy documents. Mocks keep configured arguments; only computed ones such as `json` are faked. Use `command = plan` and `override_during = plan`. |
-| B25 | **Account-ID commit guard**: a local `pygrep` hook in `.pre-commit-config.yaml` rejects a bare 12-digit number in `^infra/.*\.(tf|hcl|tfvars\.example)$`. It excludes `.terraform.lock.hcl` and allows the AWS doc example `123456789012`. Regex: `(?<![0-9])(?!123456789012)[0-9]{12}(?![0-9])`. gitleaks does not look for account IDs. |
+| B25 | **Account-ID commit guard** (widened by ADR 0003 C15 and the 2026-10-26 M2 decision: it now scans every text file except the provider lock file, with alphanumeric boundaries, and allows `123456789012`, `111111111111` and `222222222222`; the original scope follows): a local `pygrep` hook in `.pre-commit-config.yaml` rejects a bare 12-digit number in `^infra/.*\.(tf|hcl|tfvars\.example)$`. It excludes `.terraform.lock.hcl` and allows the AWS doc example `123456789012`. Regex: `(?<![0-9])(?!123456789012)[0-9]{12}(?![0-9])`. gitleaks does not look for account IDs. |
 
 ## Alternatives considered
 

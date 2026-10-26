@@ -43,3 +43,8 @@ output "resource_names" {
   description = "Name contract that envs/dev must follow (ADR 0002)."
   value       = local.resource_names
 }
+
+output "workflow_names" {
+  description = "Workflow names the apply and deploy roles trust (the name: of the workflow file). Phases 3 to 5 must match."
+  value       = local.workflow_names
+}
