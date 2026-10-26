@@ -214,7 +214,7 @@ AWS_PROFILE=sis-dev-admin aws iam simulate-principal-policy --policy-source-arn 
 
 ```bash
 gh pr checks <PR> --repo trungleviet-agilityio/ship-it-safely --watch
-# repo-guard guard, terraform-iac checks, plan, plan-role-guardrails, comment: green; plan comment shows 0 changes
+# repo-guard guard, terraform-iac checks, plan, plan-role-guardrails, comment: green; plan comment shows add 27, change 0, destroy 0 while dev is torn down (0 changes if it is up)
 ```
 
 **2. Merge.** Web UI: open the PR, then Squash and merge (or `gh pr merge <PR> --squash` if your token allows it).
