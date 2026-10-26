@@ -172,6 +172,19 @@ only one that changes bootstrap, so it adds one re-apply to the checkpoint.
 | Q5 | Defer the ALB CIDR secret to Phase 6, with the index-key and mask design | No IP leak through addresses or plan logs; Phase 5 stays small | The ALB stays open to `0.0.0.0/0` (R6) until then; mitigated by teardown and the `/admin` key |
 | Q6 | Clean `ACTIVE` revisions in every destroy (G12) | Clean slate; closes F23; no new permission | One more script; a revision registered by a racing deploy can remain until the next destroy |
 
+**Verify findings (decided by the orchestrator on 2026-10-26, same delegation):**
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| Reviewer M: the apply role may also need `ecr:BatchDeleteImage` for a forced repository delete | **No change.** The ECR `DeleteRepository` API reference says that with `force` ECR deletes the contents "on your behalf"; checkpoint step 7 still stops on that AccessDenied | No pre-emptive permission | If the documentation is wrong, one bootstrap round at the checkpoint |
+| Security L3: `ecs_service_status` mapped any unexpected answer to MISSING, letting the revision cleanup run against a live service | **Fix**: only `None`, `MISSING` or empty mean MISSING; anything else fails. The helper sets `SERVICE_STATUS` instead of printing | Fails closed; callers cannot forget `|| exit 1` | A future ECS status needs a one-line update |
+| Security L4: the result summary printed planned deletes as done after a failed apply | **Fix**: it reports "N planned; apply failed" unless the apply step succeeded | An approver skimming a red run cannot conclude the stack is gone | None worth noting |
+| Security I1: destroy-time provisioners and `action_invocations` never appear in `resource_changes` | **Fix**: the guard refuses any `action_invocations`, and `tf-policy.sh` bans `provisioner` and `data "external"` in modules and envs | Closes a code-execution path a reviewed merge could add | Those Terraform features become unavailable in this repo without a policy change |
+| Security L1, L2: README `force-unlock` and bucket emptying had no preconditions | **Fix (docs)**: check no run is active and the lock matches the dead run; check `state list` is empty and only bootstrap resources remain; name the bucket and the 1000-key batch limit | Prevents two writers on the state and deleting the last record of live resources | Longer instructions |
+| Reviewer: summary after the guard, lost count on a mid-loop failure, no retry on ECS eventual consistency | **Fix**: summary first, count from an EXIT trap, one retry after a short sleep | A refused plan still shows its table; a partial cleanup reports what it did; fewer false reds | Slightly longer cleanup script |
+| Simplifier: `ENV` as the one key, `tf-init.sh` by ENV, `assert_denied`, N2 and N3 into a tested script, one account-ID regex, one role-name helper, split `ci-selftest.sh` by area, ARN locals | **Fix now** (senior clean-code standard) | Prod in Phase 7 becomes a short addition, not a copy; every guard is tested offline | A large mechanical diff in this phase |
+| Simplifier: composite action for the AWS preamble of every job | **Defer to Phase 7** | Each job's role, environment and `id-token` stay visible in its own file; pin and zizmor checks need no extension now | About 60 duplicated workflow lines remain until prod forces the refactor |
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>` (the orchestrator fills it from `CLAUDE.local.md` when printing) and `<PR>`. Each line is self-contained (lessons log 5). Run long waits in your own terminal.
