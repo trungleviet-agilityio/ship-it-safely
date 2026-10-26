@@ -166,12 +166,29 @@ disagree, the ADR wins; update this file.
   Pass them through `env:` and quote them in the shell.
 - Set `timeout-minutes` on every job and `concurrency` on workflows that change AWS state.
 
+- Steps that run third-party or build code (build, tests, scanners) never share a job with `id-token: write`,
+  an `environment:` or secrets: GitHub permissions are per job, not per step. Hand results to the credentialed
+  job as an artifact whose checksum is verified before use (ADR 0005, H1 decision).
+- Prefer the runner's AWS CLI over third-party actions for steps that hold credentials; install scanners as
+  checksum-verified binaries, never through their actions.
+- Workflow steps stay short: logic longer than a few lines lives in `scripts/` with a usage line and a
+  `ci-selftest.sh` case, so it can run and be tested outside CI.
+- Images are single-platform `linux/amd64`, built once, pushed once by an immutable git-SHA tag, and deployed by
+  digest. Never print the registry host, image URI or any ARN with the account ID.
+
+## App runtime (Fargate)
+
+- The app runs as UID 10001 with a read-only root filesystem and a root-owned `/tmp`: it must never write to
+  disk. `make smoke` runs the image that way.
+- Handle SIGTERM and exit 0 quickly, so rolling deploys and `docker compose down` are fast.
+- Never show the ECS metadata `Image` field (it holds the registry host with the account ID); `ImageID` only.
+
 ## Tool versions (`mise.toml`)
 
 - Every CLI the repo runs locally (Terraform, linters, scanners, pre-commit, uv) is pinned to an exact
   version in `mise.toml`, and `mise install` sets up a machine. Do not document `brew install` for
   them.
-- CI pins the same versions (Terraform in `hashicorp/setup-terraform`, tools by version and
+- CI pins the same versions (Terraform in `a checksum-verified Terraform binary (`scripts/install-ci-tools.sh`)`, tools by version and
   checksum), so local and CI results match (NFR-3).
 - Bump a version in its own `chore(repo)` commit and run `make check` before pushing.
 - Python packages stay in `pyproject.toml` and run through `uv` / `uvx`, not mise.

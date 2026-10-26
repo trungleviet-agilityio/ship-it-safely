@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-23 (accepted 2026-10-26)
+- Partly superseded by ADR 0005 (Phase 4): `container_command` and the placeholder are removed (E6, E13, E17), and after the secret value is set the next step is the `app-deploy` run, not `--force-new-deployment` (B5).
 
 ## Context
 

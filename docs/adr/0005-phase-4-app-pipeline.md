@@ -241,6 +241,20 @@ can be reversed in a later ADR.
 | Q6 | **No** ELB describe permissions for the deploy role in Phase 4 | Least privilege: a `COMPLETED` ECS rollout already means the ALB health checks passed | The pipeline cannot curl `/version` itself; the user checks the URL at the checkpoint | Low: a bootstrap change in Phase 7 if prod needs it |
 | Q7 | **The orchestrator opens PR 2** (the one-line checkpoint change) after PR 1 is merged and deployed; the user merges and approves | Proves the routine path (app-only change: app-ci on PR, app-deploy after merge) with no infra noise | One more PR cycle in the phase | None |
 
+**Build and verify findings (decided by the orchestrator on 2026-10-26, same delegation; the user also asked
+for senior-level clean code, so duplication is fixed now, not deferred):**
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| Build: Trivy found 4 fixed HIGH in pip, setuptools and their vendored libraries on the newest base | **Uninstall pip, setuptools and wheel in the runtime stage** instead of a `.trivyignore` | Smaller attack surface, no ignore list to maintain, the app is stdlib only | No `pip` inside the container for debugging |
+| Security H1: `id-token: write` and the environment apply to every step of a job, so build, smoke and Trivy could mint the deploy token; F9 as written did not hold | **Split app-deploy into `build-scan` (no id-token, no environment, no secrets) and `deploy`**; the image moves as a short-lived artifact whose sha256 is checked before `docker load`. This supersedes the F9 single-job wording | A compromised scanner or build step can no longer reach the deploy role or the job's secrets | The image tar becomes a public workflow artifact for one day (it holds no secret or account ID); about one extra minute per deploy |
+| Security M1: the render step copied every container field except `image` | **Validate the shape Terraform owns** (container key allowlist; `user`, `readonlyRootFilesystem`, `environment` names, log group, `/tmp` volume pinned) | A tampered revision cannot persist through later deploys | Any intentional Terraform change to those fields needs the render rules updated in the same PR |
+| Security L1: Trivy DB pulled by a moving tag | **Accept**; log the DB `UpdatedAt` and version in the summary | Fresh vulnerability data on every scan | A poisoned or stale mirror could hide findings; mitigated by visibility and ECR scan on push |
+| Security L2: deploy trust pins the workflow `name:`, not its file path | **Defer to Phase 6** (evaluate `job_workflow_ref` with a reusable workflow) | No bootstrap change in this phase | A merged workflow named `app-deploy` could still use the role after one approval; `repo-guard`, review and the `main` ruleset limit it |
+| Security L3 and reviewer 2, 3, 4, 5, 6, 8 | **Fix now**: fail-fast shells, wait loop tolerates 3 transient API errors with redacted stderr, job-level concurrency, N4 after the preflight without the unreachable branch, jq null guards, role name only in the summary, complete path filters | Correct failure messages and no displaced deploys | None worth noting |
+| Reviewer 1: possible hadolint DL3059 on two consecutive `RUN` lines | **No change**: `make lint` (hadolint) passes on the merged tree | No churn | Revisit if hadolint's default threshold changes |
+| Clean code (simplifier and reviewer) | **Fix now**: inline deploy bash moves to `ecr-push.sh` and `ecs-preflight.sh` with a shared `run_capture` helper; one build, smoke and scan recipe for both workflows and `make`; one `assert-no-account-id.sh` and one `check-aws-config.sh` reused by `terraform-iac.yml`; deploy scripts take `ENV` so prod is a short second job, not a copy | Each piece is tested in `ci-selftest`; prod in Phase 7 reuses the scripts | More files in `scripts/`; `terraform-iac.yml` changes in this PR, which is acceptable because PR 1 already triggers an apply |
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>` (from `CLAUDE.local.md`), `<PR1>`, `<PR2>`.
