@@ -671,6 +671,48 @@ grep -q 'id-token: write' "$tmp/wf-idtoken.yml" || die "selftest: could not muta
 sed 's/^  build-scan:$/  build-scan:\n    env:\n      X: ${{ secrets.X }}/' "$deploy_wf" >"$tmp/wf-secret.yml"
 grep -q 'secrets\.X' "$tmp/wf-secret.yml" || die "selftest: could not mutate build-scan (secrets)"
 ! build_scan_isolated "$tmp/wf-secret.yml" || die "selftest: the isolation check missed secrets in build-scan"
+
+# --- terraform-destroy.yml (ADR 0006, G16). No check_paths: the workflow has no path filters.
+destroy_wf="$ROOT/.github/workflows/terraform-destroy.yml"
+iac_wf="$ROOT/.github/workflows/terraform-iac.yml"
+# section <workflow> <first line regex> <last line regex>: the lines from the first match to the last match.
+section() { sed -n "/$2/,/$3/p" "$1"; }
+# confirm_isolated <workflow>: the credential-free job holds no OIDC token, environment, secret, checkout or AWS action.
+confirm_isolated() {
+  ! section "$1" '^  confirm:' '^  destroy:' | grep -Eq 'id-token|environment:|secrets\.|actions/checkout|aws-actions'
+}
+# only_trigger <workflow> <trigger>: the `on:` block lists exactly that trigger.
+only_trigger() {
+  [ "$(section "$1" '^on:' '^permissions:' | grep -E '^  [a-z_]+:' | tr -d ' \n')" = "$2:" ]
+}
+only_trigger "$destroy_wf" workflow_dispatch || die "selftest: terraform-destroy must have workflow_dispatch as its only trigger"
+! only_trigger "$iac_wf" workflow_dispatch || die "selftest: the trigger check must fail for a workflow with more triggers"
+confirm_isolated "$destroy_wf" || die "selftest: the confirm job must hold no OIDC token, environment, secret or checkout"
+# shellcheck disable=SC2016  # the mutations are workflow text, not shell
+for add in 'permissions:\n      id-token: write' 'environment: dev' 'env:\n      X: ${{ secrets.X }}' 'steps:\n      - uses: actions/checkout@v1'; do
+  # Each mutation adds one credential right under the confirm job header.
+  sed "s#^  confirm:\$#  confirm:\n    $add#" "$destroy_wf" >"$tmp/wf-confirm.yml"
+  ! cmp -s "$destroy_wf" "$tmp/wf-confirm.yml" || die "selftest: could not mutate confirm ($add)"
+  ! confirm_isolated "$tmp/wf-confirm.yml" || die "selftest: the isolation check missed '$add' in confirm"
+done
+# environment: and id-token: write belong to the destroy job only, never to the top level or confirm.
+! sed -n '1,/^jobs:/p' "$destroy_wf" | grep -Eq 'id-token|environment:' || die "selftest: terraform-destroy must set no id-token or environment above its jobs"
+destroy_job="$(sed -n '/^  destroy:/,$p' "$destroy_wf")" # the last job of the file
+grep -q '^    environment: dev$' <<<"$destroy_job" || die "selftest: the destroy job must use environment dev"
+grep -q 'id-token: write' <<<"$destroy_job" || die "selftest: the destroy job must have id-token: write"
+# The workflow name is in the apply role trust, and both writers of the dev state share one concurrency group.
+workflow_name="$(sed -n 's/^name: *//p' "$destroy_wf")"
+apply_names="$(sed -n 's/^ *apply *= *\[\(.*\)\].*/\1/p' "$ROOT/infra/terraform/bootstrap/locals.tf")"
+case ", $apply_names," in
+  *", \"$workflow_name\","*) ;;
+  *) die "selftest: the workflow name '$workflow_name' is not in the bootstrap workflow_names.apply ($apply_names)" ;;
+esac
+for wf in "$destroy_wf" "$iac_wf"; do
+  grep -qx '      group: terraform-envs-dev' "$wf" || die "selftest: ${wf##*/} must use the concurrency group terraform-envs-dev"
+done
+! grep -Eq '^ *queue:' "$destroy_wf" "$iac_wf" || die "selftest: no queue: in the shared concurrency group (actionlint rejects it)"
+ok "terraform-destroy: dispatch only, credential-free confirm job, trusted name, shared concurrency group"
+
 # One source for the task caps: the iam_deploy.tf conditions equal lib.sh.
 tf_cap() { grep -A3 "variable = \"ecs:$1\"" "$ROOT/infra/terraform/bootstrap/iam_deploy.tf" | sed -n 's/.*values *= *\["\([0-9]*\)"\].*/\1/p'; }
 [ "$(tf_cap task-cpu)" = "$TASK_CPU_MAX" ] || die "selftest: TASK_CPU_MAX in lib.sh differs from iam_deploy.tf"
