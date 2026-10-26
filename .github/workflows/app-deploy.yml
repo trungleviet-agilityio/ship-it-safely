@@ -2,8 +2,10 @@
 # A push to main (or a manual run on main) builds the image once, smoke tests and scans it, pushes it to the dev ECR
 # by an immutable tag, registers a task definition revision that references the image digest, updates the ECS
 # service and waits for the rollout. The `name:` below is part of the deploy role trust (ADR 0002, B13): the
-# bootstrap `workflow_names` output must match. The order of the steps is load-bearing: the image is built, tested
-# and scanned before any AWS credential or secret exists in the job (F9).
+# bootstrap `workflow_names` output must match.
+# Two jobs, because `id-token` and `environment` apply to every step of a job: `build-scan` runs the build, the
+# smoke test and the scan with no token, no environment and no secret (F9); `deploy` loads exactly the bytes that
+# job produced (sha256 checked) and is the only job that can assume the deploy role.
 name: app-deploy
 
 on:
@@ -12,37 +14,46 @@ on:
     paths:
       - app/**
       - .github/workflows/app-deploy.yml
-      - scripts/render-task-def.sh
-      - scripts/ecs-wait-deployment.sh
+      - scripts/lib.sh
+      - scripts/app-names.sh
+      - scripts/app-smoke.sh
+      - scripts/assert-no-account-id.sh
+      - scripts/build-image.sh
       - scripts/check-aws-config.sh
-  # Deploys main HEAD, for example after the dev stack was re-created. The job below refuses any other ref.
+      - scripts/ci-tools.sha256
+      - scripts/ecr-push.sh
+      - scripts/ecs-preflight.sh
+      - scripts/ecs-wait-deployment.sh
+      - scripts/image-export.sh
+      - scripts/image-import.sh
+      - scripts/image-name.sh
+      - scripts/image-verify.sh
+      - scripts/install-ci-tools.sh
+      - scripts/render-task-def.sh
+      - scripts/scan-image.sh
+      - mise.toml
+  # Deploys main HEAD, for example after the dev stack was re-created. Both jobs refuse any other ref.
   workflow_dispatch:
 
 permissions: {}
 
-# A newer pending run replaces an older pending one, so the latest commit wins. A running deploy is never cancelled.
-concurrency:
-  group: app-deploy-dev
-  cancel-in-progress: false
-
 env:
-  CLUSTER: sis-dev-cluster
-  SERVICE: sis-dev-app
-  FAMILY: sis-dev-app
-  REPOSITORY: sis-dev-app
+  # The environment name. The scripts derive every resource name from it (app_names in scripts/lib.sh).
+  ENV: dev
+  GIT_SHA: ${{ github.sha }}
 
 jobs:
-  deploy:
-    name: deploy (dev, approval required)
-    # Only main deploys, never a branch or a pull request.
+  build-scan:
+    name: build and scan (no AWS)
+    # Only main builds for a deploy: a branch run would build an image nobody may deploy.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    # The environment adds the required reviewer and sets the OIDC subject the deploy role trusts.
-    environment: dev
+    timeout-minutes: 15
+    # No OIDC token, no deployment environment, no secrets: nothing in this job can reach AWS (ci-selftest checks it).
     permissions:
       contents: read
-      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    outputs:
+      image-sha256: ${{ steps.export.outputs.sha256 }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -57,29 +68,73 @@ jobs:
       - name: Install trivy (checksum verified)
         run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools" trivy
 
-      # The tests run inside the build (the runtime stage copies from the test stage); one platform, one digest.
-      - name: Build the image (runs the unit tests)
-        env:
-          GIT_SHA: ${{ github.sha }}
-        run: scripts/build-image.sh "$GIT_SHA"
+      # Build (the unit tests run inside), smoke test like Fargate, scan. A fixable HIGH or CRITICAL finding blocks
+      # the deploy (ADR 0005, Q4).
+      - name: Build, smoke test and scan the image
+        run: scripts/image-verify.sh "$GIT_SHA" "$RUNNER_TEMP/scan"
 
-      - name: Smoke test the image like Fargate
-        env:
-          GIT_SHA: ${{ github.sha }}
-        run: scripts/app-smoke.sh "sis-app:${GIT_SHA}" "$GIT_SHA"
+      - name: Save the image and compute its sha256
+        id: export
+        run: scripts/image-export.sh "$GIT_SHA" "$RUNNER_TEMP/image" >> "$GITHUB_OUTPUT"
 
-      # A fixable HIGH or CRITICAL finding blocks the deploy (ADR 0005, Q4). Nothing secret is in scope yet.
-      - name: Scan the image (trivy)
+      # Artifacts on a public repo are downloadable, so the retention is one day. The deploy job checks the sha256.
+      - name: Upload the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-image
+          path: ${{ runner.temp }}/image/image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    name: deploy (dev, approval required)
+    needs: build-scan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The environment adds the required reviewer and sets the OIDC subject the deploy role trusts. Its name cannot
+    # come from `env`: the environments context is not available here.
+    environment: dev
+    # A newer pending run replaces an older pending one, so the latest commit wins. A running deploy is never
+    # cancelled. Only this job holds AWS state, so only this job needs the lock.
+    concurrency:
+      group: app-deploy-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the role assumed by configure-aws-credentials
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Derive the resource names
+        run: scripts/app-names.sh >> "$GITHUB_ENV"
+
+      - name: Download the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-image
+          path: ${{ runner.temp }}/image
+
+      # The sha256 comes from the build job output, not from the artifact, so a replaced artifact is refused.
+      - name: Load the image (sha256 verified)
         env:
-          GIT_SHA: ${{ github.sha }}
-        run: scripts/scan-image.sh "sis-app:${GIT_SHA}" "$RUNNER_TEMP/scan"
+          EXPECTED_SHA256: ${{ needs.build-scan.outputs.image-sha256 }}
+        run: scripts/image-import.sh "$RUNNER_TEMP/image/image.tar" "$EXPECTED_SHA256"
 
       - name: Check configuration
         env:
           ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-deploy
+        run: scripts/check-aws-config.sh "sis-${ENV}-gha-deploy"
 
       - name: Assume the deploy role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -90,120 +145,25 @@ jobs:
           mask-aws-account-id: true
           retry-max-attempts: 3
 
-      - name: Print the AWS CLI version
-        run: aws --version
+      # Fail rather than skip, so a green run always means "deployed" (ADR 0005, F16, Q2). Also N4: the deploy
+      # role must be denied the secret value.
+      - name: Preflight (the stack is up, N4)
+        run: scripts/ecs-preflight.sh
 
-      # N4: the deploy role must not read a secret value (explicit deny, FR-3). Error text is printed only after
-      # 12-digit runs are replaced.
-      - name: Deploy role is denied the secret value (N4)
-        run: |
-          set -uo pipefail
-          err_file="$(mktemp)"
-          rc=0
-          aws secretsmanager get-secret-value --secret-id sis/dev/app-api-key >/dev/null 2>"$err_file" || rc=$?
-          err="$(scripts/redact-account-ids.sh <"$err_file")"
-          if [[ $rc -eq 0 ]]; then
-            echo "::error::deploy role read a secret value"
-            exit 1
-          elif [[ "$err" == *AccessDeniedException* ]]; then
-            echo "Denied as designed (N4): GetSecretValue returned AccessDeniedException"
-          elif [[ "$err" == *ResourceNotFoundException* ]]; then
-            echo "::error::dev stack or secret is missing (ResourceNotFoundException). Re-create it with terraform-iac, then run app-deploy again."
-            exit 1
-          else
-            echo "::error::N4 failed for a reason other than access denied (exit code $rc)"
-            echo "$err"
-            exit 1
-          fi
-
-      # Fail rather than skip, so a green run always means "deployed" (ADR 0005, F16, Q2).
-      - name: Preflight (the dev stack is up)
-        run: |
-          set -uo pipefail
-          err_file="$(mktemp)"
-          not_up="dev stack is not up. Re-create it (terraform-iac, Run workflow), set the secret value, then run app-deploy (Run workflow)."
-          rc=0
-          status="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-            --query 'services[0].status' --output text 2>"$err_file")" || rc=$?
-          err="$(scripts/redact-account-ids.sh <"$err_file")"
-          if [[ $rc -ne 0 ]]; then
-            if [[ "$err" == *ClusterNotFoundException* ]]; then
-              echo "::error::$not_up"
-            else
-              echo "::error::describe-services failed (exit code $rc)"
-              echo "$err"
-            fi
-            exit 1
-          fi
-          if [[ "$status" != "ACTIVE" ]]; then
-            echo "::error::$not_up"
-            exit 1
-          fi
-          echo "Service is ACTIVE"
-
-      # Push once, by immutable tag. A re-run finds the tag and reuses the image that was scanned, so a rebuilt image
-      # never replaces it (ECR rejects the second push anyway). The digest comes from ECR, not from the local build.
+      # Push once, by immutable tag; a re-run reuses the image that was scanned. The digest comes from ECR.
       - name: Push the image to ECR
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-          GIT_SHA: ${{ github.sha }}
-        run: |
-          set -uo pipefail
-          registry="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
-          # The login token must not land in ~/.docker.
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          chmod 700 "$DOCKER_CONFIG"
-          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
-
-          err_file="$(mktemp)"
-          rc=0
-          aws ecr describe-images --repository-name "$REPOSITORY" --image-ids "imageTag=${GIT_SHA}" \
-            --query 'imageDetails[0].imageDigest' --output text >/dev/null 2>"$err_file" || rc=$?
-          err="$(scripts/redact-account-ids.sh <"$err_file")"
-          if [[ $rc -eq 0 ]]; then
-            echo "Tag ${GIT_SHA} already exists in ECR (a re-run); reusing it, no push"
-          elif [[ "$err" == *ImageNotFoundException* ]]; then
-            aws ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
-            docker tag "sis-app:${GIT_SHA}" "${registry}/${REPOSITORY}:${GIT_SHA}"
-            docker push --quiet "${registry}/${REPOSITORY}:${GIT_SHA}"
-          else
-            echo "::error::describe-images failed (exit code $rc)"
-            echo "$err"
-            exit 1
-          fi
-
-          digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids "imageTag=${GIT_SHA}" \
-            --query 'imageDetails[0].imageDigest' --output text)"
-          media="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids "imageTag=${GIT_SHA}" \
-            --query 'imageDetails[0].imageManifestMediaType' --output text)"
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::ECR returned an image digest in an unexpected format"
-            exit 1
-          fi
-          case "$media" in
-            application/vnd.docker.distribution.manifest.v2+json | application/vnd.oci.image.manifest.v1+json) ;;
-            *)
-              echo "::error::the pushed artifact is not a single image manifest (media type: $media)"
-              exit 1
-              ;;
-          esac
-          {
-            echo "IMAGE_DIGEST=${digest}"
-            echo "IMAGE_REF=${registry}/${REPOSITORY}@${digest}"
-          } >> "$GITHUB_ENV"
-          echo "Image digest: ${digest}"
+        run: scripts/ecr-push.sh "$REPOSITORY" "$GIT_SHA" "$(scripts/image-name.sh "$GIT_SHA")" >> "$GITHUB_ENV"
 
       # Terraform owns the shape of the task definition; this step replaces only the image (ADR 0005, F2 to F4).
       - name: Render the task definition
-        env:
-          GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition --output json \
             >"$RUNNER_TEMP/td-current.json"
-          scripts/render-task-def.sh "$RUNNER_TEMP/td-current.json" "$IMAGE_REF" "$GIT_SHA" >"$RUNNER_TEMP/td.json"
+          scripts/render-task-def.sh --env "$ENV" "$RUNNER_TEMP/td-current.json" "$IMAGE_REF" "$GIT_SHA" >"$RUNNER_TEMP/td.json"
           echo "Rendered a new revision of ${FAMILY} for image ${IMAGE_DIGEST}"
 
       - name: Register the task definition
@@ -225,21 +185,17 @@ jobs:
 
       # Not the AWS CLI stability waiter: it also succeeds after a circuit-breaker rollback (ADR 0005, Finding 2).
       - name: Wait for the rollout
-        run: scripts/ecs-wait-deployment.sh "$CLUSTER" "$SERVICE" "$TD_ARN" 1200
+        run: scripts/ecs-wait-deployment.sh "$CLUSTER" "$SERVICE" "$TD_ARN"
 
-      # configure-aws-credentials masks the assumed-role ARN in logs, so the summary shows which role ran.
+      # configure-aws-credentials masks the assumed-role ARN in logs, so the summary shows the role name. The
+      # session name is left out: it carries the run ID. The Trivy result is in the build-scan job summary.
       - name: Summary
         if: always()
         env:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
-          GIT_SHA: ${{ github.sha }}
           JOB_STATUS: ${{ job.status }}
         run: |
-          set -uo pipefail
-          counts="n/a"
-          if [[ -f "$RUNNER_TEMP/scan/counts.txt" ]]; then
-            counts="$(cat "$RUNNER_TEMP/scan/counts.txt")"
-          fi
+          set -euo pipefail
           revision="not registered"
           if [[ -n "${TD_ARN:-}" ]]; then
             revision="${TD_ARN##*/}"
@@ -247,26 +203,17 @@ jobs:
           role="not assumed"
           if arn="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)"; then
             role="${arn#*:assumed-role/}"
+            role="${role%%/*}"
           fi
-          summary="$(
+          {
             echo "### app-deploy"
             echo "Commit: \`${GIT_SHA}\`"
             echo "Image digest: \`${IMAGE_DIGEST:-not pushed}\`"
             echo "Task definition: \`${revision}\`"
             echo "Result: ${JOB_STATUS}"
-            echo "Trivy (fixable HIGH and CRITICAL, secrets): ${counts}"
             echo "Role: \`${role}\`"
-          )"
-          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
-            echo "::error::summary contains the account ID; not publishing"
-            exit 1
-          fi
-          if grep -Eq '(^|[^0-9A-Za-z])[0-9]{12}([^0-9A-Za-z]|$)' <<<"$summary"; then
-            echo "::error::summary contains a 12-digit number (possible account ID); not publishing"
-            exit 1
-          fi
-          printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
+          } | scripts/assert-no-account-id.sh >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Remove the registry login
+      - name: Remove the image and task definition files
         if: always()
-        run: rm -rf "$RUNNER_TEMP/docker-config"
+        run: rm -rf "$RUNNER_TEMP/image" "$RUNNER_TEMP/td-current.json" "$RUNNER_TEMP/td.json"
