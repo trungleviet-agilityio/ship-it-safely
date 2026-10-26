@@ -1,0 +1,57 @@
+# Repository guards that run on every pull request and every push to main, with no path filter (ADR 0004).
+# The role trust pins the workflow `name:`, and terraform-iac is path filtered, so a change that touches only
+# another workflow file would skip its checks. This workflow has no AWS access and no secrets.
+# Its `name:` must never be added to the bootstrap `workflow_names`.
+name: repo-guard
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: guard (no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Hash-locked install; a commit made with --no-verify or in the web editor skips the local hooks.
+      - name: Install pre-commit (hash locked)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --require-hashes -r scripts/ci-requirements.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Workflow security audit (zizmor)
+        run: pre-commit run zizmor --all-files --show-diff-on-failure
+
+      - name: No bare 12-digit account ID in tracked files
+        run: pre-commit run no-aws-account-id --all-files --show-diff-on-failure
+
+      - name: Secret scan (gitleaks)
+        run: pre-commit run gitleaks --all-files --show-diff-on-failure
+
+      - name: Workflow trigger allowlist (every workflow file)
+        run: scripts/check-workflow-triggers.sh
+
+      - name: CI helper self-tests
+        run: scripts/ci-selftest.sh

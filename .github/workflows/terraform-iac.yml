@@ -30,10 +30,11 @@ on:
 
 permissions: {}
 
-# Stale PR plans are cancelled. Applies never are.
+# Nothing is cancelled mid-run: a cancelled plan can leave the state lock held, so runs queue instead.
+# The no-AWS checks job cannot hold a lock, but one setting keeps the rule simple.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: "1"
@@ -61,20 +62,6 @@ jobs:
 
       - name: Install Terraform and tflint (checksum verified)
         run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools"
-
-      # Hash-locked install; the hook runs here because a commit made with --no-verify or in the web editor
-      # skips the local one (ADR 0004, PR 1 finding L2).
-      - name: Install pre-commit (hash locked)
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet --require-hashes -r scripts/ci-requirements.txt
-          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
-
-      - name: No bare 12-digit account ID in tracked files
-        run: pre-commit run no-aws-account-id --all-files --show-diff-on-failure
-
-      - name: Workflow trigger allowlist
-        run: scripts/check-workflow-triggers.sh
 
       - name: Terraform checks (policy rules, README, fmt, validate, test)
         run: make tf-check
@@ -175,9 +162,15 @@ jobs:
       # Counts and one row per changed address; fails if a 12-digit run shows up (the repo is public).
       - name: Summarize the plan
         id: summary
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
         run: |
           set -euo pipefail
           summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
+          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
+            echo "::error::summary contains the account ID; not publishing"
+            exit 1
+          fi
           printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
           delimiter="EOF_$(openssl rand -hex 8)"
           {
@@ -421,9 +414,16 @@ jobs:
         run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
 
       - name: Summarize the plan
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
         run: |
           set -euo pipefail
-          terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh >> "$GITHUB_STEP_SUMMARY"
+          summary="$(terraform -chdir="$TF_DIR" show -json tfplan | scripts/tf-plan-summary.sh)"
+          if [[ -n "$ACCOUNT" ]] && grep -qF -- "$ACCOUNT" <<<"$summary"; then
+            echo "::error::summary contains the account ID; not publishing"
+            exit 1
+          fi
+          printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Terraform apply
         run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m -no-color tfplan

@@ -4,7 +4,10 @@
 # so the repo refuses those triggers where they would be written. zizmor's dangerous-triggers audit is the
 # second layer. Reads the top-level `on:` block of a workflow; supports block, flow ([a, b]) and scalar forms.
 #
-# Usage: scripts/check-workflow-triggers.sh [workflow file ...]   (default: .github/workflows/terraform-iac.yml)
+# The role trust pins the workflow `name:`, so any workflow file can matter, path-filtered or not. With no
+# arguments every .github/workflows/*.yml and *.yaml is scanned.
+#
+# Usage: scripts/check-workflow-triggers.sh [workflow file ...]
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -15,7 +18,10 @@ files=()
 if [ $# -gt 0 ]; then
   for f in "$@"; do files+=("$f"); done
 else
-  files+=("$ROOT/.github/workflows/terraform-iac.yml")
+  for f in "$ROOT"/.github/workflows/*.yml "$ROOT"/.github/workflows/*.yaml; do
+    if [ -f "$f" ]; then files+=("$f"); fi
+  done
+  [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
 fi
 
 bad=()
@@ -28,18 +34,18 @@ for f in "${files[@]}"; do
       rest = $0
       sub(/^[^:]*:[[:space:]]*/, "", rest)
       sub(/[[:space:]]*#.*$/, "", rest)
-      gsub(/[\[\],"'\'']/, " ", rest)
+      gsub(/[][{},:"'\'']/, " ", rest)
       n = split(rest, parts, /[[:space:]]+/)
       for (i = 1; i <= n; i++) if (parts[i] != "") print parts[i]
       next
     }
     inon && /^[^[:space:]#]/ { inon = 0 }
     inon && /^[[:space:]]*#/ { next }
-    inon && /^[[:space:]]+[A-Za-z_]+:/ {
+    inon && /^[[:space:]]+["'\'']?[A-Za-z_]+["'\'']?[[:space:]]*:/ {
       match($0, /^[[:space:]]+/)
       indent = RLENGTH
       if (child == 0) child = indent
-      if (indent == child) { key = $1; sub(/:.*/, "", key); print key }
+      if (indent == child) { key = $1; sub(/:.*/, "", key); gsub(/["'\'']/, "", key); print key }
     }
   ' "$f")"
   [ -n "$triggers" ] || { bad+=("${f#"$ROOT"/}: no triggers found under on:"); continue; }
