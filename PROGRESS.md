@@ -14,7 +14,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 2 OIDC smoke test | ✅ | 0003 | #9 | PR run assumed `sis-dev-gha-plan`; N1 (`workflow_dispatch` on main) refused with `AccessDenied`, both seen in CloudTrail |
 | 3 Infra pipeline + ECS | ✅ | 0004 | #10, #11, #13 | PR plan comment, approved apply (27 resources), `/health` 200 `ok`; plan role: `explicitDeny` on `GetSecretValue`, `implicitDeny` on creates |
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
-| 5 Hardening & teardown | ⏳ | 0006 | (open after push) | Built and verified (2 fix rounds, `make check` green); checkpoint pending: bootstrap re-apply (`DescribeSecret`), N5 to N7, destroy through `terraform-destroy` |
+| 5 Hardening & teardown | ⏳ | 0006 | #19 | Built and verified (2 fix rounds, `make check` green); checkpoint pending: bootstrap re-apply (`DescribeSecret`), N5 to N7, destroy through `terraform-destroy` |
 | 6 Supply-chain hardening | 🟡 | | | Done early: SHA pins, checksum-verified tools, harden-runner (audit) in every job, gitleaks pre-commit and push protection, multi-platform lock files. Left: Dependabot (NFR-5), harden-runner `block` with an allowlist, Q1 exposure check |
 | 7 Stretch: prod account | ⏸ | | | Needs AWS Organizations and a prod account (user). Deploy scripts are already parameterized by `ENV` |
 
