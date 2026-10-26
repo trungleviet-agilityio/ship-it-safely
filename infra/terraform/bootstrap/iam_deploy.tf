@@ -1,3 +1,9 @@
+locals {
+  # Every revision of the app family, and the one service the deploy role may describe and update.
+  task_definition_arn_pattern = "${local.svc_arn["ecs"]}:task-definition/${local.resource_names.task_family}:*"
+  service_arn                 = "${local.svc_arn["ecs"]}:service/${local.resource_names.ecs_cluster}/${local.resource_names.ecs_service}"
+}
+
 resource "aws_iam_role" "deploy" {
   name                 = local.role_names.deploy
   description          = "GitHub Actions deploy: push one image, roll one service"
@@ -34,7 +40,7 @@ data "aws_iam_policy_document" "deploy" {
     sid       = "RegisterTaskDef"
     effect    = "Allow"
     actions   = ["ecs:RegisterTaskDefinition"]
-    resources = ["${local.svc_arn["ecs"]}:task-definition/${local.resource_names.task_family}:*"]
+    resources = [local.task_definition_arn_pattern]
 
     condition {
       test     = "NumericLessThanEquals"
@@ -53,7 +59,7 @@ data "aws_iam_policy_document" "deploy" {
     sid       = "TagRegisteredTaskDef"
     effect    = "Allow"
     actions   = ["ecs:TagResource"]
-    resources = ["${local.svc_arn["ecs"]}:task-definition/${local.resource_names.task_family}:*"]
+    resources = [local.task_definition_arn_pattern]
 
     condition {
       test     = "StringEquals"
@@ -73,19 +79,19 @@ data "aws_iam_policy_document" "deploy" {
     sid       = "DescribeOneService"
     effect    = "Allow"
     actions   = ["ecs:DescribeServices"]
-    resources = ["${local.svc_arn["ecs"]}:service/${local.resource_names.ecs_cluster}/${local.resource_names.ecs_service}"]
+    resources = [local.service_arn]
   }
 
   statement {
     sid       = "UpdateOneService"
     effect    = "Allow"
     actions   = ["ecs:UpdateService"]
-    resources = ["${local.svc_arn["ecs"]}:service/${local.resource_names.ecs_cluster}/${local.resource_names.ecs_service}"]
+    resources = [local.service_arn]
 
     condition {
       test     = "ArnLike"
       variable = "ecs:task-definition"
-      values   = ["${local.svc_arn["ecs"]}:task-definition/${local.resource_names.task_family}:*"]
+      values   = [local.task_definition_arn_pattern]
     }
   }
 

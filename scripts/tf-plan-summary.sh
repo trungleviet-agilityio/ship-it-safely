@@ -5,7 +5,7 @@
 # an AWS account ID, fails the script instead of being printed.
 #
 # Usage: terraform show -json tfplan | scripts/tf-plan-summary.sh [--title <heading text>]
-#        (the default heading is "Terraform plan (dev)")
+#        (the default heading is "Terraform plan (<ENV>)", with ENV defaulting to dev)
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -13,7 +13,7 @@ source "$(dirname "$0")/lib.sh"
 require_cmd jq "apt-get install jq"
 
 usage="usage: terraform show -json tfplan | scripts/tf-plan-summary.sh [--title <text>]"
-title="Terraform plan (dev)"
+title="Terraform plan (${ENV:-dev})"
 case $# in
   0) ;;
   2) { [ "$1" = "--title" ] && [ -n "$2" ]; } || die "$usage"; title="$2" ;;
@@ -47,8 +47,8 @@ summary="$(
   '
 )"
 
-# Bare 12-digit runs (alphanumeric boundaries, like the pre-commit hook) may be an account ID: refuse to emit them.
-if printf '%s\n' "$summary" | grep -Eq '(^|[^0-9A-Za-z])[0-9]{12}([^0-9A-Za-z]|$)'; then
+# A standalone 12-digit run may be an account ID (ACCOUNT_ID_RE in lib.sh): refuse to emit it.
+if printf '%s\n' "$summary" | grep -Eq "$ACCOUNT_ID_RE"; then
   die "plan summary contains a 12-digit number (possible account ID); not printing it"
 fi
 
