@@ -4,7 +4,8 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
-# One trust policy per role (B13): StringEquals only, immutable IDs, ref pinned where a role mutates AWS.
+# One trust policy per role (B13): StringEquals except the plan role's pull request merge ref, immutable IDs,
+# ref pinned on every role.
 data "aws_iam_policy_document" "trust" {
   for_each = local.trust
 
@@ -42,14 +43,10 @@ data "aws_iam_policy_document" "trust" {
       values   = [var.github_owner_id]
     }
 
-    dynamic "condition" {
-      for_each = each.value.ref == null ? [] : [each.value.ref]
-
-      content {
-        test     = "StringEquals"
-        variable = "${local.oidc_host}:ref"
-        values   = [condition.value]
-      }
+    condition {
+      test     = each.value.ref_test
+      variable = "${local.oidc_host}:ref"
+      values   = [each.value.ref]
     }
   }
 }
