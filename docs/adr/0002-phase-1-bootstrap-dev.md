@@ -81,15 +81,24 @@ Findings that change earlier assumptions:
 |---|---|---|
 | B11 | **OIDC provider**: `url = "https://token.actions.githubusercontent.com"`, `client_id_list = ["sts.amazonaws.com"]`, **no `thumbprint_list`**. For GitHub, AWS checks TLS against its own trusted root CAs and keeps any thumbprint without using it. `configure-aws-credentials` defaults its audience to `sts.amazonaws.com`. | Provider docs (`thumbprint_list` optional); IAM thumbprint page; action README |
 | B12 | **Subject format: the immutable one with IDs.** `local.gh_sub_prefix = "repo:${github_owner}@${github_owner_id}/${github_repo}@${github_repo_id}"`. If `github_immutable_subject = false` it falls back to `repo:${github_owner}/${github_repo}`. This repo already has `use_immutable_subject = true`. The checkpoint compares GitHub's `sub_claim_prefix` with the Terraform output `oidc_sub_prefix` before Phase 2. | GitHub OIDC reference and 2026-04-23 changelog; GitHub REST OIDC |
-| B13 | **Trust conditions.** All use `StringEquals`, never `StringLike`. The only `Action` is `sts:AssumeRoleWithWebIdentity`. The principal is the OIDC provider ARN. The `repository_id` and `repository_owner_id` keys are immutable IDs, which AWS recommends over names. Pinning `ref` on apply and deploy means a PR branch that adds `environment: dev` to a job still cannot assume them, even if the environment's branch rule were misconfigured (PR refs are `refs/pull/N/merge`). `job_workflow_ref` is not pinned: AWS documents it for reusable workflows only, and pinning it would tie trust to file paths that do not exist yet. | IAM "Configuring a role for GitHub OIDC"; IAM condition keys, GitHub tab |
+| B13 | **Trust conditions.** All use `StringEquals`, except one `StringLike` on the plan role's `ref` (amended after the Phase 2 review, see below). The only `Action` is `sts:AssumeRoleWithWebIdentity`. The principal is the OIDC provider ARN. The `repository_id` and `repository_owner_id` keys are immutable IDs, which AWS recommends over names. Pinning `ref` on apply and deploy means a PR branch that adds `environment: dev` to a job still cannot assume them, even if the environment's branch rule were misconfigured (PR refs are `refs/pull/N/merge`). `job_workflow_ref` is not pinned: AWS documents it for reusable workflows only, and pinning it would tie trust to file paths that do not exist yet. | IAM "Configuring a role for GitHub OIDC"; IAM condition keys, GitHub tab |
 
 Trust table (`<P>` = `gh_sub_prefix`, `<env>` = `dev`):
 
 | Role | `aud` | `sub` | `repository_id` | `repository_owner_id` | `ref` |
 |---|---|---|---|---|---|
-| `sis-dev-gha-plan` | `sts.amazonaws.com` | `<P>:pull_request` | `var.github_repo_id` | `var.github_owner_id` | not pinned (varies per PR) |
+| `sis-dev-gha-plan` | `sts.amazonaws.com` | `<P>:pull_request` | `var.github_repo_id` | `var.github_owner_id` | `StringLike refs/pull/*/merge` |
 | `sis-dev-gha-apply` | `sts.amazonaws.com` | `<P>:environment:dev` | same | same | `refs/heads/main` |
 | `sis-dev-gha-deploy` | `sts.amazonaws.com` | `<P>:environment:dev` | same | same | `refs/heads/main` |
+
+**Amended 2026-10-26 (Phase 2 security review, M1).** A `pull_request_target` run gets the same
+`sub` (`...:pull_request`) as a `pull_request` run, with secrets and an ID token even for fork PRs. IAM
+has no `event_name` condition key for GitHub (the GitHub tab of the IAM condition keys page lists actor,
+actor_id, job_workflow_ref, repository, repository_id, repository_owner_id, workflow, ref, environment and
+enterprise_id). So the plan role also requires `StringLike token.actions.githubusercontent.com:ref =
+refs/pull/*/merge`: a `pull_request` run has ref `refs/pull/<N>/merge`, while a `pull_request_target` run
+has the base ref (`refs/heads/main`) and is refused. The wildcard covers only the PR number; `sub`,
+`repository_id` and `repository_owner_id` stay `StringEquals`. The user re-applies bootstrap by hand.
 
 All three roles: `max_session_duration = 3600` (NFR-7), path `/`. Role names follow `<prefix>-<env>-<thing>`
 from CODING_STANDARDS rather than the `<prefix>-gha-*` shorthand in the PLAN §5 diagram. That keeps the
