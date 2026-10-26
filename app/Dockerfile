@@ -1,11 +1,13 @@
-# ECR Public mirror of python:3.13-slim, pinned by index digest (multi-arch, same digest as Docker Hub).
-FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS test
+# python:3.13-slim pinned by index digest (multi-arch). The digest is fixed here; only the registry that serves it
+# varies (ECR Public by default, Docker Hub as a fallback, same digest), so a mirror cannot change the content.
+ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python
+FROM ${PYTHON_IMAGE}:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS test
 WORKDIR /app
 COPY src ./src
 COPY tests ./tests
 RUN python -m unittest discover -s tests
 
-FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS runtime
+FROM ${PYTHON_IMAGE}:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS runtime
 ARG GIT_SHA=local
 LABEL org.opencontainers.image.revision=${GIT_SHA} \
       org.opencontainers.image.source=https://github.com/trungleviet-agilityio/ship-it-safely
