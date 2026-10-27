@@ -425,6 +425,47 @@ PYTHON_IMAGE_MIRRORS="docker.io/library/python" BUILD_RETRY_DELAYS=0 make image
 
 **A12. Local Compose (FR-1, blocked for the e2e agent):** `make up`, then open `/`, `/health`, `/version` and `/admin` (expect 401 without the key) on http://localhost:8080, then `make down`.
 
+## Checkpoint A results (2026-10-27)
+
+| Step | Result |
+|---|---|
+| A0 | The token carries `job_workflow_ref` = `<repo>/.github/workflows/oidc-smoke-test.yml@refs/pull/21/merge`, the form the trust pins |
+| A1 | No trail in the account, so `create_trail = true` (the first trail is free) |
+| A2 | Bootstrap plan and apply: 12 added, 4 changed (three role trusts and the guardrails policy) |
+| A3 | SNS subscription confirmed (1 subscription) |
+| A4 | Go: the PR plan job assumed `sis-dev-gha-plan` after A2, so `aws:RequestedRegion` resolves on `AssumeRoleWithWebIdentity`. N8 `AccessDenied` on apply and deploy; N9 refused 3601 s and printed the 900 s expiry |
+| A5 | `lookup-events` shows `WebIdentityUser` with the `sub` in `userName`. The alert email for the refused apply assume arrived (raw event JSON, sent to the private budget inbox) |
+| A6 | Insights need any GitHub login; the plan job lists the state bucket host, which holds the account ID. Egress per job is below |
+| A7 | Merged at 07:18. Apply 27 (session `gha-apply-<run>`), secret set, deploy from the `FROM` line (no fallback), `/version` = `main` SHA by digest, destroy 27 with revision 10 deregistered and no account ID in the log |
+| A8 | `guard (no AWS)` is a required check (ruleset API: `required_status_checks`, GitHub Actions source) |
+| A9 | Secret scanning and push protection enabled |
+| A10 | Four update jobs ran without failure; one PR, #22, moves the single `FROM ... AS base` line to Python 3.15 (CI green). Actions, Terraform and pre-commit had nothing newer |
+| A11 | Verified locally before the PR (Docker Hub fallback by `--build-context`) |
+| A12 | `make up`: `/`, `/health`, `/version` 200, `/admin` 401 without the key; `make down` |
+
+Egress seen at A6 (audit mode), the input for the PR B allowlists. `<acct>` marks a host that holds the account
+ID; PR B writes those from a secret expression, never as text:
+
+| Job | Hosts |
+|---|---|
+| repo-guard | `github.com`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `storage.googleapis.com` |
+| terraform-iac `plan` | `github.com`, `api.github.com`, `releases.hashicorp.com`, `release-assets.githubusercontent.com`, `checkpoint-api.hashicorp.com`, `registry.terraform.io`, `sts.ap-southeast-1.amazonaws.com`, the state bucket host (`<acct>`) |
+| terraform-iac `plan-role-guardrails` | `github.com`, STS, Secrets Manager and EC2 endpoints in `ap-southeast-1` |
+| oidc-smoke-test | `github.com`, STS in `ap-southeast-1` |
+| Image checks | `tuf-repo-cdn.sigstore.dev` (signature verification) |
+
+Not captured: the apply, deploy and destroy jobs. PR B starts them from the plan list plus the services each one
+calls, and checkpoint B reads the blocked hosts from the logs.
+
+Decisions taken at the checkpoint (same delegation as the decision log):
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| #22 jumps the runtime from Python 3.13 to 3.15 | **Do not merge.** PR B adds a Dependabot `ignore` on `version-update:semver-minor` and `semver-major` for the python image, so only digest and patch updates arrive; close #22 | Security rebuilds stay automatic; a runtime change stays a planned change across `mise.toml`, `pyproject.toml` and the image | Moving to a new Python is manual |
+| Insights hold the account ID behind any GitHub login (Q1) | **Turn telemetry off** (`disable-telemetry: true`) on the jobs that hold AWS credentials in PR B; keep audit insights on credential-free jobs | No account-bearing host leaves through a third party | No insights page for those jobs; blocked hosts are read from the job log |
+| The alert email is raw JSON | **Optional in PR B**: an EventBridge input transformer that sends one line (event, role, `sub`, error) | Readable at a glance | One more bootstrap apply; the raw event is still in CloudTrail |
+| No Dependabot PR for actions, Terraform or pre-commit | **Accept**; the user checks the Dependabot tab for ecosystem errors before PR B merges | Pins were already current | Q4 and R17 stay unproven until the first real update |
+
 ## Checkpoint B (after PR B)
 
 1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The plan and oidc-smoke-test jobs are green in block mode.
