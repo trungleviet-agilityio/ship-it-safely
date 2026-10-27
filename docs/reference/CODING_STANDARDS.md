@@ -154,9 +154,12 @@ disagree, the ADR wins; update this file.
 - Every third-party action is pinned to a full commit SHA with the version in a comment (NFR-3).
   Tool binaries are pinned by version and checksum-verified.
 - `step-security/harden-runner` is the first step of every job (NFR-4). Set `egress-policy`
-  explicitly. A job with `id-token: write` uses `block`, `disable-telemetry: true` and `allowed-endpoints`
-  with one exact `host:port` per line: no broad wildcard, and an account-bearing host only as an expression
-  on `secrets.AWS_ACCOUNT_ID_DEV`. Every other job uses `audit`. `scripts/check-harden-runner.sh` enforces this.
+  explicitly. A job with `id-token: write` uses `block`, `disable-telemetry: true`,
+  `disable-sudo-and-containers: true` (only app-deploy `deploy` is exempt: it runs Docker) and
+  `allowed-endpoints` with one exact `host:port` per line: no `*`, and no expression other than
+  `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV` and `env.ENV`. Such a job has no `container:` or `services:`,
+  and its harden-runner step has no `if:` or `continue-on-error:`. Every other job uses `audit`.
+  `scripts/check-harden-runner.sh` enforces all of this.
 - Workflows that run Terraform set `CHECKPOINT_DISABLE: "1"`.
 - Pin `runs-on` to a versioned label (`ubuntu-24.04`), not `ubuntu-latest`.
 - No `actions/checkout` and no `contents: read` unless the job needs repo files.
