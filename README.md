@@ -81,6 +81,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 
 | Target | Does |
 |---|---|
+| `make venv` | Hash-locked CI venv in `.venv-ci` (PyYAML for the workflow trigger check); created once, then reused |
 | `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
 | `make test` | App unit tests |
 | `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint, CI helper self-tests |
@@ -306,3 +307,4 @@ Status per phase: [`PROGRESS.md`](PROGRESS.md).
 | 3 Infra pipeline + ECS | Yes | Re-apply bootstrap, environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
 | 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
 | 5 Hardening and teardown | Yes | Re-apply bootstrap (deploy role reads secret metadata), re-create, negative tests N5 and N6, destroy through `terraform-destroy`, N7 |
+| 6 Supply-chain hardening | Yes | Read the `job_workflow_ref` claim, re-apply bootstrap (file-pinned trust, region pin, trail and alert), confirm the alert email, read harden-runner insights, merge and prove the new trust with a re-create, deploy and destroy round, require `guard (no AWS)`. Then PR B: block mode from the collected egress list |

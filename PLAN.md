@@ -180,6 +180,13 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 2. Add harden-runner (NFR-4). Review the egress log from one run, then consider `block` mode with an allowlist.
 3. Dependabot config, `.terraform.lock.hcl` multi-platform hashes (NFR-5).
 4. gitleaks pre-commit + push protection (NFR-6).
+5. As designed in ADR 0007, in two PRs. **PR A:** Dependabot (monthly, 7-day cooldown), apply and deploy trust
+   pinned by `job_workflow_ref` plus `aws:RequestedRegion` on every role, a CloudTrail trail with an EventBridge
+   rule and SNS email for unexpected GitHub assumptions (NFR-7), negative tests N8 (a PR token is refused by apply
+   and deploy) and N9 (the 1-hour cap), the YAML-parser trigger allowlist, an optional ALB CIDR secret, stricter
+   Terraform policy rules, `.editorconfig`, `CODEOWNERS`, non-executable libraries and `app/compose.yaml`.
+   **PR B:** harden-runner `block` with an explicit allowlist on the jobs that hold AWS credentials.
+6. **Checkpoint (user):** ADR 0007 "Checkpoint A commands", then PR B and "Checkpoint B".
 
 ### Phase 7 — Stretch: prod account (~90 min)
 1. **User:** create AWS Organizations (from a management account with no workloads), create the prod account, and set up IAM Identity Center access.

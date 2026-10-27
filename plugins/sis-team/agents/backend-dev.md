@@ -1,6 +1,6 @@
 ---
 name: backend-dev
-description: Build-phase developer for the ship-it-safely app (app/**). Writes the Python app, Dockerfile, docker-compose and tests with TDD, in its own worktree. Use from /sis-team:run when a phase touches app/.
+description: Build-phase developer for the ship-it-safely app (app/**). Writes the Python app, Dockerfile, compose.yaml and tests with TDD, in its own worktree. Use from /sis-team:run when a phase touches app/.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 isolation: worktree

@@ -302,6 +302,29 @@ decision record.
 **R17 (added):** Dependabot may not parse a configuration that needs Terraform 1.17.0. Signal: an error on Insights >
 Dependency graph > Dependabot for the terraform entry. Fallback: remove that entry and bump providers by hand monthly.
 
+## Verify findings (decided by the orchestrator on 2026-10-27, same delegation)
+
+No Critical or High finding. Round 1 builds everything marked **Fix**; the rest is recorded here.
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| Security M1: the alert only sees STS calls in ap-southeast-1; a caller can use another region or the global endpoint | **Fix**: every trust adds `StringEquals aws:RequestedRegion = <region>` (AWS: the key "is always included in the request context"; a global-endpoint call carries us-east-1 and is refused). Refused probes in other regions stay unalerted: accepted, they grant nothing | Zero cost; an unexpected success can only happen where the rule watches | A region move needs a bootstrap re-apply; a client on the global STS endpoint now fails (fails closed, seen at A4 and A7) |
+| Reviewer M1: rule 9 anchored at line start, so a one-line `{ provisioner ... }` passes | **Fix**: unanchored match plus one-line fixtures | The rule covers what CODING_STANDARDS claims | A few more fixtures |
+| Security L1: rule 11 counts braces inside strings and comments; providers are unrestricted | **Fix**: strip strings and comment tails before counting; new rule 12 allows only `hashicorp/*` providers | Closes a remote-code path in the plan job | A non-hashicorp provider later needs a policy change |
+| Security L2: the destroy job does not mask the ALB CIDRs | **Fix**: the same `mask-cidrs.sh` step before the destroy plan | An AWS error text cannot print the maintainer's `/32` | None worth noting |
+| Security L3: the pin self-test reads only `*.yml` | **Fix** (glob or refuse `.yaml`) | No workflow escapes the SHA-pin guard | None |
+| Security L4: anyone can trigger refusal emails | **Accept** | No extra moving parts in a lab | A flood could hide one real alert; the trail still has every event |
+| Reviewer L3: `app-ci` has its own inline hash-locked install | **Fix**: use `ci-venv.sh` | One owner of the install | None |
+| Reviewer L4: the build-context fallback is proven only on the maintainer's Docker | **Accept**; the e2e run and A11 prove it locally, and a 429 in CI is the live test | No extra workflow | A failure would first show under rate limiting |
+| Reviewer L5, L7, L8: destroy detail wording, module IPv4 regex, `job_workflow_ref` case sensitivity | **Fix** (wording, regex, README note) | Accurate messages; early validation | None |
+| Reviewer L6: N1 has no positive control | **Accept**; the PR job's real plan-role assumption is the control, and `check-aws-config.sh` checks the inputs | No approval-gated job in a smoke workflow | A wrong ARN in the dispatch job would still read as "refused" |
+| Reviewer M2, L1, L2: diagram, PLAN Phase 6 steps, README make and phases rows | **Fix (orchestrator docs)**; PROGRESS at the checkpoint | Docs match the code | None |
+| e2e: `make check` fails on a fresh clone until `make venv` | **Fix**: `lint` depends on a `.venv-ci/bin/python` file target | A new clone works with one command | The first `make check` takes longer |
+| e2e: the local Compose run was blocked for the agent by the permission system | **User checks it** (`make up`, the four endpoints, `make down`) at checkpoint A | No workaround of a permission block | One more manual step |
+| Simplifier 1, 2, 3, 4, 6, 7, 9 (reuse `assert_denied`, drop name-built topic and rule locals, table-driven policy fixtures, one trigger-test helper, one base-line regex, `require_env`, trims) and rule order | **Fix now** (senior clean-code standard) | One definition per idea; fewer lines to maintain | A broader diff in a fix round |
+| Simplifier 5: workflow self-tests on a YAML loader instead of `sed` ranges | **Defer to Phase 7**, before more workflows arrive | This PR stays reviewable | The brittle ranges stay one more phase |
+| Simplifier 8, 10: rule 7 scope, `create_trail`, a shared `env_trust` local | **Keep** | ADR 0004 per-module intent and Q2 stay as decided | A few repeated lines |
+
 ## Checkpoint A commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>` (the orchestrator fills it from `CLAUDE.local.md`) and `<PR_A>`. Commands are one per line for zsh; never pack several arguments into one shell variable (lessons log 37).
