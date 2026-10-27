@@ -150,7 +150,12 @@ report() {
   if [ $# -ge 3 ]; then dereg=("DEREGISTERED=$3"); fi
   env -u DEREGISTERED ENV=dev DELETES="$1" APPLY_OUTCOME="$2" ROLE=sis-dev-gha-apply ${dereg[@]+"${dereg[@]}"} "$ROOT/scripts/tf-destroy-report.sh"
 }
-report_head() { report "$@" | head -n1; }
+# The whole report is captured first: piping into `head` closes the pipe early and the report dies of SIGPIPE.
+report_head() {
+  local out
+  out="$(report "$@")"
+  printf '%s\n' "${out%%$'\n'*}"
+}
 [ "$(report_head 5 success 4)" = "### Destroyed (dev)" ] || die "selftest: a successful destroy must be headed Destroyed"
 [ "$(report_head 5 failure 0)" = "### Destroy failed (dev)" ] || die "selftest: a failed apply must be headed Destroy failed"
 [ "$(report_head 5 skipped 0)" = "### Destroy failed (dev)" ] || die "selftest: an apply that did not succeed must not read as Destroyed"

@@ -135,8 +135,10 @@ EOF
 chmod +x "$tmp/stub/curl"
 sts=aws-sts-assume-role-with-web-identity
 denied_err="An error occurred (AccessDenied) when calling the AssumeRoleWithWebIdentity operation: Not authorized to perform sts:AssumeRoleWithWebIdentity for ${acct}"
+# GITHUB_ACTIONS is unset so the leak checks read the same on a laptop and on a runner; one case below sets it to
+# prove the account is masked there.
 oidc_env() {
-  stubbed env ACCOUNT="$acct" REGION=ap-southeast-1 GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 \
+  stubbed env -u GITHUB_ACTIONS ACCOUNT="$acct" REGION=ap-southeast-1 GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 \
     ACTIONS_ID_TOKEN_REQUEST_URL="https://token.example/req?x=1" ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token "$@"
 }
 denied_ready() {
@@ -159,6 +161,12 @@ case "$out" in
 esac
 case "$out" in *"$acct"* | *"$jwt"*) die "selftest: the output holds the account or the token" ;; esac
 ok "web identity denial passes when every role refuses, and prints no secret"
+
+denied_ready
+out="$(oidc_env GITHUB_ACTIONS=true "$ROOT/scripts/assert-web-identity-denied.sh" plan 2>&1)" || die "selftest: a refusal on a runner should pass: $out"
+case "$out" in *"::add-mask::$acct"*) ;; *) die "selftest: on a runner the account must be masked: $out" ;; esac
+case "$(printf '%s\n' "$out" | grep -v '^::add-mask::')" in *"$acct"*) die "selftest: on a runner the account appears outside a mask command" ;; esac
+ok "web identity denial masks the account on a runner"
 
 denied_ready
 stub "$sts" rc 0 1
