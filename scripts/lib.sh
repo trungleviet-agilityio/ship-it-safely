@@ -106,7 +106,7 @@ jwt_claim() {
 }
 
 # web_identity_call <role: plan|apply|deploy> <token> [aws args...]: run an unsigned sts assume-role-with-web-identity for
-# role sis-<ENV>-gha-<role> in ACCOUNT and REGION (the account is masked). It only builds and runs the command, so
+# role sis-<ENV>-gha-<role> in ACCOUNT and REGION. Callers mask ACCOUNT first (a mask printed inside a captured call never reaches the log). It only builds and runs the command, so
 # pass it to assert_denied or run_capture. A success holds credentials: never print its stdout.
 web_identity_call() {
   local role="$1" token="$2"
@@ -114,7 +114,6 @@ web_identity_call() {
   : "${ACCOUNT:?ACCOUNT is not set}" "${REGION:?REGION is not set}"
   require_env
   case "$role" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$role'" ;; esac
-  mask "$ACCOUNT"
   # No credentials are needed or sent: --no-sign-request.
   aws sts assume-role-with-web-identity \
     --role-arn "arn:aws:iam::${ACCOUNT}:role/sis-${ENV}-gha-${role}" \
