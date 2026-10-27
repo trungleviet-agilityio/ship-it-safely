@@ -135,7 +135,8 @@ Gates outside the trust policy:
 - **Security alert:** a CloudTrail trail plus an EventBridge rule email you (SNS) about every refused
   `AssumeRoleWithWebIdentity` in ap-southeast-1 and any assumption with a `sub` other than the two trusted ones
   (ADR 0007 S8). The region pin means a success can only happen there; refused probes in other regions are not
-  alerted (accepted: they grant nothing).
+  alerted (accepted: they grant nothing). Diagram:
+  [bootstrap security alert](docs/diagrams/bootstrap-security-alert.drawio.png).
 
 ## Pipelines (`.github/workflows/`)
 

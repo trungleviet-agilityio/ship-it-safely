@@ -324,6 +324,9 @@ No Critical or High finding. Round 1 builds everything marked **Fix**; the rest 
 | Simplifier 1, 2, 3, 4, 6, 7, 9 (reuse `assert_denied`, drop name-built topic and rule locals, table-driven policy fixtures, one trigger-test helper, one base-line regex, `require_env`, trims) and rule order | **Fix now** (senior clean-code standard) | One definition per idea; fewer lines to maintain | A broader diff in a fix round |
 | Simplifier 5: workflow self-tests on a YAML loader instead of `sed` ranges | **Defer to Phase 7**, before more workflows arrive | This PR stays reviewable | The brittle ranges stay one more phase |
 | Simplifier 8, 10: rule 7 scope, `create_trail`, a shared `env_trust` local | **Keep** | ADR 0004 per-module intent and Q2 stay as decided | A few repeated lines |
+| Re-check R1 (reviewer, Medium): `aws:RequestedRegion` could lock every role out if the key did not resolve on this unauthenticated call | **Keep and prove at the checkpoint**: A4 (the PR plan job assumes the plan role after A2) is the go or no-go; rollback is reverting the condition and re-applying bootstrap | Closes the M1 detection gap at no cost; it fails closed, never open | A wrong guess costs one admin re-apply |
+| Re-check R2, R5, R3, R4 and security L1 residual: awk `-v` mangled patterns, rule 9 without a space, the venv target touched the interpreter, the mask never reached the log, and string/heredoc/comment tricks against rules 11 and 12 | **Fix (round 2)**: patterns through `ENVIRON`, fixtures for each form, a `.venv-ci/.installed` stamp, a mask in each caller, and `tf-resolved-sources.sh` after `init` (checks what Terraform resolved, not the text) | Fails closed whatever the HCL looks like | One more script in `tf-check` |
+| Security residual M1: refused probes in other regions still send no alert | **Accept**, recorded in PROGRESS | They grant nothing | Probing outside the region stays silent |
 
 ## Checkpoint A commands (the user runs these; Claude never does, NFR-9)
 
@@ -371,6 +374,8 @@ gh pr checks <PR_A> --repo trungleviet-agilityio/ship-it-safely --watch
 # repo-guard guard, terraform-iac checks/plan/comment, oidc-smoke-test (N8, N9) green; plan comment shows alb_http[0], no CIDR
 ```
 
+**A4 is the go or no-go for the region pin (verify R1).** If the plan job fails with AccessDenied after A2, revert the `aws:RequestedRegion` condition in `oidc.tf` on the branch and re-apply bootstrap, then report it.
+
 **A5. Alerts fire on the negative tests.** Web UI: re-run the `oidc-smoke-test` PR job (after A2). Expect 3 to 5 emails within about 15 minutes. Then confirm the field the rule matches:
 
 ```bash
@@ -417,6 +422,8 @@ To plan a Terraform Dependabot PR: `gh pr checkout <N> && git switch -c deps/ter
 PYTHON_IMAGE_MIRRORS="docker.io/library/python" BUILD_RETRY_DELAYS=0 make image
 # expect "built ... (base from docker.io/library/python)"
 ```
+
+**A12. Local Compose (FR-1, blocked for the e2e agent):** `make up`, then open `/`, `/health`, `/version` and `/admin` (expect 401 without the key) on http://localhost:8080, then `make down`.
 
 ## Checkpoint B (after PR B)
 

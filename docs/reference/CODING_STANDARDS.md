@@ -230,5 +230,8 @@ disagree, the ADR wins; update this file.
   file as the entry point (ADR 0007 S34). `make venv` creates `.venv-ci`.
 - Terraform policy (`scripts/tf-policy.sh`): no `provisioner` and no `data "external"` in any
   quoting (rule 9), no `*.tf.json` (rule 10), and module sources under `envs/` and `modules/` are
-  local paths only (rule 11).
+  local paths only (rule 11), and providers are `hashicorp/*` only (rule 12). After `init`,
+  `scripts/tf-resolved-sources.sh` checks what Terraform actually resolved (module sources in
+  `modules.json`, providers in the lock file), so the text rules are fast feedback and the resolved
+  check fails closed.
 - Editors follow [`.editorconfig`](../../.editorconfig).

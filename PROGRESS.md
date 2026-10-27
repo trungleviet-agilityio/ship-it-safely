@@ -15,7 +15,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 3 Infra pipeline + ECS | ✅ | 0004 | #10, #11, #13 | PR plan comment, approved apply (27 resources), `/health` 200 `ok`; plan role: `explicitDeny` on `GetSecretValue`, `implicitDeny` on creates |
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
 | 5 Hardening & teardown | ✅ | 0006 | #19 | Bootstrap re-applied (deploy role `DescribeSecret` allowed, `GetSecretValue` explicitDeny); stack re-created; N5 deploy refused at Preflight before the secret had a value, then green with `/version` on the `main` SHA by digest; `terraform-destroy` removed 27 resources and deregistered revisions 4, 5, 6, 8 with no account ID in logs; N6 wrong phrase failed with no approval prompt; N7 "nothing to destroy" |
-| 6 Supply-chain hardening | 🟡 | | | Done early: SHA pins, checksum-verified tools, harden-runner (audit) in every job, gitleaks pre-commit and push protection, multi-platform lock files. Left: Dependabot (NFR-5), harden-runner `block` with an allowlist, Q1 exposure check |
+| 6 Supply-chain hardening | ⏳ | 0007 | (PR A: open after push) | PR A built and verified (2 fix rounds, `make check` green): Dependabot, `job_workflow_ref` and region pins in the trust, CloudTrail plus EventBridge plus SNS alert, N8 and N9, YAML trigger parser, ALB CIDR secret, Terraform policy rules 9 to 12 plus a resolved-sources check, `.editorconfig`, `CODEOWNERS`, `compose.yaml`. Checkpoint A pending; PR B (harden-runner `block`) follows it |
 | 7 Stretch: prod account | ⏸ | | | Needs AWS Organizations and a prod account (user). Deploy scripts are already parameterized by `ENV` |
 
 ## Live AWS state
@@ -42,17 +42,22 @@ harden-runner `block` (Phase 6) and the prod account with `BLUE_GREEN` (Phase 7)
 
 | Item | From | Target |
 |---|---|---|
-| Pin `job_workflow_ref` instead of the workflow `name:` in deploy/apply trust (reusable workflows) | ADR 0005 L2 | Phase 6 |
-| harden-runner insights may show hostnames with the account ID (Q1; ADR 0006 step 10 not run) | ADR 0005 Q1 | Phase 6 check |
-| YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Phase 6 (moved by ADR 0006) |
-| Wire `TF_VAR_alb_ingress_cidrs` from a secret to narrow the ALB | ADR 0004 L4 | Phase 6 (moved by ADR 0006) |
+| Pin `job_workflow_ref` instead of the workflow `name:` in deploy/apply trust (reusable workflows) | ADR 0005 L2 | Built in Phase 6 PR A (ADR 0007 S2); proven live at checkpoint A7 |
+| harden-runner insights may show hostnames with the account ID (Q1; ADR 0006 step 10 not run) | ADR 0005 Q1 | Checkpoint A6; PR B turns telemetry off on credentialed jobs |
+| YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Built in Phase 6 PR A (ADR 0007 S9) |
+| ALB ingress from the optional secret `ALB_INGRESS_CIDRS_DEV` (`TF_VAR_alb_ingress_cidrs_json`) | ADR 0004 L4 | Built in Phase 6 PR A (ADR 0007 S10); set it at A7 step 5 if wanted |
 | Deploy preflight: check the secret has an `AWSCURRENT` version (needs `DescribeSecret` in bootstrap) | Phase 4 run 3 | Built in Phase 5 (G14); proven live by N5 at the checkpoint |
 | Deregister deploy-registered task definition revisions at teardown | ADR 0005 F23 | Built in Phase 5 (G12, `terraform-destroy`) |
-| Make `guard (no AWS)` a required status check in the `main` ruleset | ADR 0004 L-b | User setting |
-| 10 code-simplifier suggestions from Phase 3 (workflow duplication) | ADR 0004 | Fixed in Phases 4 and 5; the composite action for the AWS preamble is deferred to Phase 7 |
-| CloudTrail trail plus a metric filter and alarm on `AssumeRoleWithWebIdentity` with an unexpected `sub` (NFR-7 stretch) | ADR 0002 Q2, hands-on notes Phase 6 | Phase 6 (decide trail cost) or Phase 7 |
-| Negative test: a PR job cannot assume the apply or deploy role (AccessDenied); demo that credentials expire after 1 hour | Hands-on notes, talk demo | Phase 6 checkpoint |
-| `tf-policy.sh` rule 9 misses unquoted labels, `*.tf.json` and remote module sources | ADR 0006 security re-check | Phase 6 |
-| Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Phase 6 |
-| `terraform-destroy.yml` comment says the typed phrase is never echoed, but GitHub prints the step `env:` block | Phase 5 checkpoint | Phase 6 |
-| Optional: delete the `INACTIVE` task definitions (`DeleteTaskDefinitions`) so they stop showing in the Tagging API | Phase 5 checkpoint | Phase 6 (optional) |
+| Make `guard (no AWS)` a required status check in the `main` ruleset | ADR 0004 L-b | User setting at checkpoint A8 |
+| 10 code-simplifier suggestions from Phase 3 (workflow duplication) | ADR 0004 | Fixed in Phases 4 to 6; the composite action for the AWS preamble is deferred to Phase 7 |
+| CloudTrail trail plus a metric filter and alarm on `AssumeRoleWithWebIdentity` with an unexpected `sub` (NFR-7 stretch) | ADR 0002 Q2, hands-on notes Phase 6 | Built in Phase 6 PR A (ADR 0007 S8, EventBridge and SNS instead of a metric filter); alerts cover the bootstrap region only |
+| Negative test: a PR job cannot assume the apply or deploy role (AccessDenied); demo that credentials expire after 1 hour | Hands-on notes, talk demo | Built in Phase 6 PR A (ADR 0007 S15: N8, N9 in `oidc-smoke-test`) |
+| `tf-policy.sh` rule 9 misses unquoted labels, `*.tf.json` and remote module sources | ADR 0006 security re-check | Built in Phase 6 PR A (ADR 0007 S11; rules 9 to 12 plus `tf-resolved-sources.sh`) |
+| Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Built in Phase 6 PR A (ADR 0007 S12, `tf-destroy-report.sh`) |
+| `terraform-destroy.yml` comment says the typed phrase is never echoed, but GitHub prints the step `env:` block | Phase 5 checkpoint | Built in Phase 6 PR A (ADR 0007 S13) |
+| Optional: delete the `INACTIVE` task definitions (`DeleteTaskDefinitions`) so they stop showing in the Tagging API | Phase 5 checkpoint | Dropped (ADR 0007 S14: they cost nothing) |
+| harden-runner `block` with an explicit allowlist on the credentialed jobs | ADR 0007 S4, S39 to S41 | Phase 6 PR B, from the A6 egress list |
+| Monthly manual check: `mise.toml` tool versions with `scripts/ci-tools.sha256`, and `scripts/ci-requirements.txt` (not covered by Dependabot) | ADR 0007 B | Ongoing |
+| Turn on "require review from code owners" when a second maintainer joins | ADR 0007 Q6 | Later |
+| Workflow self-tests on a YAML loader instead of `sed` ranges | ADR 0007 verify | Phase 7, before more workflows |
+| Refused STS probes in other regions are not alerted (the region pin makes them harmless) | ADR 0007 verify M1 | Accepted |
