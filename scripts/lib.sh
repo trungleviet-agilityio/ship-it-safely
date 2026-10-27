@@ -75,6 +75,53 @@ assert_denied() {
   esac
 }
 
+# mask <value>: ask the runner to hide a value in every later log line. It prints nothing outside GitHub Actions, so a
+# local run or a self-test never carries the value in its output.
+mask() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then printf '::add-mask::%s\n' "$1" >&2; fi
+}
+
+# oidc_token <audience>: print the job's GitHub OIDC token (needs id-token: write) and mask it. Logs nothing else.
+oidc_token() {
+  local response token
+  [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
+    || die "no OIDC token request variables (the job needs id-token: write)"
+  # The audience is a query parameter (GitHub OIDC reference).
+  response="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$1")" \
+    || die "OIDC token request failed (not a role refusal)"
+  token="$(jq -r '.value // empty' <<<"$response")"
+  [ -n "$token" ] || die "OIDC token response has no value"
+  mask "$token"
+  printf '%s' "$token"
+}
+
+# jwt_claim <token> <claim>: print one claim of a JWT payload (empty when absent). Reads base64url with or without
+# padding. Never prints the token.
+jwt_claim() {
+  local payload
+  payload="$(cut -d. -f2 <<<"$1" | tr '_-' '/+')"
+  while [ $((${#payload} % 4)) -ne 0 ]; do payload="${payload}="; done
+  base64 -d <<<"$payload" | jq -r --arg claim "$2" '.[$claim] // empty'
+}
+
+# web_identity_call <role: plan|apply|deploy> <token> [aws args...]: an unsigned sts assume-role-with-web-identity for
+# role sis-<ENV>-gha-<role> in ACCOUNT and REGION, through run_capture (RUN_RC, RUN_OUT, RUN_ERR with 12-digit runs
+# redacted). The account is masked. Callers must never print RUN_OUT: a success holds credentials.
+web_identity_call() {
+  local role="$1" token="$2"
+  shift 2
+  : "${ACCOUNT:?ACCOUNT is not set}" "${REGION:?REGION is not set}"
+  ENV="${ENV:-dev}"
+  valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
+  case "$role" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$role'" ;; esac
+  mask "$ACCOUNT"
+  # No credentials are needed or sent: --no-sign-request.
+  run_capture aws sts assume-role-with-web-identity \
+    --role-arn "arn:aws:iam::${ACCOUNT}:role/sis-${ENV}-gha-${role}" \
+    --role-session-name "gha-oidc-negative-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${role}" \
+    --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
+}
+
 # sha256_of <file>: hex digest on Linux and macOS.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi

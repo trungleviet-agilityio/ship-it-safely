@@ -1,7 +1,7 @@
 # Repository guards that run on every pull request and every push to main, with no path filter (ADR 0004).
-# The role trust pins the workflow `name:`, and terraform-iac is path filtered, so a change that touches only
-# another workflow file would skip its checks. This workflow has no AWS access and no secrets.
-# Its `name:` must never be added to the bootstrap `workflow_names`.
+# The file path is in the role trust (bootstrap `workflow_files`), and terraform-iac is path filtered, so a change
+# that touches only another workflow file would skip its checks. This workflow has no AWS access and no secrets.
+# This file must never be added to the bootstrap `workflow_files`.
 name: repo-guard
 
 on:
@@ -34,11 +34,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # Hash-locked install; a commit made with --no-verify or in the web editor skips the local hooks.
-      - name: Install pre-commit (hash locked)
+      # Hash-locked install (pre-commit and PyYAML); a commit made with --no-verify or in the web editor skips the
+      # local hooks.
+      - name: Install pre-commit and PyYAML (hash locked)
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet --require-hashes -r scripts/ci-requirements.txt
+          scripts/ci-venv.sh "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Workflow security audit (zizmor)

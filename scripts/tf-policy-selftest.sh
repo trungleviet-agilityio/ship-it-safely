@@ -173,4 +173,38 @@ d="$(fixture r9d)"
 printf 'data "external" "x" {\n  program = ["true"]\n}\n' >"$d/envs/dev/ext.tf"
 expect_fail "$d" 9
 
+# Rule 9 also catches bare (unquoted) labels.
+d="$(fixture r9e)"
+printf 'resource "terraform_data" "x" {\n  provisioner local-exec {\n    command = "true"\n  }\n}\n' >"$d/modules/m/prov.tf"
+expect_fail "$d" 9
+
+d="$(fixture r9f)"
+printf 'data external x {\n  program = ["true"]\n}\n' >"$d/envs/dev/ext.tf"
+expect_fail "$d" 9
+
+# Rule 10: a JSON twin of a configuration file escapes every line based rule.
+d="$(fixture r10)"
+printf '{"resource": {}}\n' >"$d/envs/dev/main.tf.json"
+expect_fail "$d" 10
+
+# Rule 11: module sources are local paths.
+d="$(fixture r11a)"
+printf 'module "x" { source = "git::https://example.com/m.git" }\n' >"$d/envs/dev/mod.tf"
+expect_fail "$d" 11
+
+d="$(fixture r11b)"
+printf 'module "x" {\n  source  = "terraform-aws-modules/vpc/aws"\n  version = "1.0.0"\n}\n' >"$d/modules/m/mod.tf"
+expect_fail "$d" 11
+
+d="$(fixture r11c)"
+printf 'module "x" {\n  name = "n"\n  source = "github.com/example/m"\n}\n' >"$d/envs/dev/mod.tf"
+expect_fail "$d" 11
+
+# These must pass: local sources, and a required_providers source (not inside a module block).
+d="$(fixture r11ok)"
+printf 'module "x" { source = "../../modules/app-ecs" }\nmodule "y" {\n  source = "./y"\n}\n' >"$d/envs/dev/mod.tf"
+printf 'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/aws"\n    }\n  }\n}\n' >"$d/envs/dev/versions.tf"
+"$policy" "$d" >/dev/null 2>&1 || die "local module sources and required_providers sources must pass"
+ok "local module sources and required_providers pass rule 11"
+
 ok "all $n bad fixtures fail with their rule id"

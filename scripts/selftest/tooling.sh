@@ -91,13 +91,144 @@ ok "redact filter replaces 12-digit runs"
 # --- Usage contracts. The Docker-based scripts (build, smoke, scan) run in full in app-ci and in `make image smoke
 # scan`, which need Docker and the trivy database; their argument contracts are checked here, with the rest.
 # A script that takes arguments prints its usage when called with none.
-for s in build-image app-smoke render-task-def image-verify image-export image-import image-name ecr-push check-aws-config; do
+for s in build-image app-smoke render-task-def image-verify image-export image-import image-name ecr-push check-aws-config \
+  assert-web-identity-denied assert-session-cap ci-venv; do
   expect_fail "$s without arguments" "usage:" "$ROOT/scripts/$s.sh"
 done
 # A script that takes none refuses a stray argument.
 for s in app-names ecs-preflight ecs-deregister-revisions assert-no-account-id assumed-role-name plan-role-guardrails \
-  tf-init tf-destroy-check tf-plan-summary; do
+  tf-init tf-destroy-check tf-plan-summary mask-cidrs tf-destroy-report; do
   expect_fail "$s with a stray argument" "usage:" "$ROOT/scripts/$s.sh" x
 done
 expect_fail "scan-image with one argument" "usage:" "$ROOT/scripts/scan-image.sh" image-only
 expect_fail "ecs-wait with two arguments" "usage:" "$ROOT/scripts/ecs-wait-deployment.sh" cluster service
+
+# --- OIDC helpers and the negative tests (ADR 0007 S30 to S32), with stub curl and aws.
+# b64url <text> [pad]: base64url without padding, or with it when a second argument is given.
+b64url() {
+  local out
+  out="$(printf '%s' "$1" | base64 | tr -d '\n' | tr '+/' '-_')"
+  if [ -z "${2:-}" ]; then out="${out%%=*}"; fi
+  printf '%s' "$out"
+}
+claims='{"sub":"repo:o@1/r@2:pull_request","job_workflow_ref":"o/r/.github/workflows/oidc-smoke-test.yml@refs/pull/7/merge"}'
+jwt="$(b64url '{"alg":"none"}').$(b64url "$claims").sig"
+claim() { bash -c 'source "$1/scripts/lib.sh"; jwt_claim "$2" "$3"' _ "$ROOT" "$1" "$2"; }
+[ "$(claim "$jwt" sub)" = "repo:o@1/r@2:pull_request" ] || die "selftest: jwt_claim could not read an unpadded payload"
+# Payloads of every length modulo 4, padded and unpadded.
+for v in x xy xyz xyzw; do
+  for pad in "" pad; do
+    padded_jwt="h.$(b64url "{\"a\":\"$v\"}" "$pad").s"
+    [ "$(claim "$padded_jwt" a)" = "$v" ] || die "selftest: jwt_claim failed for value '$v' (padding: '${pad:-none}')"
+  done
+done
+[ -z "$(claim "$jwt" no_such_claim)" ] || die "selftest: an absent claim must read as empty"
+ok "jwt_claim decodes padded and unpadded payloads"
+
+cat >"$tmp/stub/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "curl $*" >>"${STUB_DIR:?}/calls"
+[ ! -f "$STUB_DIR/curl.out" ] || cat "$STUB_DIR/curl.out"
+[ ! -f "$STUB_DIR/curl.rc" ] || exit "$(cat "$STUB_DIR/curl.rc")"
+exit 0
+EOF
+chmod +x "$tmp/stub/curl"
+sts=aws-sts-assume-role-with-web-identity
+denied_err="An error occurred (AccessDenied) when calling the AssumeRoleWithWebIdentity operation: Not authorized to perform sts:AssumeRoleWithWebIdentity for ${acct}"
+oidc_env() {
+  stubbed env ACCOUNT="$acct" REGION=ap-southeast-1 GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 \
+    ACTIONS_ID_TOKEN_REQUEST_URL="https://token.example/req?x=1" ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token "$@"
+}
+denied_ready() {
+  stub_reset
+  stub curl out "{\"value\":\"$jwt\"}"
+  stub "$sts" rc 254
+  stub "$sts" err "$denied_err"
+}
+# quiet_run <command...>: stdout and stderr together, the failure code kept out of the way.
+quiet_run() { ( trap - ERR; "$@" 2>&1 ) || true; }
+
+denied_ready
+out="$(oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan apply deploy 2>&1)" || die "selftest: refusals of all three roles should pass: $out"
+[ "$(cat "$sd/$sts.n")" = 3 ] || die "selftest: one STS call per role expected"
+for r in plan apply deploy; do calls_have "role/sis-dev-gha-$r" || die "selftest: the $r role was not tested"; done
+calls_have "--no-sign-request" || die "selftest: the STS calls must be unsigned"
+case "$out" in
+  *"Token sub: repo:o@1/r@2:pull_request"*"Token job_workflow_ref: o/r/.github/workflows/oidc-smoke-test.yml@refs/pull/7/merge"*) ;;
+  *) die "selftest: the token claims were not printed: $out" ;;
+esac
+case "$out" in *"$acct"* | *"$jwt"*) die "selftest: the output holds the account or the token" ;; esac
+ok "web identity denial passes when every role refuses, and prints no secret"
+
+denied_ready
+stub "$sts" rc 0 1
+stub "$sts" err "" 1
+stub "$sts" out '{"Credentials":{"SecretAccessKey":"never-printed"}}' 1
+out="$(quiet_run oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan apply deploy)"
+case "$out" in *"the apply role was assumed with a token it must refuse: trust too broad"*) ;; *) die "selftest: a success must fail with trust too broad: $out" ;; esac
+case "$out" in *never-printed*) die "selftest: credentials reached the output" ;; esac
+[ "$(cat "$sd/$sts.n")" = 2 ] || die "selftest: the run must stop at the first role that accepts the token"
+denied_ready
+stub "$sts" err "Could not connect to the endpoint URL ${acct}"
+expect_fail "web identity denial on a network error" "not as a role refusal" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan
+out="$(quiet_run oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan)"
+case "$out" in *"$acct"*) die "selftest: an error message leaked the account" ;; esac
+denied_ready
+stub curl rc 22
+expect_fail "web identity denial when the token request fails" "OIDC token request failed" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan
+denied_ready
+stub curl out '{"value":""}'
+expect_fail "web identity denial with an empty token" "no value" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan
+denied_ready
+expect_fail "web identity denial with an unknown role" "role must be plan, apply or deploy" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" admin
+ok "web identity denial fails on success, other errors and token problems"
+
+cap_ready() {
+  stub_reset
+  stub curl out "{\"value\":\"$jwt\"}"
+  stub "$sts" rc 254 0
+  stub "$sts" err "An error occurred (ValidationError) when calling the AssumeRoleWithWebIdentity operation: The requested DurationSeconds exceeds the MaxSessionDuration set for this role." 0
+  stub "$sts" out "2026-10-27T10:15:00+00:00" 1
+}
+cap_ready
+out="$(oidc_env "$ROOT/scripts/assert-session-cap.sh" plan 2>&1)" || die "selftest: a refused 3601 and a granted 900 should pass: $out"
+case "$out" in *"session expires in about 15 minutes (2026-10-27T10:15:00+00:00)"*) ;; *) die "selftest: the expiry line is missing: $out" ;; esac
+calls_have "--duration-seconds 3601" || die "selftest: the over-cap duration must be requested"
+calls_have "--duration-seconds 900" || die "selftest: the short duration must be requested"
+case "$out" in *"$acct"* | *"$jwt"* | *Credentials* | *SecretAccessKey*) die "selftest: the session cap output holds a secret" ;; esac
+cap_ready
+stub "$sts" rc 0 0
+expect_fail "session cap when 3601 seconds is granted" "max_session_duration is above 3600" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
+cap_ready
+stub "$sts" err "An error occurred (AccessDenied) for ${acct}" 0
+expect_fail "session cap when 3601 fails for another reason" "not for the duration" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
+cap_ready
+stub "$sts" rc 254 1
+stub "$sts" err "An error occurred (AccessDenied)" 1
+expect_fail "session cap when 900 seconds is refused" "a 900 second session was refused" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
+ok "session cap: 3601 refused for the duration, 900 reports its expiry"
+
+# --- mask-cidrs.sh
+[ "$(CIDRS="" "$ROOT/scripts/mask-cidrs.sh" 2>/dev/null)" = "::notice::ALB ingress: default 0.0.0.0/0" ] || die "selftest: an empty list must print only the notice"
+masks="$(CIDRS='["198.51.100.7/32","203.0.113.0/24"]' "$ROOT/scripts/mask-cidrs.sh" 2>/dev/null)"
+[ "$masks" = "$(printf '::add-mask::198.51.100.7/32\n::add-mask::203.0.113.0/24')" ] || die "selftest: expected one add-mask per element, got: $masks"
+expect_fail "mask-cidrs with non-JSON" "must be a JSON list" env CIDRS="not json" "$ROOT/scripts/mask-cidrs.sh"
+expect_fail "mask-cidrs with a JSON object" "must be a JSON list" env CIDRS='{"a":"198.51.100.7/32"}' "$ROOT/scripts/mask-cidrs.sh"
+out="$(quiet_run env CIDRS="bad 198.51.100.7" "$ROOT/scripts/mask-cidrs.sh")"
+case "$out" in *198.51.100.7*) die "selftest: mask-cidrs echoed a bad value" ;; esac
+ok "mask-cidrs masks each element and refuses anything but a JSON list"
+
+# --- Script modes (ADR 0007 S19): libraries are only sourced, so they are not executable; everything else is.
+modes="$(git -C "$ROOT" ls-files -s 'scripts/*.sh' 2>/dev/null || true)"
+if [ -z "$modes" ]; then
+  warn "no git index here, skipping the script mode check"
+else
+  while read -r mode _ _ path; do
+    case "$path" in
+      scripts/lib.sh | scripts/selftest/common.sh) want=100644 ;;
+      *) want=100755 ;;
+    esac
+    [ "$mode" = "$want" ] || die "selftest: $path is mode $mode, expected $want (libraries 100644, scripts 100755)"
+  done <<<"$modes"
+  ok "libraries are not executable and every script is"
+fi

@@ -151,6 +151,7 @@ variable "alb_ingress_cidrs" {
   type        = list(string)
   description = "CIDR blocks allowed to reach the ALB on port 80. Open by default (ADR 0004, Q1); restrict it when the lab is not being demoed."
   default     = ["0.0.0.0/0"]
+  sensitive   = true # may be a maintainer address from a repository secret (ADR 0007 S10)
 
   validation {
     condition     = length(var.alb_ingress_cidrs) >= 1 && alltrue([for c in var.alb_ingress_cidrs : can(cidrhost(c, 0))])

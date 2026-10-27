@@ -49,6 +49,9 @@ module "app_ecs" {
   first app-deploy.
 - **Secret recovery window.** Defaults to 0 so a torn-down stack can be re-created in the same session.
 - **ALB ingress.** Open to `0.0.0.0/0` by default (ADR 0004, Q1); the listener is plain HTTP (R6).
+  `alb_ingress_cidrs` is `sensitive` (it can be a maintainer address from a CI secret). The rules are indexed
+  (`alb_http[0]`, ...) and their descriptions hold no CIDR, so neither plan output nor state keys reveal it
+  (ADR 0007 S35).
 
 Offline checks: `make tf-check` runs `terraform test` with a mocked provider, plus the `tf-policy.sh` rules.
 
