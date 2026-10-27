@@ -13,45 +13,13 @@ Run through scripts/check-workflow-triggers.sh, which picks the interpreter and 
 
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
-import yaml
+# `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from workflow_yaml import run  # noqa: E402  (import after the path setup above)
 
 ALLOWED = ("pull_request", "push", "workflow_dispatch")
-
-
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """SafeLoader that refuses a mapping holding the same key twice.
-
-    GitHub keeps one of the two values and PyYAML the last, so a duplicate could hide a trigger.
-    """
-
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-        self.flatten_mapping(node)
-        seen: set[Any] = set()
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=True)
-            try:
-                duplicate = key in seen
-            except TypeError as e:
-                raise yaml.constructor.ConstructorError(
-                    None, None, f"unhashable mapping key {key!r}", key_node.start_mark
-                ) from e
-            if duplicate:
-                raise yaml.constructor.ConstructorError(
-                    None, None, f"duplicate key {key!r}", key_node.start_mark
-                )
-            seen.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
-def _load(text: str) -> Any:
-    loader = _UniqueKeyLoader(text)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
 
 
 def _triggers(document: Any) -> list[str]:
@@ -76,13 +44,10 @@ def _triggers(document: Any) -> list[str]:
     return names
 
 
-def check(path: Path) -> list[str]:
-    """Violations of one workflow file, as `<file>: <message>` lines."""
-    shown = os.path.relpath(path)
+def check(shown: str, document: Any) -> list[str]:
+    """Violations of one parsed workflow, as `<file>: <message>` lines."""
     try:
-        names = _triggers(_load(path.read_text(encoding="utf-8")))
-    except yaml.YAMLError as e:
-        return [f"{shown}: invalid YAML: {getattr(e, 'problem', None) or 'parse error'}"]
+        names = _triggers(document)
     except ValueError as e:
         return [f"{shown}: {e}"]
     return [
@@ -92,21 +57,5 @@ def check(path: Path) -> list[str]:
     ]
 
 
-def main(argv: list[str]) -> int:
-    if not argv:
-        print("usage: workflow_triggers.py <workflow file>...", file=sys.stderr)
-        return 2
-    problems: list[str] = []
-    for name in argv:
-        path = Path(name)
-        if not path.is_file():
-            problems.append(f"{os.path.relpath(path)}: workflow not found")
-            continue
-        problems.extend(check(path))
-    for line in problems:
-        print(line)
-    return 1 if problems else 0
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(run("workflow_triggers.py", check, sys.argv[1:]))

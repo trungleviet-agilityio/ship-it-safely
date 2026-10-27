@@ -174,6 +174,53 @@ Total: about 0 USD a month, well inside the 20 USD budget. A second trail would 
 | S40 | Selftest for PR B:<br>- every job with `id-token: write` has `egress-policy: block` and `disable-telemetry: true`;<br>- every endpoint has `:port`;<br>- no entry is `*`, `*:443`, `*.amazonaws.com:443`, `*.githubusercontent.com:443` or `*.github.com:443`;<br>- jobs without credentials still name `audit` explicitly |
 | S41 | Expected endpoint families, to be confirmed from the log, not copied blindly:<br>- `github.com`, `api.github.com`, release asset hosts (checkout, tflint download);<br>- `releases.hashicorp.com`, `registry.terraform.io` (Terraform, providers);<br>- `sts.<region>.amazonaws.com`;<br>- the regional service endpoints the job calls (`ec2`, `ecs`, `elasticloadbalancing`, `logs`, `secretsmanager`, `api.ecr`) and `iam.amazonaws.com`;<br>- the ECR layer bucket host for pushes;<br>- the state bucket host (S39).<br>Runner-required endpoints are allowed implicitly in the community tier (v2.21.1 notes) |
 
+### F. PR B decisions after checkpoint A (2026-10-27, same delegation)
+
+The A6 list covers the plan, plan-role-guardrails and smoke-test jobs. These decisions fill what S39 to S41 left
+open. harden-runner stays at v2.22.2, the latest release (checked 2026-10-27).
+
+| # | Decision | Pro | Con |
+|---|---|---|---|
+| S42 | **Seven jobs go to `block`:** terraform-iac `plan`, `plan-role-guardrails`, `apply`; terraform-destroy `destroy`; app-deploy `deploy`; both oidc-smoke-test jobs (every job with `id-token: write`). All other jobs keep `audit`, written out | Blocking where AWS credentials live; insights stay on credential-free jobs, where they are useful and hold no account host | Seven allowlists to keep current |
+| S43 | **Hosts for jobs A6 did not capture** (apply, destroy, deploy) come from the code, not a guess: the plan job's list plus the regional endpoint of every AWS service in `envs/dev` and `modules/app-ecs` (`ec2`, `elasticloadbalancing`, `ecs`, `api.ecr`, `logs`, `secretsmanager`) and `iam.amazonaws.com`; deploy from its scripts and actions (artifact download, ECR registry and layer host, `ecs`, `secretsmanager`). The build agent confirms each against AWS and StepSecurity docs | Every host traces to a resource or script line | A missed host fails a job (R16); checkpoint B is the proof |
+| S44 | **`CHECKPOINT_DISABLE=1`** in the workflow `env:` of terraform-iac and terraform-destroy. `checkpoint-api.hashicorp.com` leaves the allowlists | One host fewer; no version-check call to HashiCorp | No upgrade notice in CI logs (Dependabot covers that) |
+| S45 | **The S40 rules are a repo-guard check, not only a self-test** (as built after verify round 1: also `disable-sudo-and-containers` with the one `deploy` exception, no `*` and only three expression contexts in credentialed endpoints, no `if:`/`continue-on-error:` on the step, no `container:`/`services:` on credentialed jobs, no `secrets.` in other jobs' endpoints; both helpers share `run()` in `workflow_yaml.py`): a Python helper on the hash-locked PyYAML venv (like `workflow_triggers.py`) reads every workflow and fails when a credentialed job is not `block` with telemetry off, an endpoint has no `:port`, an entry is a broad wildcard (S40 list), a literal 12-digit number appears, or a non-credentialed job does not say `audit`. Self-tests cover each rule | A new credentialed job cannot ship in audit by accident; YAML read the way GitHub reads it | One more helper and its fixtures |
+| S46 | **Dependabot python ignore:** in the `docker` entry, `ignore` `dependency-name: "*python*"` (matched to the name Dependabot reports, checked by the agent) with `update-types: ["version-update:semver-minor", "version-update:semver-major"]`. Digest and patch updates of 3.13 still arrive. The user closes #22 after merge | Security rebuilds stay automatic; a runtime change stays a planned change | Moving to a new Python is manual |
+| S47 | **Rollout:** PR B's own checks prove the plan and smoke-test lists in block mode before merge. Apply, deploy and destroy are proven at checkpoint B on an empty stack. Rollback for one job is a short PR that adds the host the log names (amended after verify: the S45 check refuses `audit` on a credentialed job, so that is not a fallback) | The risky lists are tested where a failure costs nothing | A blocked host mid-apply leaves a partial dev stack; `terraform-destroy` cleans it |
+
+Build hand-back questions, decided by the orchestrator:
+
+| Question | Decision | Pro | Con |
+|---|---|---|---|
+| `plan` gets the apply service endpoints, not only the A6 list (A6 ran on a destroyed stack, so refresh called nothing) | **Keep** | A PR plan against a live stack refreshes every resource and would fail otherwise | Seven hosts A6 did not observe |
+| Artifact download (`deploy`) and the OIDC token endpoint are not listed (runner endpoints are implicit in the community tier) | **Keep, prove it**: the PR's smoke-test job proves the token endpoint; checkpoint B proves the download | No guessed blob-storage host | Only a third-party write-up says results storage is implicit; if deploy blocks, add the host the log names |
+| ECR layer host `prod-<region>-starport-layer-bucket.s3.<region>.amazonaws.com` on `deploy` | **Keep**; checkpoint B shows whether push uses it | AWS documents the bucket; a fixed AWS-owned bucket, not a wildcard | Possibly one unused host |
+| `api.github.com` only on the jobs where A6 saw it | **Keep** | Lists follow evidence | Unknown caller; a blocked call shows in the log |
+| The YAML loader moved to `scripts/workflow_yaml.py`, shared by the trigger and harden-runner helpers through `run_workflow_helper` | **Keep** | One loader and one wrapper path (no duplication) | Small refactor of a PR A file |
+
+PR B verify findings (round 1), decided by the orchestrator:
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| Security H1: code in a credentialed job can undo block mode with passwordless sudo or Docker | **Fix**: `disable-sudo-and-containers: true` on six jobs, required by the policy check; `deploy` is the one named exception (it needs `docker load` and `push`) | Block mode holds against third-party code on the jobs that never need root | `deploy` stays exposed (docker group means root): **residual risk, accepted** for the lab |
+| Security M1: a PR author with push access can change the plan job's policy, and it runs with the plan role before review | **Accept, recorded as a residual risk** | Gating the plan behind an environment changes the plan `sub` and slows every PR | Anyone with push access reads the account through the plan role for one session (read-only, `GetSecretValue` denied by the guardrails policy) |
+| Security M2: exact AWS hosts do not stop uploads to another account | **Correct the claim** (Alternatives, region-wide wildcards); keep exact hosts | The ADR says what block mode really buys | None |
+| Security M3: `api.github.com` has no known caller | **Remove** from `plan`, `apply`, `destroy`; this PR's plan run proves it | One upload API fewer on three credentialed jobs | If blocked, re-add it with the caller named |
+| Security M4, reviewer L2: wildcard denylist too short; expressions unchecked | **Fix**: no `*` at all in a credentialed job's endpoints; only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV`, `env.ENV` expressions | A green check means no wildcard and no variable-widened list | A future wildcard needs a policy change in review |
+| Security L1, L2, L4: `if:`/`continue-on-error` on the harden-runner step; `container:`/`services:` on a credentialed job; `secrets.` in a non-credentialed job's endpoints | **Fix** in the policy check, with fixtures | Closes the shapes that look compliant but are not | A few more rules |
+| Reviewer M1, security L3: artifact download and runner endpoints are implicit | **Prove at checkpoint B** and record the implicit names from the `deploy` log | No guessed blob host | Deploy may block once |
+| Reviewer M2: harden-runner's job summary may list account-bearing hosts | **Check at checkpoint B** on the PR plan run's summary | Evidence first | Account IDs are not secrets (D2) |
+| Reviewer L1, L3: "switch to audit" rollback fails the required guard | **Fixed** in README and S47: the rollback is a PR that adds the host | Docs match the check | None |
+| Simplifier 1 to 5, 7 | **Fix now** (one `run()` entry point, one self-test dispatcher, no duplicate test, short wrappers, simpler duplicate-key loader, short Dependabot comment) | No duplication | None |
+| Simplifier 6: share the plan and apply host lists with a YAML anchor | **Keep separate** | Different roles; a future divergence shows in the diff | 15 repeated lines |
+
+Round 2 (security re-check): H1, M3, M4, L1, L2 closed; none of the six hardened jobs needs sudo or Docker; a
+bad `vars.AWS_REGION` value fails `check-aws-config.sh` before any role is assumed.
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| N1 (Low): an audit job can still carry a secret in `allowed-endpoints` through `secrets['X']`, `toJSON(secrets)` or an `env.X` set from a secret | **Accept, PROGRESS open item** (refuse any expression mentioning `secrets` in audit jobs, and `env` values built from secrets, when the policy is next touched) | Needs a workflow editor and a missed review; account IDs are not secrets (D2) | An account host could reach an insights page by that route |
+
 ### Least privilege summary
 
 | Item | Value | Wildcards |
@@ -221,7 +268,7 @@ app/Dockerfile, app/compose.yaml (renamed), app/.dockerignore     backend-dev (S
 - **A CloudWatch Logs metric filter plus an alarm** (NFR-7 literal). It needs trail delivery to CloudWatch Logs, an IAM role that CloudTrail assumes (a `PassRole` by the admin), a log group, ingestion fees, a metric and an alarm. Rejected for EventBridge (S8). It stays the fallback if the user wants an alarm history graph for the talk.
 - **No trail; read event history by hand.** Free, but there is no alert. Rejected for the stretch.
 - **Block mode on every job in PR A with a guessed allowlist.** It breaks jobs mid-apply on the first missed host. Rejected (PLAN Phase 6.2 says review a log first).
-- **Region-wide wildcards (`*.s3.<region>.amazonaws.com`) for account hosts.** They allow exfiltration to any bucket in the region. Rejected for exact hosts built from secrets (S39). Kept only as the fallback.
+- **Region-wide wildcards (`*.s3.<region>.amazonaws.com`) for account hosts.** They allow exfiltration to any bucket in the region. Rejected for exact hosts built from secrets (S39). Kept only as the fallback. Amended after the PR B security review: block mode filters at DNS and at layers 3 and 4, not by SNI or `Host`, and regional S3 and AWS API front ends are shared, so an exact host does not stop code that brings its own AWS keys from writing to another account. The exact host still stops DNS-level exfiltration and keeps the list honest; the session credentials are the real prize, guarded by least privilege and `disable-sudo-and-containers`.
 - **StepSecurity policy store.** Needs an API key or `id-token: write` for a third party. Rejected.
 - **A stricter line parser instead of PyYAML.** No new dependency, but the hand grammar stays the weak point. Rejected: PyYAML is already in the hash-locked venv.
 - **A `language: python` pre-commit hook with `additional_dependencies: [pyyaml==6.0.3]`.** That installs by version, not by hash. Rejected for `ci-venv.sh`.
@@ -425,11 +472,54 @@ PYTHON_IMAGE_MIRRORS="docker.io/library/python" BUILD_RETRY_DELAYS=0 make image
 
 **A12. Local Compose (FR-1, blocked for the e2e agent):** `make up`, then open `/`, `/health`, `/version` and `/admin` (expect 401 without the key) on http://localhost:8080, then `make down`.
 
+## Checkpoint A results (2026-10-27)
+
+| Step | Result |
+|---|---|
+| A0 | The token carries `job_workflow_ref` = `<repo>/.github/workflows/oidc-smoke-test.yml@refs/pull/21/merge`, the form the trust pins |
+| A1 | No trail in the account, so `create_trail = true` (the first trail is free) |
+| A2 | Bootstrap plan and apply: 12 added, 4 changed (three role trusts and the guardrails policy) |
+| A3 | SNS subscription confirmed (1 subscription) |
+| A4 | Go: the PR plan job assumed `sis-dev-gha-plan` after A2, so `aws:RequestedRegion` resolves on `AssumeRoleWithWebIdentity`. N8 `AccessDenied` on apply and deploy; N9 refused 3601 s and printed the 900 s expiry |
+| A5 | `lookup-events` shows `WebIdentityUser` with the `sub` in `userName`. The alert email for the refused apply assume arrived (raw event JSON, sent to the private budget inbox) |
+| A6 | Insights need any GitHub login; the plan job lists the state bucket host, which holds the account ID. Egress per job is below |
+| A7 | Merged at 07:18. Apply 27 (session `gha-apply-<run>`), secret set, deploy from the `FROM` line (no fallback), `/version` = `main` SHA by digest, destroy 27 with revision 10 deregistered and no account ID in the log |
+| A8 | `guard (no AWS)` is a required check (ruleset API: `required_status_checks`, GitHub Actions source) |
+| A9 | Secret scanning and push protection enabled |
+| A10 | Four update jobs ran without failure; one PR, #22, moves the single `FROM ... AS base` line to Python 3.15 (CI green). Actions, Terraform and pre-commit had nothing newer |
+| A11 | Verified locally before the PR (Docker Hub fallback by `--build-context`) |
+| A12 | `make up`: `/`, `/health`, `/version` 200, `/admin` 401 without the key; `make down` |
+
+Egress seen at A6 (audit mode), the input for the PR B allowlists. `<acct>` marks a host that holds the account
+ID; PR B writes those from a secret expression, never as text:
+
+| Job | Hosts |
+|---|---|
+| repo-guard | `github.com`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `storage.googleapis.com` |
+| terraform-iac `plan` | `github.com`, `api.github.com`, `releases.hashicorp.com`, `release-assets.githubusercontent.com`, `checkpoint-api.hashicorp.com`, `registry.terraform.io`, `sts.ap-southeast-1.amazonaws.com`, the state bucket host (`<acct>`) |
+| terraform-iac `plan-role-guardrails` | `github.com`, STS, Secrets Manager and EC2 endpoints in `ap-southeast-1` |
+| oidc-smoke-test | `github.com`, STS in `ap-southeast-1` |
+| Image checks | `tuf-repo-cdn.sigstore.dev` (signature verification) |
+
+Not captured: the apply, deploy and destroy jobs. PR B starts them from the plan list plus the services each one
+calls, and checkpoint B reads the blocked hosts from the logs.
+
+Decisions taken at the checkpoint (same delegation as the decision log):
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| #22 jumps the runtime from Python 3.13 to 3.15 | **Do not merge.** PR B adds a Dependabot `ignore` on `version-update:semver-minor` and `semver-major` for the python image, so only digest and patch updates arrive; close #22 | Security rebuilds stay automatic; a runtime change stays a planned change across `mise.toml`, `pyproject.toml` and the image | Moving to a new Python is manual |
+| Insights hold the account ID behind any GitHub login (Q1) | **Turn telemetry off** (`disable-telemetry: true`) on the jobs that hold AWS credentials in PR B; keep audit insights on credential-free jobs | No account-bearing host leaves through a third party | No insights page for those jobs; blocked hosts are read from the job log |
+| The alert email is raw JSON | **Optional in PR B**: an EventBridge input transformer that sends one line (event, role, `sub`, error) | Readable at a glance | One more bootstrap apply; the raw event is still in CloudTrail |
+| No Dependabot PR for actions, Terraform or pre-commit | **Accept**; the user checks the Dependabot tab for ecosystem errors before PR B merges | Pins were already current | Q4 and R17 stay unproven until the first real update |
+
 ## Checkpoint B (after PR B)
 
-1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The plan and oidc-smoke-test jobs are green in block mode.
-2. Next session: approve the apply, deploy and destroy runs as in A7 steps 1 to 6. All green.
-3. The jobs show no new insights. If one fails with a blocked host, report the host from the job log.
+1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The `plan`, `plan-role-guardrails` and both oidc-smoke-test jobs are green in block mode. This proves the token endpoint is implicit and that nothing needs `api.github.com`.
+2. On the PR's `plan` run, open the Job summary and search for `tfstate-` and `.dkr.ecr.` (reviewer M2): report whether harden-runner's summary shows an account-bearing host.
+3. Merge. Then approve the apply, set the secret, deploy and destroy as in A7 steps 1 to 6. All green. On the `deploy` log, copy the harden-runner lines that name implicit or blocked hosts (artifact download, ECR layer upload; security L3).
+4. A blocked host fails a job with the host in the log: report it, and the fix is a short PR that adds it.
+5. Close Dependabot #22 (the ignore now keeps Python on 3.13); the next monthly run must not reopen it.
 
 ## Sources
 

@@ -53,5 +53,8 @@ jobs:
       - name: Workflow trigger allowlist (every workflow file)
         run: scripts/check-workflow-triggers.sh
 
+      - name: Harden-runner policy (block where credentials live, audit elsewhere)
+        run: scripts/check-harden-runner.sh
+
       - name: CI helper self-tests
         run: scripts/ci-selftest.sh

@@ -6,15 +6,19 @@
 source "$(dirname "$0")/common.sh"
 
 # --- check-workflow-triggers.sh
-# case_trigger <label> <expected> <yaml>: write the workflow (printf %b escapes) and require either a pass (expected
+# case_check <check script> <label> <expected> <file>: run the check on the file and require either a pass (expected
 # "ok") or a failure whose message holds the expected text.
+case_check() {
+  if [ "$3" = ok ]; then
+    "$ROOT/scripts/$1" "$4" >/dev/null 2>&1 || die "selftest: $2 was rejected"
+  else
+    expect_fail "$2" "$3" "$ROOT/scripts/$1" "$4"
+  fi
+}
+# case_trigger <label> <expected> <yaml>: write the workflow (printf %b escapes) and check its triggers.
 case_trigger() {
   printf '%b' "$3" >"$tmp/y.yml"
-  if [ "$2" = ok ]; then
-    "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/y.yml" >/dev/null 2>&1 || die "selftest: $1 was rejected"
-  else
-    expect_fail "$1" "$2" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/y.yml"
-  fi
+  case_check check-workflow-triggers.sh "$1" "$2" "$tmp/y.yml"
 }
 good_on='name: good\non:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n'
 case_trigger "a good workflow" ok "$good_on"
@@ -47,7 +51,7 @@ ok "trigger check reads YAML semantics, not lines"
 
 # No arguments: every file under .github/workflows is scanned, including .yaml and path-filtered ones.
 mkdir -p "$tmp/repo/.github/workflows" "$tmp/repo/scripts"
-cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/workflow_triggers.py" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
+cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/workflow_triggers.py" "$ROOT/scripts/workflow_yaml.py" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
 cp "$tmp/good.yml" "$tmp/repo/.github/workflows/a.yml"
 # The copy has its own ROOT, so it cannot find the repo's .venv-ci: hand it the interpreter the real run uses.
 ci_python="${CI_PYTHON:-$ROOT/.venv-ci/bin/python}"
@@ -231,3 +235,74 @@ awk '!done && /uses:.*@[0-9a-f]{40} # v/ { sub(/@[0-9a-f]{40}/, "@00000000000000
 ok "every action is pinned to one SHA with a version comment"
 
 "$ROOT/scripts/check-workflow-triggers.sh"
+
+# --- check-harden-runner.sh (ADR 0007 S45)
+# write_hardening <file> <job id> <permissions line> <with: lines> [job line] [step line]: a one-job workflow whose
+# first step is harden-runner. The with, job and step lines are printf %b text and start with their indent.
+write_hardening() {
+  printf 'name: x\non: push\njobs:\n  %s:\n    runs-on: ubuntu-24.04\n    permissions:\n      %s\n%b    steps:\n      - uses: step-security/harden-runner@%s # v2.22.2\n%b        with:\n%b      - run: echo hi\n' \
+    "$2" "$3" "${5:-}" "$commit" "${6:-}" "$4" >"$1"
+}
+# case_hardening <label> <expected> <permissions line> <with: lines> [job line] [step line]
+case_hardening() {
+  write_hardening "$tmp/h.yml" j "$3" "$4" "${5:-}" "${6:-}"
+  case_check check-harden-runner.sh "$1" "$2" "$tmp/h.yml"
+}
+cred="id-token: write"
+audit_with='          egress-policy: audit\n'
+block_with='          egress-policy: block\n          disable-telemetry: true\n          disable-sudo-and-containers: true\n'
+hosts_head='          allowed-endpoints: >\n'
+# shellcheck disable=SC2016  # the ${{ }} is literal fixture text, not a shell expansion
+{
+good_hosts='            github.com:443\n            sts.${{ vars.AWS_REGION }}.amazonaws.com:443\n            ${{ secrets.AWS_ACCOUNT_ID_DEV }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443\n            sis-${{ env.ENV }}-x.s3.${{ vars.AWS_REGION }}.amazonaws.com:443\n'
+case_hardening "credentialed job in block with exact hosts" ok "$cred" "${block_with}${hosts_head}${good_hosts}"
+case_hardening "credentialed job with another expression" "uses the expression" "$cred" "${block_with}${hosts_head}            \${{ secrets.OTHER }}.example.com:443\n"
+case_hardening "credentialed job with a github context host" "uses the expression" "$cred" "${block_with}${hosts_head}            \${{ github.actor }}.example.com:443\n"
+case_hardening "credential-free job with a secret host" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets.AWS_ACCOUNT_ID_DEV }}.example.com:443\n"
+case_hardening "credential-free job with a non-secret expression" ok "contents: read" "${audit_with}${hosts_head}            \${{ vars.AWS_REGION }}.example.com:443\n"
+for wild in '*:443' '*' '*.amazonaws.com:443' '*.githubusercontent.com:443' '*.github.com:443' '*.s3.ap-southeast-1.amazonaws.com:443' '*.data.mcr.microsoft.com:443' 'sis-*.example.com:443'; do
+  case_hardening "wildcard $wild" "holds a wildcard" "$cred" "${block_with}${hosts_head}            ${wild}\n"
+done
+case_hardening "wildcard in an audit job passes" ok "contents: read" "${audit_with}${hosts_head}            *.data.mcr.microsoft.com:443\n"
+}
+case_hardening "credential-free job in audit" ok "contents: read" "$audit_with"
+case_hardening "credentialed job in audit" "egress-policy must be block" "$cred" "$audit_with"
+case_hardening "credentialed job with no policy" "egress-policy must be block" "$cred" '          disable-telemetry: true\n          disable-sudo-and-containers: true\n'
+case_hardening "credentialed job with telemetry on" "disable-telemetry must be true" "$cred" '          egress-policy: block\n          disable-sudo-and-containers: true\n'
+case_hardening "credentialed job with telemetry false" "disable-telemetry must be true" "$cred" '          egress-policy: block\n          disable-telemetry: false\n          disable-sudo-and-containers: true\n'
+case_hardening "credentialed job with sudo and containers on" "disable-sudo-and-containers must be true" "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
+case_hardening "credential-free job in block" "egress-policy must be audit" "contents: read" "$block_with"
+case_hardening "credential-free job with no policy" "egress-policy must be audit" "contents: read" '          disable-telemetry: true\n'
+case_hardening "endpoint without a port" "has no :port" "$cred" "${block_with}${hosts_head}            github.com:443\n            api.github.com\n"
+case_hardening "endpoint with a text port" "has no :port" "$cred" "${block_with}${hosts_head}            github.com:https\n"
+case_hardening "account ID literal in a host" "12-digit literal" "$cred" "${block_with}${hosts_head}            ${acct}.dkr.ecr.ap-southeast-1.amazonaws.com:443\n"
+case_hardening "account ID inside the bucket name" "12-digit literal" "$cred" "${block_with}${hosts_head}            sis-dev-tfstate-${acct}-ap-southeast-1-an.s3.ap-southeast-1.amazonaws.com:443\n"
+case_hardening "no allowlist is still block" ok "$cred" "$block_with"
+# The harden-runner step must always run and must not be allowed to fail.
+case_hardening "harden-runner with if" "must not set \`if:\`" "$cred" "$block_with" "" '        if: always()\n'
+case_hardening "harden-runner with continue-on-error" "must not set \`continue-on-error:\`" "$cred" "$block_with" "" '        continue-on-error: true\n'
+# A credentialed job runs no container of its own and no service containers.
+case_hardening "credentialed job with container" "\`container:\` is not allowed" "$cred" "$block_with" '    container: alpine\n'
+case_hardening "credentialed job with services" "\`services:\` is not allowed" "$cred" "$block_with" '    services:\n      db:\n        image: postgres\n'
+case_hardening "credential-free job with container" ok "contents: read" "$audit_with" '    container: alpine\n'
+# The one named exception: app-deploy.yml deploy needs docker, so it may leave containers on; any other job may not.
+mkdir -p "$tmp/exc"
+write_hardening "$tmp/exc/app-deploy.yml" deploy "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
+case_check check-harden-runner.sh "app-deploy deploy without disable-sudo-and-containers" ok "$tmp/exc/app-deploy.yml"
+write_hardening "$tmp/exc/app-deploy.yml" other "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
+case_check check-harden-runner.sh "another app-deploy job without it" "disable-sudo-and-containers must be true" "$tmp/exc/app-deploy.yml"
+write_hardening "$tmp/exc/other.yml" deploy "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
+case_check check-harden-runner.sh "deploy in another file without it" "disable-sudo-and-containers must be true" "$tmp/exc/other.yml"
+# A job without credentials in audit may list nothing; a missing harden-runner first step fails.
+printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n' >"$tmp/h.yml"
+expect_fail "job with no harden-runner first step" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
+expect_fail "harden-runner not first" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+# A job inherits the workflow permissions: id-token at the top makes every job credentialed.
+printf 'name: x\non: push\npermissions:\n  id-token: write\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
+expect_fail "workflow-level id-token" "egress-policy must be block" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+printf 'name: x\non: push\njobs: {\n' >"$tmp/h.yml"
+expect_fail "invalid YAML" "invalid YAML" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+ok "harden-runner policy reads YAML and enforces each rule"
+
+"$ROOT/scripts/check-harden-runner.sh"

@@ -22,6 +22,7 @@ updates:
         patterns: ["*"]
 
   # The one `FROM ... AS base` line in app/Dockerfile (build-image.sh swaps its registry with a build context).
+  # Python stays on 3.13: only digest and patch updates arrive (ADR 0007 S46).
   - package-ecosystem: docker
     directory: /app
     schedule:
@@ -34,6 +35,11 @@ updates:
     groups:
       base-image:
         patterns: ["*"]
+    ignore:
+      - dependency-name: docker/library/python
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
 
   # Provider and lock file updates. The globs pick up envs/prod in Phase 7.
   - package-ecosystem: terraform

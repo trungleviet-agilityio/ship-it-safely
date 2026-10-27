@@ -121,6 +121,32 @@ web_identity_call() {
     --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
 }
 
+# run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run a Python helper from scripts/ over the
+# workflow files (default: every .github/workflows/*.yml and *.yaml) with the CI interpreter. The helper prints one
+# violation per line and exits 1 for violations. Env: CI_PYTHON, an interpreter with PyYAML (default: .venv-ci/bin/python
+# from `make venv`, else python3).
+run_workflow_helper() {
+  local helper="$1" what="$2" py="${CI_PYTHON:-}" f out rc=0
+  shift 2
+  local files=("$@")
+  if [ ${#files[@]} -eq 0 ]; then
+    for f in "$ROOT"/.github/workflows/*.yml "$ROOT"/.github/workflows/*.yaml; do
+      if [ -f "$f" ]; then files+=("$f"); fi
+    done
+    [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
+  fi
+  if [ -z "$py" ]; then
+    if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
+  fi
+  "$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
+  out="$("$py" -I "$ROOT/scripts/$helper" "${files[@]}")" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    printf '%s\n' "$out" | sed 's/^/  - /' >&2
+    die "$(grep -c '' <<<"$out") ${what} violation(s)"
+  fi
+  [ "$rc" -eq 0 ] || die "${helper} failed (exit code $rc)"
+}
+
 # sha256_of <file>: hex digest on Linux and macOS.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi

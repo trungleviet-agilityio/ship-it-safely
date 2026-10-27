@@ -2,6 +2,9 @@
 # with no stored keys, and that the trust refuses what it must refuse. The negative calls raise AccessDenied and
 # duration errors on purpose: each run sends a few security alert emails (a demo of the bootstrap alert rule).
 # Not a required status check: it is path filtered, so a skipped run would stay "Pending" (C18).
+# Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
+# Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
+# name in the log, add it here (the repo-guard workflow enforces the shape).
 name: oidc-smoke-test
 
 on:
@@ -40,7 +43,12 @@ jobs:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block
+          disable-telemetry: true
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            github.com:443
+            sts.${{ vars.AWS_REGION }}.amazonaws.com:443
 
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,7 +125,12 @@ jobs:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block
+          disable-telemetry: true
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            github.com:443
+            sts.${{ vars.AWS_REGION }}.amazonaws.com:443
 
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

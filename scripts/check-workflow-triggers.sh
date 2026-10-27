@@ -1,38 +1,11 @@
 #!/usr/bin/env bash
-# Trigger allowlist for the workflow that assumes the apply role (ADR 0004, PR 1 verify finding L1; ADR 0007 S34).
-# The apply trust cannot tell `push` from `pull_request_target`, `issue_comment` or `workflow_run` on main,
-# so the repo refuses those triggers where they would be written. zizmor's dangerous-triggers audit is the
-# second layer. The parsing is real YAML (scripts/workflow_triggers.py, PyYAML from the hash-locked venv): block,
-# flow, scalar, quoted and explicit-key forms all read the same way GitHub reads them.
+# Trigger allowlist for every workflow file (ADR 0004 L1, ADR 0007 S34): the rules are in scripts/workflow_triggers.py.
 #
-# The role trust pins the workflow file path, so any workflow file can matter, path-filtered or not. With no
-# arguments every .github/workflows/*.yml and *.yaml is scanned.
-#
-# Usage: scripts/check-workflow-triggers.sh [workflow file ...]
+# Usage: scripts/check-workflow-triggers.sh [workflow file ...]   (default: every .github/workflows/*.yml and *.yaml)
 # Env:   CI_PYTHON  interpreter with PyYAML (default: .venv-ci/bin/python from `make venv`, else python3)
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-files=("$@")
-if [ ${#files[@]} -eq 0 ]; then
-  for f in "$ROOT"/.github/workflows/*.yml "$ROOT"/.github/workflows/*.yaml; do
-    if [ -f "$f" ]; then files+=("$f"); fi
-  done
-  [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
-fi
-
-py="${CI_PYTHON:-}"
-if [ -z "$py" ]; then
-  if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
-fi
-"$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
-
-rc=0
-out="$("$py" -I "$ROOT/scripts/workflow_triggers.py" "${files[@]}")" || rc=$?
-if [ "$rc" -eq 1 ]; then
-  printf '%s\n' "$out" | sed 's/^/  - /' >&2
-  die "$(grep -c '' <<<"$out") workflow trigger violation(s)"
-fi
-[ "$rc" -eq 0 ] || die "workflow_triggers.py failed (exit code $rc)"
+run_workflow_helper workflow_triggers.py "workflow trigger" "$@"
 ok "workflow triggers are within the allowlist: pull_request push workflow_dispatch"
