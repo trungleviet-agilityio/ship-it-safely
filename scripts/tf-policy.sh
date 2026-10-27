@@ -37,6 +37,42 @@ report() {
   fail "$1" "$2" "${lines[@]}"
 }
 
+# scan_sources <block opener regex> <allowed source regex> <dir>...: file:line:text of every `source =` inside a block
+# that is not allowed. awk follows the block by brace depth (grep level, no HCL parser); quoted strings and comment
+# tails are cut before the braces are counted, so a `"}"` or `# }` cannot end the block early. A `source` on the
+# same line as the opener counts.
+scan_sources() {
+  local opener="$1" allowed="$2" dir out=""
+  shift 2
+  for dir in "$@"; do
+    [ -d "$dir" ] || continue
+    out="$out$(
+      # shellcheck disable=SC2016  # awk program, not shell
+      find "$dir" -name '*.tf' -not -path '*/.terraform/*' -print0 |
+        xargs -0 awk -v opener="$opener" -v allowed="$allowed" '
+          FNR == 1 { inblock = 0; depth = 0 }
+          /^[[:space:]]*(#|\/\/)/ { next }
+          !inblock && $0 ~ opener { inblock = 1; depth = 0 }
+          inblock {
+            if (match($0, /(^|[^A-Za-z0-9_])source[[:space:]]*=[[:space:]]*/)) {
+              rest = substr($0, RSTART + RLENGTH)
+              if (rest !~ allowed) printf "%s:%d:%s\n", FILENAME, FNR, $0
+            }
+            code = $0
+            gsub(/"[^"]*"/, "", code)
+            sub(/#.*$/, "", code)
+            sub(/\/\/.*$/, "", code)
+            depth += gsub(/\{/, "{", code)
+            depth -= gsub(/\}/, "}", code)
+            if (depth <= 0) inblock = 0
+          }
+        ' 2>/dev/null || true
+    )"$'\n'
+  done
+  printf '%s' "$out" | grep -v '^$' || true
+}
+
+
 # (1) FR-8: Terraform creates secret shells only, never values.
 report 1 "aws_secretsmanager_secret_version is forbidden (secret values stay out of state)" \
   "$(scan '^[[:space:]]*resource[[:space:]]+"aws_secretsmanager_secret_version"' "$root")"
@@ -73,32 +109,6 @@ if [ -d "$root/modules" ]; then
   report 4 "aws_iam_role without permissions_boundary under modules/" "$missing"
 fi
 
-# (7) Role trust: a module role may only be assumed by the ECS tasks service principal. Grep level, not a
-# policy parser: in any module directory that declares an aws_iam_role, no "AWS" or "Federated" principal type
-# and no identifiers holding an ARN, :root or "*" may appear. Unquoted `AWS =` / `Federated =` keys and
-# `Principal = "*"` / `type = "*"` count too. Cross-account or user trust would show up as one of those.
-if [ -d "$root/modules" ]; then
-  trust_out=""
-  while IFS= read -r mdir; do
-    [ -n "$mdir" ] || continue
-    trust_out="$trust_out$(scan '("AWS"|"Federated"|(^|[^A-Za-z_])(AWS|Federated)[[:space:]]*=|Principal[[:space:]]*=[[:space:]]*"\*"|type[[:space:]]*=[[:space:]]*"\*"|identifiers[[:space:]]*=.*(arn:|:root|"\*"))' "$mdir")"$'\n'
-  done < <(grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*resource[[:space:]]+"aws_iam_role"[[:space:]]' "$root/modules" 2>/dev/null | xargs -n1 dirname 2>/dev/null | sort -u)
-  trust_out="$(printf '%s' "$trust_out" | grep -v '^$' || true)"
-  report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated/wildcard principals, no arn: or :root identifiers)" "$trust_out"
-fi
-
-# (8) Root outputs are public in apply logs (repo is public): envs/*/outputs.tf never references an ARN,
-# the ECR repository URL (it holds the account ID) or an account ID. Those stay module outputs.
-if [ -d "$root/envs" ]; then
-  out8=""
-  for d in "$root"/envs/*/; do
-    [ -f "${d}outputs.tf" ] || continue
-    out8="$out8$(scan '(\.arn([^A-Za-z0-9_]|$)|_arn([^A-Za-z0-9_]|$)|repository_url|account_id)' "${d%/}")"$'\n'
-  done
-  out8="$(printf '%s' "$out8" | grep 'outputs\.tf:' || true)"
-  report 8 "envs/*/outputs.tf must not reference .arn, _arn, repository_url or account_id (public apply logs)" "$out8"
-fi
-
 # (5) Backends: the bucket (it holds the account ID) is never in a file; envs use the state key contract.
 while IFS= read -r f; do
   [ -n "$f" ] || continue
@@ -128,14 +138,41 @@ fi
 report 6 "provider or backend block under modules/ (modules take them from the root)" \
   "$(scan '^[[:space:]]*(provider|backend)[[:space:]]+"' "$root/modules")"
 
+# (7) Role trust: a module role may only be assumed by the ECS tasks service principal. Grep level, not a
+# policy parser: in any module directory that declares an aws_iam_role, no "AWS" or "Federated" principal type
+# and no identifiers holding an ARN, :root or "*" may appear. Unquoted `AWS =` / `Federated =` keys and
+# `Principal = "*"` / `type = "*"` count too. Cross-account or user trust would show up as one of those.
+if [ -d "$root/modules" ]; then
+  trust_out=""
+  while IFS= read -r mdir; do
+    [ -n "$mdir" ] || continue
+    trust_out="$trust_out$(scan '("AWS"|"Federated"|(^|[^A-Za-z_])(AWS|Federated)[[:space:]]*=|Principal[[:space:]]*=[[:space:]]*"\*"|type[[:space:]]*=[[:space:]]*"\*"|identifiers[[:space:]]*=.*(arn:|:root|"\*"))' "$mdir")"$'\n'
+  done < <(grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*resource[[:space:]]+"aws_iam_role"[[:space:]]' "$root/modules" 2>/dev/null | xargs -n1 dirname 2>/dev/null | sort -u)
+  trust_out="$(printf '%s' "$trust_out" | grep -v '^$' || true)"
+  report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated/wildcard principals, no arn: or :root identifiers)" "$trust_out"
+fi
+
+# (8) Root outputs are public in apply logs (repo is public): envs/*/outputs.tf never references an ARN,
+# the ECR repository URL (it holds the account ID) or an account ID. Those stay module outputs.
+if [ -d "$root/envs" ]; then
+  out8=""
+  for d in "$root"/envs/*/; do
+    [ -f "${d}outputs.tf" ] || continue
+    out8="$out8$(scan '(\.arn([^A-Za-z0-9_]|$)|_arn([^A-Za-z0-9_]|$)|repository_url|account_id)' "${d%/}")"$'\n'
+  done
+  out8="$(printf '%s' "$out8" | grep 'outputs\.tf:' || true)"
+  report 8 "envs/*/outputs.tf must not reference .arn, _arn, repository_url or account_id (public apply logs)" "$out8"
+fi
+
 # (9) No code execution outside the providers (ADR 0006, I1): a provisioner or the external data source runs commands
 # on the runner during plan or apply, with the CI role credentials in the environment.
-# The labels may be quoted or bare (HCL accepts both), so neither form slips past.
+# Labels may be quoted or bare (HCL accepts both), and the block may open mid-line (`resource ... { provisioner ... {`),
+# so the match is not anchored at the line start.
 for dir in "$root/modules" "$root/envs"; do
   report 9 "provisioner blocks are forbidden under modules/ and envs/ (they run commands on the CI runner)" \
-    "$(scan '^[[:space:]]*provisioner([[:space:]]|")' "$dir")"
+    "$(scan '(^|[[:space:]{;])provisioner[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{' "$dir")"
   report 9 "data \"external\" is forbidden under modules/ and envs/ (it runs a program on the CI runner)" \
-    "$(scan '^[[:space:]]*data[[:space:]]+"?external"?[[:space:]{]' "$dir")"
+    "$(scan '(^|[[:space:]{;])data[[:space:]]+"?external"?[[:space:]{]' "$dir")"
 done
 
 # (10) No *.tf.json: the line based rules above read only *.tf, so a JSON twin of a file would bypass all of them
@@ -144,34 +181,14 @@ tf_json="$(find "$root" -name '*.tf.json' -not -path '*/.terraform/*' 2>/dev/nul
 report 10 "*.tf.json is forbidden under infra/terraform (the policy rules read only *.tf)" "$tf_json"
 
 # (11) Module sources under envs/ and modules/ are local paths: a registry or git source would run unreviewed code
-# with the CI role credentials. awk follows each `module` block by brace depth (grep level, no HCL parser) and also
-# reads a `source` on the same line as the block opener.
-src_out=""
-for dir in "$root/modules" "$root/envs"; do
-  [ -d "$dir" ] || continue
-  src_out="$src_out$(
-    # shellcheck disable=SC2016  # awk program, not shell
-    find "$dir" -name '*.tf' -not -path '*/.terraform/*' -print0 |
-      xargs -0 awk '
-        FNR == 1 { inmod = 0; depth = 0 }
-        /^[[:space:]]*(#|\/\/)/ { next }
-        !inmod && /^[[:space:]]*module[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{/ { inmod = 1; depth = 0 }
-        inmod {
-          if (match($0, /(^|[^A-Za-z0-9_])source[[:space:]]*=[[:space:]]*/)) {
-            rest = substr($0, RSTART + RLENGTH)
-            if (rest !~ /^"\.\.?\//) printf "%s:%d:%s\n", FILENAME, FNR, $0
-          }
-          line = $0
-          depth += gsub(/\{/, "{", line)
-          line = $0
-          depth -= gsub(/\}/, "}", line)
-          if (depth <= 0) inmod = 0
-        }
-      ' 2>/dev/null || true
-  )"$'\n'
-done
-src_out="$(printf '%s' "$src_out" | grep -v '^$' || true)"
-report 11 "module source must be a local path (./ or ../) under modules/ and envs/" "$src_out"
+# with the CI role credentials.
+report 11 "module source must be a local path (./ or ../) under modules/ and envs/" \
+  "$(scan_sources '^[[:space:]]*module[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{' '^"\.\.?/' "$root/modules" "$root/envs")"
+
+# (12) Provider sources are hashicorp/*: a third-party provider is code that runs with the CI role credentials. Covers
+# bootstrap too.
+report 12 "required_providers source must be hashicorp/* under bootstrap/, modules/ and envs/" \
+  "$(scan_sources '^[[:space:]]*required_providers[[:space:]]*\{' '^"hashicorp/' "$root/bootstrap" "$root/modules" "$root/envs")"
 
 if [ ${#failures[@]} -gt 0 ]; then
   for f in "${failures[@]}"; do printf '  - %s\n' "$f" >&2; done
