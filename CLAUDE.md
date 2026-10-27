@@ -19,13 +19,15 @@ privilege and supply-chain hardening. `PLAN.md` is the requirements source; `doc
 - Load the `pr-conventions` skill before committing, branching or opening a PR. It holds the commit and PR title
   format (Conventional Commits, `infra` type for Terraform) and the Pre-PR Checks: ruff, mypy, unittest,
   hadolint, `terraform fmt`/`validate`, `tflint`, `actionlint`, `pre-commit run --all-files`.
+- Other project skills: `checkpoint-commands` (before printing any command the user runs), `pin-versions`
+  (before adding or bumping an action, tool, hook, base image or provider), `ci-triage` (when a run fails).
 - Commit per phase, e.g. `infra(app-ecs): fargate service with secrets manager injection`.
 - Trunk-based: short feature branch, PR into `main`, squash merge. No `develop` branch.
 
 ## Agent team
 
-The `sis-team` plugin (`plugins/sis-team/`) provides `/sis-team:plan <phase>`, `/sis-team:run <phase>` and
-`/sis-team:review`, plus `/sis-team:team` (roster table) and `/sis-team:diagram <topic>` (diagrams in
+The `sis-team` plugin (`plugins/sis-team/`) provides `/sis-team:plan <phase>`, `/sis-team:run <phase>`,
+`/sis-team:close <phase> [checkpoint]` (records checkpoint results and opens the docs PR) and `/sis-team:review`, plus `/sis-team:team` (roster table) and `/sis-team:diagram <topic>` (diagrams in
 `docs/diagrams/`). Build agents work in their own worktree and own disjoint paths:
 
 | Agent | Owns |
