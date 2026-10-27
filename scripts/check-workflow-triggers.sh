@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# Trigger allowlist for the workflow that assumes the apply role (ADR 0004, PR 1 verify finding L1; ADR 0007 S34).
-# The apply trust cannot tell `push` from `pull_request_target`, `issue_comment` or `workflow_run` on main,
-# so the repo refuses those triggers where they would be written. zizmor's dangerous-triggers audit is the
-# second layer. The parsing is real YAML (scripts/workflow_triggers.py, PyYAML from the hash-locked venv): block,
-# flow, scalar, quoted and explicit-key forms all read the same way GitHub reads them.
+# Trigger allowlist for every workflow file (ADR 0004 L1, ADR 0007 S34): the rules are in scripts/workflow_triggers.py.
 #
-# The role trust pins the workflow file path, so any workflow file can matter, path-filtered or not. With no
-# arguments every .github/workflows/*.yml and *.yaml is scanned.
-#
-# Usage: scripts/check-workflow-triggers.sh [workflow file ...]
+# Usage: scripts/check-workflow-triggers.sh [workflow file ...]   (default: every .github/workflows/*.yml and *.yaml)
 # Env:   CI_PYTHON  interpreter with PyYAML (default: .venv-ci/bin/python from `make venv`, else python3)
 
 # shellcheck source=scripts/lib.sh
