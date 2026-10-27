@@ -214,6 +214,13 @@ PR B verify findings (round 1), decided by the orchestrator:
 | Simplifier 1 to 5, 7 | **Fix now** (one `run()` entry point, one self-test dispatcher, no duplicate test, short wrappers, simpler duplicate-key loader, short Dependabot comment) | No duplication | None |
 | Simplifier 6: share the plan and apply host lists with a YAML anchor | **Keep separate** | Different roles; a future divergence shows in the diff | 15 repeated lines |
 
+Round 2 (security re-check): H1, M3, M4, L1, L2 closed; none of the six hardened jobs needs sudo or Docker; a
+bad `vars.AWS_REGION` value fails `check-aws-config.sh` before any role is assumed.
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| N1 (Low): an audit job can still carry a secret in `allowed-endpoints` through `secrets['X']`, `toJSON(secrets)` or an `env.X` set from a secret | **Accept, PROGRESS open item** (refuse any expression mentioning `secrets` in audit jobs, and `env` values built from secrets, when the policy is next touched) | Needs a workflow editor and a missed review; account IDs are not secrets (D2) | An account host could reach an insights page by that route |
+
 ### Least privilege summary
 
 | Item | Value | Wildcards |
