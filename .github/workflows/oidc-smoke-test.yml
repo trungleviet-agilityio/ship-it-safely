@@ -1,12 +1,19 @@
-# OIDC smoke test (PLAN Phase 2, ADR 0003). Proves GitHub can assume the dev plan role with no stored keys.
+# OIDC smoke test (PLAN Phase 2, ADR 0003; negative tests ADR 0007 S33). Proves GitHub can assume the dev plan role
+# with no stored keys, and that the trust refuses what it must refuse. The negative calls raise AccessDenied and
+# duration errors on purpose: each run sends a few security alert emails (a demo of the bootstrap alert rule).
 # Not a required status check: it is path filtered, so a skipped run would stay "Pending" (C18).
 name: oidc-smoke-test
 
 on:
   pull_request:
     branches: [main]
-    paths: [.github/workflows/oidc-smoke-test.yml]
-  # Runs only the negative job: a non-PR token must be refused by the plan role (N1).
+    paths:
+      - .github/workflows/oidc-smoke-test.yml
+      - scripts/assert-session-cap.sh
+      - scripts/assert-web-identity-denied.sh
+      - scripts/check-aws-config.sh
+      - scripts/lib.sh
+  # Runs only the negative job: a non-PR token must be refused by every role (N1).
   workflow_dispatch:
 
 permissions: {}
@@ -26,6 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read # checkout of the scripts
       # Needed to request the OIDC token that configure-aws-credentials exchanges for the role.
       id-token: write
     steps:
@@ -34,24 +42,33 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Check configuration
         env:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          if [[ -z "$ROLE_ARN" ]]; then
-            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV is empty or not set"
-            exit 1
-          fi
-          if [[ -z "$REGION" ]]; then
-            echo "::error::Variable AWS_REGION is empty or not set"
-            exit 1
-          fi
-          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
-            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
-            exit 1
-          fi
-          echo "Configuration present and well formed"
+        run: scripts/check-aws-config.sh sis-dev-gha-plan
+
+      # N8: a pull_request token is refused by the apply and deploy roles (their sub is the dev environment).
+      - name: Apply and deploy roles refuse a pull request token (N8)
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+          ENV: dev
+        run: scripts/assert-web-identity-denied.sh apply deploy
+
+      # N9: the plan role caps a session at 3600 seconds, and a short session reports when it ends.
+      - name: Plan role caps the session at one hour (N9)
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          REGION: ${{ vars.AWS_REGION }}
+          ENV: dev
+        run: scripts/assert-session-cap.sh plan
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -87,12 +104,13 @@ jobs:
             echo "Assumed \`${arn#*:assumed-role/}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  plan-role-denied-outside-pr:
-    name: plan role refuses a non-PR token (N1)
+  roles-deny-outside-pr:
+    name: every role refuses a non-PR token (N1)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read # checkout of the scripts
       # Needed to request the OIDC token whose sub must be refused.
       id-token: write
     steps:
@@ -101,83 +119,24 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Check configuration
         env:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: |
-          if [[ -z "$ROLE_ARN" ]]; then
-            echo "::error::Secret AWS_PLAN_ROLE_ARN_DEV is empty or not set"
-            exit 1
-          fi
-          if [[ -z "$REGION" ]]; then
-            echo "::error::Variable AWS_REGION is empty or not set"
-            exit 1
-          fi
-          if [[ ! "$ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/sis-dev-gha-plan$ ]]; then
-            echo "::error::AWS_PLAN_ROLE_ARN_DEV is not the sis-dev-gha-plan role ARN"
-            exit 1
-          fi
-          echo "Configuration present and well formed"
+        run: scripts/check-aws-config.sh sis-dev-gha-plan
 
-      # A shell step, not configure-aws-credentials: that action fails on network, token or ARN
-      # errors too, so "any failure" would pass. Here only an explicit AccessDenied passes.
-      - name: Require an explicit access denied for a non-PR token
+      # A script that calls STS directly, not configure-aws-credentials: that action fails on network, token or ARN
+      # errors too, so "any failure" would pass. Here only an explicit AccessDenied passes. The workflow_dispatch
+      # token has neither the pull_request sub nor the environment sub, so plan, apply and deploy must all refuse.
+      - name: Require an explicit access denied from every role
         env:
-          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          account="${ROLE_ARN#arn:aws:iam::}"
-          account="${account%%:*}"
-          echo "::add-mask::$account"
-
-          # Token request format: GitHub OIDC reference (audience is a query parameter).
-          if ! response="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"; then
-            echo "::error::OIDC token request failed (not a role refusal)"
-            exit 1
-          fi
-          token="$(jq -r '.value // empty' <<<"$response")"
-          if [[ -z "$token" ]]; then
-            echo "::error::OIDC token response has no value"
-            exit 1
-          fi
-          echo "::add-mask::$token"
-
-          # Print only the sub claim: it holds no account ID.
-          payload="$(cut -d. -f2 <<<"$token" | tr '_-' '/+')"
-          while (( ${#payload} % 4 )); do payload+="="; done
-          sub="$(base64 -d <<<"$payload" | jq -r '.sub')"
-          echo "Token sub: $sub"
-          if [[ "$sub" != *":ref:$GITHUB_REF" ]]; then
-            echo "::error::Token sub does not end with :ref:$GITHUB_REF, so this is not a non-PR token test"
-            exit 1
-          fi
-
-          # Unsigned call: this STS action needs no AWS credentials. Any credentials go to /dev/null.
-          stderr_file="$(mktemp)"
-          # The runner shell is bash -eo pipefail, so a non-zero exit is captured with || to keep errexit
-          # from ending the step before the checks below.
-          rc=0
-          aws sts assume-role-with-web-identity \
-            --role-arn "$ROLE_ARN" \
-            --role-session-name "gha-oidc-negative-$RUN_ID-$RUN_ATTEMPT" \
-            --web-identity-token "$token" \
-            --region "$REGION" \
-            --no-sign-request >/dev/null 2>"$stderr_file" || rc=$?
-          stderr="$(cat "$stderr_file")"
-
-          if [[ $rc -eq 0 ]]; then
-            echo "::error::plan role was assumed outside pull_request: trust too broad"
-            exit 1
-          fi
-          if [[ "$stderr" == *AccessDenied* || "$stderr" == *"Not authorized to perform sts:AssumeRoleWithWebIdentity"* ]]; then
-            echo "Refused as designed (AccessDenied, exit code $rc)"
-            exit 0
-          fi
-          echo "::error::Call failed for a reason other than access denied (exit code $rc)"
-          echo "$stderr"
-          exit 1
+          ENV: dev
+        run: scripts/assert-web-identity-denied.sh plan apply deploy

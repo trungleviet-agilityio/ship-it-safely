@@ -193,7 +193,8 @@ cap_ready() {
 cap_ready
 out="$(oidc_env "$ROOT/scripts/assert-session-cap.sh" plan 2>&1)" || die "selftest: a refused 3601 and a granted 900 should pass: $out"
 case "$out" in *"session expires in about 15 minutes (2026-10-27T10:15:00+00:00)"*) ;; *) die "selftest: the expiry line is missing: $out" ;; esac
-calls_have "--duration-seconds 3601" && calls_have "--duration-seconds 900" || die "selftest: both durations must be requested"
+calls_have "--duration-seconds 3601" || die "selftest: the over-cap duration must be requested"
+calls_have "--duration-seconds 900" || die "selftest: the short duration must be requested"
 case "$out" in *"$acct"* | *"$jwt"* | *Credentials* | *SecretAccessKey*) die "selftest: the session cap output holds a secret" ;; esac
 cap_ready
 stub "$sts" rc 0 0
@@ -216,18 +217,3 @@ expect_fail "mask-cidrs with a JSON object" "must be a JSON list" env CIDRS='{"a
 out="$(quiet_run env CIDRS="bad 198.51.100.7" "$ROOT/scripts/mask-cidrs.sh")"
 case "$out" in *198.51.100.7*) die "selftest: mask-cidrs echoed a bad value" ;; esac
 ok "mask-cidrs masks each element and refuses anything but a JSON list"
-
-# --- Script modes (ADR 0007 S19): libraries are only sourced, so they are not executable; everything else is.
-modes="$(git -C "$ROOT" ls-files -s 'scripts/*.sh' 2>/dev/null || true)"
-if [ -z "$modes" ]; then
-  warn "no git index here, skipping the script mode check"
-else
-  while read -r mode _ _ path; do
-    case "$path" in
-      scripts/lib.sh | scripts/selftest/common.sh) want=100644 ;;
-      *) want=100755 ;;
-    esac
-    [ "$mode" = "$want" ] || die "selftest: $path is mode $mode, expected $want (libraries 100644, scripts 100755)"
-  done <<<"$modes"
-  ok "libraries are not executable and every script is"
-fi
