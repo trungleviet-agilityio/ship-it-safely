@@ -18,40 +18,11 @@ from typing import Any
 
 import yaml
 
+# `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from workflow_yaml import load_workflow  # noqa: E402  (import after the path setup above)
+
 ALLOWED = ("pull_request", "push", "workflow_dispatch")
-
-
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """SafeLoader that refuses a mapping holding the same key twice.
-
-    GitHub keeps one of the two values and PyYAML the last, so a duplicate could hide a trigger.
-    """
-
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-        self.flatten_mapping(node)
-        seen: set[Any] = set()
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=True)
-            try:
-                duplicate = key in seen
-            except TypeError as e:
-                raise yaml.constructor.ConstructorError(
-                    None, None, f"unhashable mapping key {key!r}", key_node.start_mark
-                ) from e
-            if duplicate:
-                raise yaml.constructor.ConstructorError(
-                    None, None, f"duplicate key {key!r}", key_node.start_mark
-                )
-            seen.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
-def _load(text: str) -> Any:
-    loader = _UniqueKeyLoader(text)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
 
 
 def _triggers(document: Any) -> list[str]:
@@ -80,7 +51,7 @@ def check(path: Path) -> list[str]:
     """Violations of one workflow file, as `<file>: <message>` lines."""
     shown = os.path.relpath(path)
     try:
-        names = _triggers(_load(path.read_text(encoding="utf-8")))
+        names = _triggers(load_workflow(path.read_text(encoding="utf-8")))
     except yaml.YAMLError as e:
         return [f"{shown}: invalid YAML: {getattr(e, 'problem', None) or 'parse error'}"]
     except ValueError as e:

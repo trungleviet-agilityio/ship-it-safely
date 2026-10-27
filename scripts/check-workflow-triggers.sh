@@ -14,25 +14,5 @@
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-files=("$@")
-if [ ${#files[@]} -eq 0 ]; then
-  for f in "$ROOT"/.github/workflows/*.yml "$ROOT"/.github/workflows/*.yaml; do
-    if [ -f "$f" ]; then files+=("$f"); fi
-  done
-  [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
-fi
-
-py="${CI_PYTHON:-}"
-if [ -z "$py" ]; then
-  if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
-fi
-"$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
-
-rc=0
-out="$("$py" -I "$ROOT/scripts/workflow_triggers.py" "${files[@]}")" || rc=$?
-if [ "$rc" -eq 1 ]; then
-  printf '%s\n' "$out" | sed 's/^/  - /' >&2
-  die "$(grep -c '' <<<"$out") workflow trigger violation(s)"
-fi
-[ "$rc" -eq 0 ] || die "workflow_triggers.py failed (exit code $rc)"
+run_workflow_helper workflow_triggers.py "workflow trigger" "$@"
 ok "workflow triggers are within the allowlist: pull_request push workflow_dispatch"

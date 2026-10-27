@@ -47,7 +47,7 @@ ok "trigger check reads YAML semantics, not lines"
 
 # No arguments: every file under .github/workflows is scanned, including .yaml and path-filtered ones.
 mkdir -p "$tmp/repo/.github/workflows" "$tmp/repo/scripts"
-cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/workflow_triggers.py" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
+cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/workflow_triggers.py" "$ROOT/scripts/workflow_yaml.py" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
 cp "$tmp/good.yml" "$tmp/repo/.github/workflows/a.yml"
 # The copy has its own ROOT, so it cannot find the repo's .venv-ci: hand it the interpreter the real run uses.
 ci_python="${CI_PYTHON:-$ROOT/.venv-ci/bin/python}"
@@ -231,3 +231,52 @@ awk '!done && /uses:.*@[0-9a-f]{40} # v/ { sub(/@[0-9a-f]{40}/, "@00000000000000
 ok "every action is pinned to one SHA with a version comment"
 
 "$ROOT/scripts/check-workflow-triggers.sh"
+
+# --- check-harden-runner.sh (ADR 0007 S45)
+# case_hardening <label> <expected> <permissions line> <with: lines>: a one-job workflow whose first step is
+# harden-runner (printf %b escapes in the with lines; each starts with ten spaces). Expected "ok" means a pass.
+case_hardening() {
+  printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      %s\n    steps:\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n%b      - run: echo hi\n' \
+    "$3" "$commit" "$4" >"$tmp/h.yml"
+  if [ "$2" = ok ]; then
+    "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml" >/dev/null 2>&1 || die "selftest: $1 was rejected"
+  else
+    expect_fail "$1" "$2" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+  fi
+}
+cred="id-token: write"
+audit_with='          egress-policy: audit\n'
+block_with='          egress-policy: block\n          disable-telemetry: true\n'
+hosts_head='          allowed-endpoints: >\n'
+case_hardening "credentialed job in block with exact hosts" ok "$cred" "${block_with}${hosts_head}            github.com:443\n            sts.\${{ vars.AWS_REGION }}.amazonaws.com:443\n            \${{ secrets.ACCT }}.dkr.ecr.\${{ vars.AWS_REGION }}.amazonaws.com:443\n"
+case_hardening "credential-free job in audit" ok "contents: read" "$audit_with"
+case_hardening "credentialed job in audit" "egress-policy must be block" "$cred" "$audit_with"
+case_hardening "credentialed job with no policy" "egress-policy must be block" "$cred" '          disable-telemetry: true\n'
+case_hardening "credentialed job with telemetry on" "disable-telemetry must be true" "$cred" '          egress-policy: block\n'
+case_hardening "credentialed job with telemetry false" "disable-telemetry must be true" "$cred" '          egress-policy: block\n          disable-telemetry: false\n'
+case_hardening "credential-free job in block" "egress-policy must be audit" "contents: read" "$block_with"
+case_hardening "credential-free job with no policy" "egress-policy must be audit" "contents: read" '          disable-telemetry: true\n'
+case_hardening "endpoint without a port" "has no :port" "$cred" "${block_with}${hosts_head}            github.com:443\n            api.github.com\n"
+case_hardening "endpoint with a text port" "has no :port" "$cred" "${block_with}${hosts_head}            github.com:https\n"
+# shellcheck disable=SC2016  # the ${{ }} is literal fixture text, not a shell expansion
+for wild in '*:443' '*' '*.amazonaws.com:443' '*.githubusercontent.com:443' '*.github.com:443' '*.s3.ap-southeast-1.amazonaws.com:443' '*.s3.${{ vars.AWS_REGION }}.amazonaws.com:443'; do
+  case_hardening "wildcard $wild" "broad wildcard" "$cred" "${block_with}${hosts_head}            ${wild}\n"
+done
+case_hardening "a narrow wildcard passes" ok "$cred" "${block_with}${hosts_head}            *.data.mcr.microsoft.com:443\n"
+case_hardening "account ID literal in a host" "12-digit literal" "$cred" "${block_with}${hosts_head}            ${acct}.dkr.ecr.ap-southeast-1.amazonaws.com:443\n"
+case_hardening "account ID inside the bucket name" "12-digit literal" "$cred" "${block_with}${hosts_head}            sis-dev-tfstate-${acct}-ap-southeast-1-an.s3.ap-southeast-1.amazonaws.com:443\n"
+case_hardening "no allowlist is still block" ok "$cred" "$block_with"
+# A job without credentials in audit may list nothing; a missing harden-runner first step fails.
+printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n' >"$tmp/h.yml"
+expect_fail "job with no harden-runner first step" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
+expect_fail "harden-runner not first" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+# A job inherits the workflow permissions: id-token at the top makes every job credentialed.
+printf 'name: x\non: push\npermissions:\n  id-token: write\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
+expect_fail "workflow-level id-token" "egress-policy must be block" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+printf 'name: x\non: push\njobs: {\n' >"$tmp/h.yml"
+expect_fail "invalid YAML" "invalid YAML" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+expect_fail "missing pyyaml" "run make venv" env CI_PYTHON="$tmp/nopy" "$ROOT/scripts/check-harden-runner.sh" "$tmp/good.yml"
+ok "harden-runner policy reads YAML and enforces each rule"
+
+"$ROOT/scripts/check-harden-runner.sh"
