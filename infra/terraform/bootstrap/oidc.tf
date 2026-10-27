@@ -49,6 +49,15 @@ data "aws_iam_policy_document" "trust" {
       values   = [each.value.ref]
     }
 
+    # The alert rule only sees this region's events. aws:RequestedRegion is always in the request context, and calls
+    # to the global STS endpoint carry us-east-1, so those are refused too. An unexpected success can then only
+    # happen in the alerted region (ADR 0007 fix round 1).
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+
     dynamic "condition" {
       for_each = each.value.workflows == null ? [] : [each.value.workflows]
 

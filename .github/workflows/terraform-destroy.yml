@@ -130,6 +130,13 @@ jobs:
           REGION: ${{ vars.AWS_REGION }}
         run: scripts/tf-init.sh
 
+      # A destroy plan deletes what is in state, so the optional ALB ingress secret is not passed as a variable.
+      # Masking its elements keeps any CIDR that Terraform prints out of the log.
+      - name: Mask the ALB ingress CIDRs
+        env:
+          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
+        run: scripts/mask-cidrs.sh
+
       - name: Terraform destroy plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}

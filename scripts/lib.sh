@@ -81,13 +81,14 @@ mask() {
   if [ -n "${GITHUB_ACTIONS:-}" ]; then printf '::add-mask::%s\n' "$1" >&2; fi
 }
 
-# oidc_token <audience>: print the job's GitHub OIDC token (needs id-token: write) and mask it. Logs nothing else.
+# oidc_token [audience]: (default sts.amazonaws.com) print the job's GitHub OIDC token (needs id-token: write) and mask it. Logs nothing else.
 oidc_token() {
-  local response token
+  local audience="${1:-sts.amazonaws.com}" response token
+  require_cmd jq "install jq"
   [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
     || die "no OIDC token request variables (the job needs id-token: write)"
   # The audience is a query parameter (GitHub OIDC reference).
-  response="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$1")" \
+  response="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience")" \
     || die "OIDC token request failed (not a role refusal)"
   token="$(jq -r '.value // empty' <<<"$response")"
   [ -n "$token" ] || die "OIDC token response has no value"
@@ -104,19 +105,18 @@ jwt_claim() {
   base64 -d <<<"$payload" | jq -r --arg claim "$2" '.[$claim] // empty'
 }
 
-# web_identity_call <role: plan|apply|deploy> <token> [aws args...]: an unsigned sts assume-role-with-web-identity for
-# role sis-<ENV>-gha-<role> in ACCOUNT and REGION, through run_capture (RUN_RC, RUN_OUT, RUN_ERR with 12-digit runs
-# redacted). The account is masked. Callers must never print RUN_OUT: a success holds credentials.
+# web_identity_call <role: plan|apply|deploy> <token> [aws args...]: run an unsigned sts assume-role-with-web-identity for
+# role sis-<ENV>-gha-<role> in ACCOUNT and REGION (the account is masked). It only builds and runs the command, so
+# pass it to assert_denied or run_capture. A success holds credentials: never print its stdout.
 web_identity_call() {
   local role="$1" token="$2"
   shift 2
   : "${ACCOUNT:?ACCOUNT is not set}" "${REGION:?REGION is not set}"
-  ENV="${ENV:-dev}"
-  valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
+  require_env
   case "$role" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$role'" ;; esac
   mask "$ACCOUNT"
   # No credentials are needed or sent: --no-sign-request.
-  run_capture aws sts assume-role-with-web-identity \
+  aws sts assume-role-with-web-identity \
     --role-arn "arn:aws:iam::${ACCOUNT}:role/sis-${ENV}-gha-${role}" \
     --role-session-name "gha-oidc-negative-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${role}" \
     --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
@@ -138,10 +138,15 @@ valid_env() {
   [[ "$1" =~ $re ]]
 }
 
-# app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
-app_names() {
+# require_env: ENV defaults to dev and must be a valid environment name.
+require_env() {
   ENV="${ENV:-dev}"
   valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
+}
+
+# app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
+app_names() {
+  require_env
   CLUSTER="sis-${ENV}-cluster" SERVICE="sis-${ENV}-app" FAMILY="sis-${ENV}-app" REPOSITORY="sis-${ENV}-app"
   EXEC_ROLE="sis-${ENV}-ecs-exec" TASK_ROLE="sis-${ENV}-ecs-task"
   SECRET_ID="sis/${ENV}/app-api-key" LOG_GROUP="/ecs/sis-${ENV}-app"

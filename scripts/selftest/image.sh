@@ -40,7 +40,7 @@ for bad in 'FROM python:3.13-slim AS base' 'FROM ${PYTHON_IMAGE}:3.13-slim@sha25
   [ ! -e "$sd/calls" ] || die "selftest: a bad Dockerfile must not reach docker"
 done
 printf 'FROM python@sha256:%s AS base\n' "$digest" >"$tmp/app-fixture/Dockerfile"
-expect_fail "build with a base image without a tag" "readable tag" build
+expect_fail "build with a base image without a tag" "exactly one 'FROM" build
 printf 'FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:%s AS base\nFROM base AS test\nFROM base AS runtime\n' "$digest" >"$tmp/app-fixture/Dockerfile"
 stub_reset
 stub docker-buildx rc 1

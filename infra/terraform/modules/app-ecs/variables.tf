@@ -154,7 +154,7 @@ variable "alb_ingress_cidrs" {
   sensitive   = true # may be a maintainer address from a repository secret (ADR 0007 S10)
 
   validation {
-    condition     = length(var.alb_ingress_cidrs) >= 1 && alltrue([for c in var.alb_ingress_cidrs : can(cidrhost(c, 0))])
-    error_message = "alb_ingress_cidrs must hold at least one valid CIDR block."
+    condition     = length(var.alb_ingress_cidrs) >= 1 && alltrue([for c in var.alb_ingress_cidrs : can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$", c)) && can(cidrhost(c, 0))])
+    error_message = "alb_ingress_cidrs must hold at least one valid IPv4 CIDR block (the rules use cidr_ipv4)."
   }
 }

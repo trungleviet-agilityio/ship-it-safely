@@ -165,12 +165,12 @@ stub "$sts" rc 0 1
 stub "$sts" err "" 1
 stub "$sts" out '{"Credentials":{"SecretAccessKey":"never-printed"}}' 1
 out="$(quiet_run oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan apply deploy)"
-case "$out" in *"the apply role was assumed with a token it must refuse: trust too broad"*) ;; *) die "selftest: a success must fail with trust too broad: $out" ;; esac
+case "$out" in *"the apply role failed: the call succeeded, it must be denied"*) ;; *) die "selftest: a success must fail as a denial that did not happen: $out" ;; esac
 case "$out" in *never-printed*) die "selftest: credentials reached the output" ;; esac
 [ "$(cat "$sd/$sts.n")" = 2 ] || die "selftest: the run must stop at the first role that accepts the token"
 denied_ready
 stub "$sts" err "Could not connect to the endpoint URL ${acct}"
-expect_fail "web identity denial on a network error" "not as a role refusal" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan
+expect_fail "web identity denial on a network error" "for a reason other than AccessDenied" oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan
 out="$(quiet_run oidc_env "$ROOT/scripts/assert-web-identity-denied.sh" plan)"
 case "$out" in *"$acct"*) die "selftest: an error message leaked the account" ;; esac
 denied_ready
@@ -198,10 +198,10 @@ calls_have "--duration-seconds 900" || die "selftest: the short duration must be
 case "$out" in *"$acct"* | *"$jwt"* | *Credentials* | *SecretAccessKey*) die "selftest: the session cap output holds a secret" ;; esac
 cap_ready
 stub "$sts" rc 0 0
-expect_fail "session cap when 3601 seconds is granted" "max_session_duration is above 3600" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
+expect_fail "session cap when 3601 seconds is granted" "the call succeeded, it must be denied" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
 cap_ready
 stub "$sts" err "An error occurred (AccessDenied) for ${acct}" 0
-expect_fail "session cap when 3601 fails for another reason" "not for the duration" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
+expect_fail "session cap when 3601 fails for another reason" "for a reason other than DurationSeconds" oidc_env "$ROOT/scripts/assert-session-cap.sh" plan
 cap_ready
 stub "$sts" rc 254 1
 stub "$sts" err "An error occurred (AccessDenied)" 1

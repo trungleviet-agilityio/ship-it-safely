@@ -14,6 +14,12 @@ mock_provider "aws" {
   mock_resource "aws_iam_policy" {
     defaults = { arn = "arn:aws:iam::123456789012:policy/mock" }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:ap-southeast-1:123456789012:sis-dev-security-alerts" }
+  }
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = { arn = "arn:aws:events:ap-southeast-1:123456789012:rule/sis-dev-oidc-unexpected" }
+  }
 }
 
 variables {

@@ -13,21 +13,15 @@ source "$(dirname "$0")/lib.sh"
 
 [ $# -eq 1 ] || die "usage: scripts/assert-session-cap.sh <plan|apply|deploy>"
 role="$1"
-require_cmd jq "install jq"
 
-token="$(oidc_token sts.amazonaws.com)"
+token="$(oidc_token)"
 
-# One second over the cap must be refused for the duration, not for the trust.
-web_identity_call "$role" "$token" --duration-seconds 3601 --query Credentials.Expiration --output text
-if [ "$RUN_RC" -eq 0 ]; then
-  die "a 3601 second session was granted on the ${role} role: max_session_duration is above 3600"
-fi
-case "$RUN_ERR" in
-  *DurationSeconds* | *MaxSessionDuration*) ok "a 3601 second session was refused on the ${role} role (duration limit)" ;;
-  *) die "the 3601 second call failed, but not for the duration (exit code ${RUN_RC}): ${RUN_ERR}" ;;
-esac
+# One second over the cap must be refused for the duration, not for the trust. The message names both the requested
+# DurationSeconds and the role's MaxSessionDuration.
+assert_denied "a 3601 second session on the ${role} role" DurationSeconds \
+  web_identity_call "$role" "$token" --duration-seconds 3601 --query Credentials.Expiration --output text
 
 # The shortest session STS allows (900 seconds): the answer is the expiration time only.
-web_identity_call "$role" "$token" --duration-seconds 900 --query Credentials.Expiration --output text
+run_capture web_identity_call "$role" "$token" --duration-seconds 900 --query Credentials.Expiration --output text
 [ "$RUN_RC" -eq 0 ] || die "a 900 second session was refused on the ${role} role (exit code ${RUN_RC}): ${RUN_ERR}"
 printf 'session expires in about 15 minutes (%s)\n' "$RUN_OUT"

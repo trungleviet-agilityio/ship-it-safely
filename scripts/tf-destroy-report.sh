@@ -20,7 +20,7 @@ outcome="${APPLY_OUTCOME:-}"
 
 if [ -z "$deletes" ]; then
   heading="Destroy did not finish"
-  detail="Resources: not known (the plan check did not finish)"
+  detail="Resources: not known (the plan check did not finish or refused the plan)"
 elif [ "$deletes" = "0" ]; then
   heading="Nothing to destroy"
   detail="Nothing to destroy."

@@ -35,6 +35,13 @@ it covers only the PR number):
 any merged file can copy a name. A missing or different claim fails closed (AccessDenied). The files are a
 contract (`workflow_files` output): `terraform-iac.yml` and `terraform-destroy.yml` for apply, `app-deploy.yml`
 for deploy. Renaming one needs a bootstrap re-apply. `repo-guard.yml` and `oidc-smoke-test.yml` are never listed.
+The match is case sensitive: `github_owner` and `github_repo` in the tfvars must use GitHub's canonical spelling
+(checkpoint step A0 reads the real claim and catches a mismatch).
+
+All three roles also require `StringEquals aws:RequestedRegion = <aws_region>`. The key is always in the request
+context, and calls to the global STS endpoint carry us-east-1, so those are refused. This keeps every successful
+assumption in the region the alert rule watches. A refused probe in another region is not alerted: accepted, it
+grants nothing.
 
 IAM has no `event_name` condition key for GitHub OIDC. A `pull_request` run has ref `refs/pull/<N>/merge`; a
 `pull_request_target` run has the base ref `refs/heads/main`, so the plan role refuses it even though its `sub`
@@ -55,7 +62,8 @@ sent to CloudWatch Logs. `AssumeRoleWithWebIdentity` is logged as a read-only ev
 
 The negative tests in `oidc-smoke-test` raise these alerts on purpose. If the account already has a trail, set
 `create_trail = false` so management events are not paid for twice; the rule and topic are still created.
-The rule is regional: STS calls through the global endpoint are logged in us-east-1 and do not reach it.
+The rule is regional: STS calls through the global endpoint are logged in us-east-1 and do not reach it. The
+trust refuses them (`aws:RequestedRegion`), so no success can hide there.
 
 ## Name contract
 

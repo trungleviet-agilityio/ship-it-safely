@@ -30,13 +30,15 @@ app_dir="${APP_DIR:-$ROOT/app}"
 require_cmd docker "install Docker"
 
 # The one base line: tag and digest come from it, so a mirror serves exactly the digest the Dockerfile pins.
-base_lines="$(grep -Ec '^FROM[[:space:]]+[A-Za-z0-9._/:-]+@sha256:[0-9a-f]{64}[[:space:]]+AS[[:space:]]+base[[:space:]]*$' "$app_dir/Dockerfile" || true)"
-[ "$base_lines" = 1 ] || die "app/Dockerfile needs exactly one 'FROM <image>:<tag>@sha256:<64 hex> AS base' line (found $base_lines)"
-base_ref="$(sed -nE 's|^FROM[[:space:]]+([A-Za-z0-9._/:-]+)@sha256:[0-9a-f]{64}[[:space:]]+AS[[:space:]]+base[[:space:]]*$|\1|p' "$app_dir/Dockerfile")"
-base_digest="$(sed -nE 's|^FROM[[:space:]]+[A-Za-z0-9._/:-]+@(sha256:[0-9a-f]{64})[[:space:]]+AS[[:space:]]+base[[:space:]]*$|\1|p' "$app_dir/Dockerfile")"
-base_tag="${base_ref##*:}"
-case "$base_ref" in *:*) ;; *) die "the base image must keep a readable tag before the digest (got '$base_ref')" ;; esac
-case "$base_tag" in */*) die "the base image must keep a readable tag before the digest (got '$base_ref')" ;; esac
+base_re='^FROM[[:space:]]+[A-Za-z0-9._/-]+:([A-Za-z0-9._-]+)@(sha256:[0-9a-f]{64})[[:space:]]+AS[[:space:]]+base[[:space:]]*$'
+base_lines=0 base_tag="" base_digest=""
+while IFS= read -r line || [ -n "$line" ]; do
+  if [[ "$line" =~ $base_re ]]; then
+    base_lines=$((base_lines + 1))
+    base_tag="${BASH_REMATCH[1]}" base_digest="${BASH_REMATCH[2]}"
+  fi
+done <"$app_dir/Dockerfile"
+[ "$base_lines" -eq 1 ] || die "app/Dockerfile needs exactly one 'FROM <image>:<tag>@sha256:<64 hex> AS base' line, with a readable tag and no ARG (found $base_lines)"
 
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT

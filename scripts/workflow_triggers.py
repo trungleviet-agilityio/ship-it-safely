@@ -6,10 +6,12 @@ YAML (PyYAML, from the hash-locked CI venv), so flow lists split across lines, e
 quoted keys and anchors cannot hide a trigger the way they could from a line scanner.
 
 Usage: python -I scripts/workflow_triggers.py <workflow file>...
-Prints one violation per line on stdout. Exit codes: 0 all files pass, 1 violations, 2 usage error.
+Prints one violation per line on stdout, with paths relative to the working directory.
+Exit codes: 0 all files pass, 1 violations, 2 usage error.
 Run through scripts/check-workflow-triggers.sh, which picks the interpreter and lists the files.
 """
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,15 +62,13 @@ def _triggers(document: Any) -> list[str]:
     keys = [k for k in document if k == "on" or k is True]
     if len(keys) > 1:
         raise ValueError("both `on` and its YAML 1.1 form `true` are present")
-    if not keys:
-        raise ValueError("no triggers found under on:")
-    value = document[keys[0]]
+    value = document[keys[0]] if keys else None
+    # A scalar is one trigger; a list or mapping is read by items or keys; anything else names none.
+    names: list[Any] = []
     if isinstance(value, str):
-        names: list[Any] = [value]
+        names = [value]
     elif isinstance(value, list | dict):
         names = list(value)
-    else:
-        raise ValueError("no triggers found under on:")
     if not names:
         raise ValueError("no triggers found under on:")
     if not all(isinstance(n, str) for n in names):
@@ -78,14 +78,15 @@ def _triggers(document: Any) -> list[str]:
 
 def check(path: Path) -> list[str]:
     """Violations of one workflow file, as `<file>: <message>` lines."""
+    shown = os.path.relpath(path)
     try:
         names = _triggers(_load(path.read_text(encoding="utf-8")))
     except yaml.YAMLError as e:
-        return [f"{path}: invalid YAML: {getattr(e, 'problem', None) or 'parse error'}"]
+        return [f"{shown}: invalid YAML: {getattr(e, 'problem', None) or 'parse error'}"]
     except ValueError as e:
-        return [f"{path}: {e}"]
+        return [f"{shown}: {e}"]
     return [
-        f"{path}: trigger '{n}' is not allowed (allowed: {' '.join(ALLOWED)})"
+        f"{shown}: trigger '{n}' is not allowed (allowed: {' '.join(ALLOWED)})"
         for n in names
         if n not in ALLOWED
     ]
@@ -99,7 +100,7 @@ def main(argv: list[str]) -> int:
     for name in argv:
         path = Path(name)
         if not path.is_file():
-            problems.append(f"{path}: workflow not found")
+            problems.append(f"{os.path.relpath(path)}: workflow not found")
             continue
         problems.extend(check(path))
     for line in problems:

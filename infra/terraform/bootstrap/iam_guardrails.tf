@@ -76,14 +76,14 @@ data "aws_iam_policy_document" "guardrails" {
     sid       = "G6DenyAlertRule"
     effect    = "Deny"
     actions   = ["events:*"] # Deny only: widens protection
-    resources = [local.rule_arn]
+    resources = [aws_cloudwatch_event_rule.oidc_unexpected.arn]
   }
 
   statement {
     sid       = "G6DenyAlertTopic"
     effect    = "Deny"
     actions   = ["sns:*"] # Deny only: widens protection
-    resources = [local.topic_arn]
+    resources = [aws_sns_topic.security_alerts.arn]
   }
 
   statement {

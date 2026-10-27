@@ -6,60 +6,42 @@
 source "$(dirname "$0")/common.sh"
 
 # --- check-workflow-triggers.sh
-cat >"$tmp/good.yml" <<'EOF'
-name: good
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-  workflow_dispatch:
-jobs: {}
-EOF
-"$ROOT/scripts/check-workflow-triggers.sh" "$tmp/good.yml" 2>/dev/null || die "selftest: good workflow rejected"
+# case_trigger <label> <expected> <yaml>: write the workflow (printf %b escapes) and require either a pass (expected
+# "ok") or a failure whose message holds the expected text.
+case_trigger() {
+  printf '%b' "$3" >"$tmp/y.yml"
+  if [ "$2" = ok ]; then
+    "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/y.yml" >/dev/null 2>&1 || die "selftest: $1 was rejected"
+  else
+    expect_fail "$1" "$2" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/y.yml"
+  fi
+}
+good_on='name: good\non:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n'
+case_trigger "a good workflow" ok "$good_on"
 for bad in pull_request_target issue_comment workflow_run schedule; do
-  printf 'name: bad\non:\n  pull_request:\n  %s:\njobs: {}\n' "$bad" >"$tmp/bad.yml"
-  expect_fail "trigger $bad" "$bad" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/bad.yml"
+  case_trigger "trigger $bad" "$bad" "name: bad\non:\n  pull_request:\n  $bad:\njobs: {}\n"
 done
-printf 'name: bad\non: [push, pull_request_target]\njobs: {}\n' >"$tmp/flow.yml"
-expect_fail "flow-style trigger" "pull_request_target" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/flow.yml"
-printf 'name: bad\non: pull_request_target\njobs: {}\n' >"$tmp/scalar.yml"
-expect_fail "scalar trigger" "pull_request_target" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/scalar.yml"
-
-printf 'name: bad\non:\n  pull_request:\n  "pull_request_target":\njobs: {}\n' >"$tmp/qd.yml"
-expect_fail "double-quoted key" "pull_request_target" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/qd.yml"
-printf "name: bad\non:\n  push:\n  'workflow_run':\n    workflows: [x]\njobs: {}\n" >"$tmp/qs.yml"
-expect_fail "single-quoted key" "workflow_run" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/qs.yml"
-printf 'name: bad\n"on": {push: {}, issue_comment: {}}\njobs: {}\n' >"$tmp/fm.yml"
-expect_fail "flow map" "issue_comment" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/fm.yml"
-
-# YAML forms a line scanner could miss (ADR 0007 S34): each must fail by name, or by its own reason.
-check_triggers() { "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/y.yml"; }
-printf 'name: bad\non:\n  pull_request:\n    branches: [main]\n  ? pull_request_target\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "explicit ? key" "pull_request_target" check_triggers
-printf 'name: bad\non: [\n  push,\n  pull_request_target,\n]\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "multi-line flow list" "pull_request_target" check_triggers
-printf 'name: bad\nx-triggers: &t [workflow_run]\non: *t\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "alias that expands to workflow_run" "workflow_run" check_triggers
-printf 'name: bad\n"on":\n  push:\n  issue_comment:\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "quoted on key" "issue_comment" check_triggers
-printf 'name: bad\non:\n  push:\ntrue:\n  workflow_run:\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "on and true (same YAML 1.1 key)" "duplicate key" check_triggers
-printf 'name: bad\n"on":\n  push:\ntrue:\n  workflow_run:\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "quoted on and true" "both \`on\` and its YAML 1.1 form" check_triggers
-printf 'name: bad\non:\n  push:\non:\n  pull_request_target:\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "duplicate on keys" "duplicate key" check_triggers
-printf 'name: bad\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "no on key" "no triggers found" check_triggers
-printf -- '- on\n- push\n' >"$tmp/y.yml"
-expect_fail "non-mapping document" "not a YAML mapping" check_triggers
-printf 'name: bad\non:\n  push: {\njobs: {}\n' >"$tmp/y.yml"
-expect_fail "invalid YAML" "invalid YAML" check_triggers
-printf 'name: ok\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n' >"$tmp/y.yml"
-check_triggers >/dev/null 2>&1 || die "selftest: a plain push and dispatch workflow was rejected"
+case_trigger "flow-style trigger" pull_request_target 'name: bad\non: [push, pull_request_target]\njobs: {}\n'
+case_trigger "scalar trigger" pull_request_target 'name: bad\non: pull_request_target\njobs: {}\n'
+case_trigger "double-quoted key" pull_request_target 'name: bad\non:\n  pull_request:\n  "pull_request_target":\njobs: {}\n'
+case_trigger "single-quoted key" workflow_run "name: bad\non:\n  push:\n  'workflow_run':\n    workflows: [x]\njobs: {}\n"
+case_trigger "flow map" issue_comment 'name: bad\n"on": {push: {}, issue_comment: {}}\njobs: {}\n'
+case_trigger "explicit ? key" pull_request_target 'name: bad\non:\n  pull_request:\n    branches: [main]\n  ? pull_request_target\njobs: {}\n'
+case_trigger "multi-line flow list" pull_request_target 'name: bad\non: [\n  push,\n  pull_request_target,\n]\njobs: {}\n'
+case_trigger "alias that expands to workflow_run" workflow_run 'name: bad\nx-triggers: &t [workflow_run]\non: *t\njobs: {}\n'
+case_trigger "quoted on key" issue_comment 'name: bad\n"on":\n  push:\n  issue_comment:\njobs: {}\n'
+case_trigger "on and true (same YAML 1.1 key)" "duplicate key" 'name: bad\non:\n  push:\ntrue:\n  workflow_run:\njobs: {}\n'
+case_trigger "quoted on and true" "both \`on\` and its YAML 1.1 form" 'name: bad\n"on":\n  push:\ntrue:\n  workflow_run:\njobs: {}\n'
+case_trigger "duplicate on keys" "duplicate key" 'name: bad\non:\n  push:\non:\n  pull_request_target:\njobs: {}\n'
+case_trigger "no on key" "no triggers found" 'name: bad\njobs: {}\n'
+case_trigger "an empty on" "no triggers found" 'name: bad\non:\njobs: {}\n'
+case_trigger "non-mapping document" "not a YAML mapping" '- on\n- push\n'
+case_trigger "invalid YAML" "invalid YAML" 'name: bad\non:\n  push: {\njobs: {}\n'
+case_trigger "push and dispatch" ok 'name: ok\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n'
 # A missing PyYAML is a clear instruction, not a stack trace.
 printf '#!/bin/sh\nexit 1\n' >"$tmp/nopy"
 chmod +x "$tmp/nopy"
+printf '%b' "$good_on" >"$tmp/good.yml"
 expect_fail "missing pyyaml" "run make venv" env CI_PYTHON="$tmp/nopy" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/good.yml"
 ok "trigger check reads YAML semantics, not lines"
 
@@ -231,7 +213,13 @@ pins_ok() {
   shas="$(grep -hEo 'uses:[[:space:]]+[A-Za-z0-9._/-]+@[0-9a-f]{40}' "$@" | sed -E 's/uses:[[:space:]]+//' | sort -u | cut -d@ -f1 | uniq -d)"
   [ -z "$shas" ] || { printf 'selftest: more than one SHA for: %s\n' "$shas" >&2; return 1; }
 }
-all_workflows=("$ROOT"/.github/workflows/*.yml)
+all_workflows=()
+for f in "$ROOT"/.github/workflows/*.yml "$ROOT"/.github/workflows/*.yaml; do
+  if [ -f "$f" ]; then all_workflows+=("$f"); fi
+done
+# A .yaml workflow is read like a .yml one: a tag-only pin in it fails the same check.
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n' >"$tmp/wf-yaml-ext.yaml"
+! pins_ok "$tmp/wf-yaml-ext.yaml" 2>/dev/null || die "selftest: the pin check missed a tag-only action in a .yaml file"
 pins_ok "${all_workflows[@]}" || die "selftest: a workflow action is not pinned to a SHA with a version comment"
 sed -E 's/@[0-9a-f]{40} # v[0-9.]+/@v4/' "$deploy_wf" >"$tmp/wf-tag.yml"
 ! cmp -s "$deploy_wf" "$tmp/wf-tag.yml" || die "selftest: could not mutate an action pin (tag)"
