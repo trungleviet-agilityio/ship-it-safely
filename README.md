@@ -108,6 +108,23 @@ breaker rollback), ECR, a 7-day log group and the secret shell `sis/dev/app-api-
 of the task definition; `app-deploy` only swaps in the app image by digest (ADR 0005 F2). The app runs as UID
 10001 with a read-only root and must never write to disk.
 
+### Adding an environment
+
+Each environment is a thin root `envs/<env>/` over the same module (ADR 0008 P1). Copies may differ only in
+`terraform.tfvars`, the `key` line of `backend.tf`, `versions.tf` and `.terraform.lock.hcl` (so a provider
+upgrade reaches dev before prod); `scripts/guard/env-parity.sh` fails any PR with another difference or a
+half-wired env. To clone one:
+
+```bash
+make new-env ENV=qa DRY_RUN=1
+```
+
+Without `DRY_RUN` it writes `envs/qa/` (tracked files of `envs/dev/` only, with `env`, the next free
+`vpc_cidr` and the backend key rewritten), `bootstrap/accounts/qa.tfvars.example` and the gitignored
+`accounts/qa.tfvars`, then prints the steps you run: the account, the bootstrap, the GitHub environment and
+secrets, and the workflow lines to add. It never calls `terraform`, `aws` or `gh`, and never writes an account
+ID. Names match `^[a-z][a-z0-9]{1,7}$`.
+
 ## How the trust works
 
 GitHub Actions never holds AWS keys. Each job asks GitHub for an OIDC token and exchanges it with AWS STS for
@@ -142,8 +159,8 @@ Gates outside the trust policy:
 
 | Workflow | Trigger | Does |
 |---|---|---|
-| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
-| | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
+| [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then one `plan-<env>` caller per environment of [`reusable-terraform-plan.yml`](.github/workflows/reusable-terraform-plan.yml) (secrets passed by name, never `inherit`): `plan` with the plan role (no `environment:`), plan-role negative tests, and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
+| | push to `main` touching `envs/dev`, `modules/` or the workflow file (always dev), or `workflow_dispatch` with input `env` | `apply` in that environment (your approval required) with the apply role: plan, then apply that saved plan |
 | [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev`) and `confirm`, which must be typed as `destroy-dev` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
 | [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
 | [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). The file path is in the deploy role trust: renaming the file needs a bootstrap re-apply |
@@ -152,7 +169,7 @@ Gates outside the trust policy:
 
 Every job starts with `step-security/harden-runner`. The seven jobs that assume an AWS role run it in `block` mode
 with telemetry off and an exact `allowed-endpoints` list (hosts that hold the account ID are built from
-`secrets.AWS_ACCOUNT_ID_DEV`, never written out), and all of them except `deploy` (which needs Docker) also
+`secrets.AWS_ACCOUNT_ID`, never written out), and all of them except `deploy` (which needs Docker) also
 disable sudo and containers, so code in the job cannot switch the firewall off; every other job runs `audit`. The repo-guard check
 `scripts/guard/harden-runner.sh` fails a PR that breaks this shape. If a block-mode job fails on a blocked host,
 the job log names it: add it to that job's list in a short PR (the guard check refuses `audit` on these jobs, so
@@ -183,10 +200,10 @@ Not covered by Dependabot, so check them monthly by hand: the tool versions in `
 
 | Where | Name | Kind |
 |---|---|---|
-| Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID; variables would print unmasked in public logs) |
+| Repo | `AWS_PLAN_ROLE_ARN_<ENV>`, `AWS_ACCOUNT_ID_<ENV>` | secrets for the PR plan, which has no environment (they hold the account ID; variables would print unmasked in public logs). `terraform-iac` maps them to the reusable plan by name |
 | Repo | `AWS_REGION` | variable |
-| Repo | `ALB_INGRESS_CIDRS_DEV` (optional) | secret: a JSON list such as `["<your IP>/32"]`. Unset means `0.0.0.0/0`. The plan masks each CIDR and the rules hold no CIDR in their names (ADR 0007 S10) |
-| Environment `dev` | `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets, only readable by jobs you approved |
+| Repo and environment | `ALB_INGRESS_CIDRS_<ENV>` (repo, for the PR plan) and `ALB_INGRESS_CIDRS` (environment, for apply), both optional, same value | secret: a JSON list such as `["<your IP>/32"]`. Unset means `0.0.0.0/0`. The plan masks each CIDR and the rules hold no CIDR in their names (ADR 0007 S10) |
+| Environment `<env>` | `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets with the same names in every environment, only readable by jobs you approved, so one job definition serves every env (ADR 0008 P5) |
 | Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
 | Repo | ruleset on the default branch: PR required, no force push, no deletion, status check `guard (no AWS)` required | ruleset |
 | Repo | [`.github/CODEOWNERS`](.github/CODEOWNERS) (`* @trungleviet-agilityio`); "require review from code owners" stays off while there is one maintainer | file |

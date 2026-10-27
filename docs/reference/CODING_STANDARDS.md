@@ -157,7 +157,8 @@ disagree, the ADR wins; update this file.
   explicitly. A job with `id-token: write` uses `block`, `disable-telemetry: true`,
   `disable-sudo-and-containers: true` (only app-deploy `deploy` is exempt: it runs Docker) and
   `allowed-endpoints` with one exact `host:port` per line: no `*`, and no expression other than
-  `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV` and `env.ENV`. Such a job has no `container:` or `services:`,
+  `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID` and `env.ENV`. Jobs without credentials never name a secret
+  in their endpoints (`secrets.`, `secrets[`, `toJSON(secrets)` or an `env` value built from one). Such a job has no `container:` or `services:`,
   and its harden-runner step has no `if:` or `continue-on-error:`. Every other job uses `audit`.
   `scripts/guard/harden-runner.sh` enforces all of this.
 - Workflows that run Terraform set `CHECKPOINT_DISABLE: "1"`.
@@ -172,7 +173,15 @@ disagree, the ADR wins; update this file.
   `github.event.pull_request.head.repo.full_name == github.repository` and
   `github.event.pull_request.user.login != 'dependabot[bot]'` (not `github.actor`, which zizmor
   flags as spoofable).
-- Never use `pull_request_target`. zizmor (pre-commit) must pass with no ignore comments.
+- Never use `pull_request_target`. zizmor (pre-commit) must pass with no ignore comments; the one audit
+  disabled in `.github/zizmor.yml` (`self-repository`, which conflicts with actionlint) is the only exception.
+- Reusable workflows are named `reusable-*.yml`, have `on: workflow_call` and nothing else, and are the only
+  files with that trigger. Callers pass each secret by name, never `secrets: inherit`. A job that assumes a
+  role on `main` (apply, deploy, destroy) stays in a top-level file, because the role trust pins that file
+  (`job_workflow_ref`).
+- Environment jobs read secrets with env-agnostic names (`AWS_ACCOUNT_ID`) and take the env from
+  `inputs.env`, validated by `scripts/names.sh env-root` before any credential step. PR plan jobs have no
+  environment, so they read repo secrets suffixed with the env (`AWS_ACCOUNT_ID_DEV`).
 - PR plan jobs do not set `environment:` (the OIDC `sub` must be `pull_request`); apply, deploy
   and destroy jobs do.
 - Never interpolate `${{ github.event.* }}` or other user-controlled values directly in `run:`.

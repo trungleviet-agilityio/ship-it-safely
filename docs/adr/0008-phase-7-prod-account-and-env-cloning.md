@@ -365,6 +365,23 @@ Never in Terraform or git: the app secret values (set by the user with `put-secr
   - ADR 0007 (policy exceptions);
   - diagrams (prod account, promotion path, blue/green).
 
+## PR A build notes (2026-10-27)
+
+The build followed sections B to D with these deviations, accepted by the orchestrator under the standing
+best-practice delegation:
+
+| # | Deviation | Why | Trade-off |
+|---|---|---|---|
+| D1 | The parity guard compares each `README.md` outside the generated `BEGIN_TF_DOCS` block | The generated Requirements table lists provider versions, which legitimately differ during a staged upgrade | A hand-written README change still has to be made in every env |
+| D2 | `.github/zizmor.yml` disables the `self-repository` audit (Low): zizmor 1.31.1 wants `uses: $/...` for a local reusable workflow, actionlint rejects that form | Both linters are required; `./...` resolves to the caller's own commit, so nothing is weaker | One audit is off for every file. The config names the removal condition (actionlint accepts `$/`) |
+| D3 | The env is validated by `scripts/names.sh env-root` (regex and `envs/<env>/` exists) as the first step after harden-runner, not by a separate job | No credential step runs before it; the dispatch choice limits the UI | A crafted API dispatch with an unknown env still makes GitHub create that empty environment (no secrets, so nothing runs) |
+| D4 | `new-env.sh` always sets `env = "<env>"` in the generated bootstrap example | The bootstrap `env` variable defaults to `dev`, so a copy would bootstrap dev names in the new account | None |
+| D5 | `--strategy` and the `promotion_target_env` rewrite apply only when the key exists in the source tfvars | The variables arrive in PR B | `--strategy` is refused with a message until then |
+| D6 | No `-var-file` in plan or apply | Roots stay thin (P1), so `terraform.tfvars` is auto-loaded as before | None |
+
+Check names after PR A: the plan jobs become `plan-dev / plan (read-only role)`, `plan-dev / plan role guardrails`
+and `plan-dev / sticky plan comment`. The required check `guard (no AWS)` is unchanged.
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_A>`, `<PR_B>`, `<SHA>`, `<PROD_ALB>`, `<BROKEN_REV>`. Each command is one line for zsh; there are no packed arguments (lessons 5, 37). Dispatches use the web UI (Actions > workflow > Run workflow), because the PAT has Actions read-only (lesson 31).
