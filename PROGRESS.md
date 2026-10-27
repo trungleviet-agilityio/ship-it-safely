@@ -15,7 +15,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 3 Infra pipeline + ECS | ✅ | 0004 | #10, #11, #13 | PR plan comment, approved apply (27 resources), `/health` 200 `ok`; plan role: `explicitDeny` on `GetSecretValue`, `implicitDeny` on creates |
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
 | 5 Hardening & teardown | ✅ | 0006 | #19 | Bootstrap re-applied (deploy role `DescribeSecret` allowed, `GetSecretValue` explicitDeny); stack re-created; N5 deploy refused at Preflight before the secret had a value, then green with `/version` on the `main` SHA by digest; `terraform-destroy` removed 27 resources and deregistered revisions 4, 5, 6, 8 with no account ID in logs; N6 wrong phrase failed with no approval prompt; N7 "nothing to destroy" |
-| 6 Supply-chain hardening | 🟡 | 0007 | #21 (PR A) | Checkpoint A passed: bootstrap re-applied (12 added, 4 changed); the region pin kept the PR plan assume working; N8 refused the PR token on apply and deploy (`AccessDenied`), N9 refused a 3601 s session; the refused assume reached the inbox as an SNS alert; apply (27), deploy (`/version` on the `main` SHA) and destroy (27, no account ID in the log) ran on the file-pinned trust; `guard (no AWS)` required; push protection on; Dependabot opened #22 (Python 3.15, not merged); `make up` serves all four routes. PR B (harden-runner `block`) is next |
+| 6 Supply-chain hardening | ✅ | 0007 | #21 (PR A), #24 (PR B, includes #23) | Checkpoint B passed: the seven credentialed jobs ran in `block` mode with telemetry off and no blocked host: PR plan, guardrails and smoke test; apply 27; deploy pushed to ECR (`/version` on `87cd3c0` by digest); destroy 27 and revision 12 deregistered; no account ID in any log. Dependabot applied the python `ignore` and closed #22. Checkpoint A passed: bootstrap re-applied (12 added, 4 changed); the region pin kept the PR plan assume working; N8 refused the PR token on apply and deploy (`AccessDenied`), N9 refused a 3601 s session; the refused assume reached the inbox as an SNS alert; apply (27), deploy (`/version` on the `main` SHA) and destroy (27, no account ID in the log) ran on the file-pinned trust; `guard (no AWS)` required; push protection on; Dependabot opened #22 (Python 3.15, not merged); `make up` serves all four routes. |
 | 7 Stretch: prod account | ⏸ | | | Needs AWS Organizations and a prod account (user). Deploy scripts are already parameterized by `ENV` |
 
 ## Live AWS state
@@ -24,7 +24,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 |---|---|---|
 | Bootstrap (state bucket, OIDC provider, plan/apply/deploy roles, guardrails, ECS boundary, budget) | Live | Close to zero |
 | Bootstrap security alert (CloudTrail trail and bucket, EventBridge rule, SNS topic and email) | Live (Phase 6) | Close to zero (first trail, 30-day objects) |
-| `envs/dev` (VPC, ALB, ECS, ECR, logs, secret shell, ECS roles) | **Destroyed** (2026-10-27, by `terraform-destroy`) | Hourly when up (ALB + Fargate) |
+| `envs/dev` (VPC, ALB, ECS, ECR, logs, secret shell, ECS roles) | **Destroyed** (2026-10-27, after checkpoint B, by `terraform-destroy`) | Hourly when up (ALB + Fargate) |
 
 Re-create order for a session: Run workflow on `terraform-iac` and approve, set the secret value (one line, your
 own terminal), Run workflow on `app-deploy` and approve. Tear down at the end of the session.
@@ -36,16 +36,16 @@ trust (plan job without `environment`, apply/deploy with `environment:dev`), spl
 reviewer, destroy workflow, ECS Fargate instead of EKS, S3 native locking instead of DynamoDB, digest deploys,
 Secrets Manager shell plus out-of-band value, trunk-based branching and the CodeBuild/CodePipeline notes are all
 in place. Deliberate differences: no throwaway S3-bucket step (Phase 3 went straight to ECS); tools installed as
-checksum-verified binaries instead of setup actions. Dependabot and the OIDC alert are in place since
-Phase 6 PR A. Still to do: the items below, harden-runner `block` (Phase 6 PR B) and the prod account with
-`BLUE_GREEN` (Phase 7).
+checksum-verified binaries instead of setup actions. Dependabot, the OIDC alert and harden-runner
+`block` on the credentialed jobs are in place since Phase 6. Still to do: the items below and the prod account
+with `BLUE_GREEN` (Phase 7).
 
 ## Open items carried forward
 
 | Item | From | Target |
 |---|---|---|
 | Pin `job_workflow_ref` instead of the workflow `name:` in deploy/apply trust (reusable workflows) | ADR 0005 L2 | Built in Phase 6 PR A (ADR 0007 S2); proven live at checkpoint A7 (apply, deploy and destroy) |
-| harden-runner insights may show hostnames with the account ID (Q1; ADR 0006 step 10 not run) | ADR 0005 Q1 | Checked at A6: insights need a GitHub login and the plan job lists the state bucket host (holds the account ID). Treated as visible to any GitHub user, so PR B turns telemetry off on credentialed jobs |
+| harden-runner insights may show hostnames with the account ID (Q1; ADR 0006 step 10 not run) | ADR 0005 Q1 | Checked at A6: insights need a GitHub login and the plan job lists the state bucket host (holds the account ID). Treated as visible to any GitHub user: PR B turned telemetry off on credentialed jobs (closed at checkpoint B) |
 | YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Built in Phase 6 PR A (ADR 0007 S9) |
 | ALB ingress from the optional secret `ALB_INGRESS_CIDRS_DEV` (`TF_VAR_alb_ingress_cidrs_json`) | ADR 0004 L4 | Built in Phase 6 PR A (ADR 0007 S10); not set at A7 (default `0.0.0.0/0`, masked notice seen in the destroy log) |
 | Deploy preflight: check the secret has an `AWSCURRENT` version (needs `DescribeSecret` in bootstrap) | Phase 4 run 3 | Built in Phase 5 (G14); proven live by N5 at the checkpoint |
@@ -58,11 +58,14 @@ Phase 6 PR A. Still to do: the items below, harden-runner `block` (Phase 6 PR B)
 | Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Built in Phase 6 PR A (ADR 0007 S12, `tf-destroy-report.sh`) |
 | `terraform-destroy.yml` comment says the typed phrase is never echoed, but GitHub prints the step `env:` block | Phase 5 checkpoint | Built in Phase 6 PR A (ADR 0007 S13) |
 | Optional: delete the `INACTIVE` task definitions (`DeleteTaskDefinitions`) so they stop showing in the Tagging API | Phase 5 checkpoint | Dropped (ADR 0007 S14: they cost nothing) |
-| harden-runner `block` with an explicit allowlist on the credentialed jobs | ADR 0007 S4, S39 to S41 | Phase 6 PR B, from the A6 egress list |
+| harden-runner `block` with an explicit allowlist on the credentialed jobs | ADR 0007 S4, S39 to S47 | Built in PR B (#24), proven at checkpoint B |
 | Monthly manual check: `mise.toml` tool versions with `scripts/ci-tools.sha256`, and `scripts/ci-requirements.txt` (not covered by Dependabot) | ADR 0007 B | Ongoing |
 | Turn on "require review from code owners" when a second maintainer joins | ADR 0007 Q6 | Later |
 | Workflow self-tests on a YAML loader instead of `sed` ranges | ADR 0007 verify | Phase 7, before more workflows |
-| Dependabot `ignore` for Python minor and major base-image bumps (#22 jumped 3.13 to 3.15); close #22 | ADR 0007 checkpoint A10 | Phase 6 PR B |
+| harden-runner policy: refuse any expression mentioning `secrets` in audit jobs' endpoints, and `env` values built from secrets (N1, Low) | ADR 0007 PR B verify round 2 | When the policy is next touched |
+| Residual risks: `deploy` keeps Docker (root through the docker group) in block mode; a PR author with push access can change the plan job's egress before review | ADR 0007 PR B verify H1, M1 | Accepted |
+| A PR plan against a live stack exercises the extra AWS hosts on `plan` (checkpoint B planned an empty stack) | ADR 0007 hand-back | First infra PR while the stack is up |
+| Dependabot `ignore` for Python minor and major base-image bumps (#22 jumped 3.13 to 3.15); close #22 | ADR 0007 checkpoint A10 | Built in PR B (S46); Dependabot logged the ignore and closed #22 |
 | Confirm Insights > Dependency graph > Dependabot shows no ecosystem error (Terraform 1.17, R17; pre-commit `# frozen:`, Q4) | ADR 0007 checkpoint A10 | User check, before PR B merges |
-| Optional: EventBridge input transformer so the alert email is one readable line instead of raw JSON | ADR 0007 checkpoint A5 | Phase 6 PR B (optional, one more bootstrap apply) |
+| Optional: EventBridge input transformer so the alert email is one readable line instead of raw JSON | ADR 0007 checkpoint A5 | Declined for PR B (user, 2026-10-27); optional later |
 | Refused STS probes in other regions are not alerted (the region pin makes them harmless) | ADR 0007 verify M1 | Accepted |

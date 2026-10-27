@@ -513,6 +513,19 @@ Decisions taken at the checkpoint (same delegation as the decision log):
 | The alert email is raw JSON | **Optional in PR B**: an EventBridge input transformer that sends one line (event, role, `sub`, error) | Readable at a glance | One more bootstrap apply; the raw event is still in CloudTrail |
 | No Dependabot PR for actions, Terraform or pre-commit | **Accept**; the user checks the Dependabot tab for ecosystem errors before PR B merges | Pins were already current | Q4 and R17 stay unproven until the first real update |
 
+## Checkpoint B results (2026-10-27)
+
+| Step | Result |
+|---|---|
+| 1 | PR #24: `plan`, `plan-role-guardrails` and `assume-plan-role` green in block mode. Nothing needed `api.github.com`; the OIDC token endpoint is implicit |
+| 2 | harden-runner wrote no job summary with telemetry off (`Error fetching job summary: TypeError: fetch failed` in the post step), so no account-bearing host reaches a summary (reviewer M2 closed) |
+| 3 | After the merge: apply 27 added in block mode. The first deploy started with the apply and stopped at Preflight ("the dev stack is not up", N4 as designed). After the secret value, the re-run deployed: artifact download (implicit, reviewer M1 closed), ECR push to the account registry, rollout green; `/version` = `87cd3c0` by digest `sha256:7ace86d1...`. Destroy 27 and revision 12 deregistered. No blocked host and no account ID in any log |
+| 4 | No host was blocked, so no allowlist change |
+| 5 | Dependabot logged "Ignored versions: semver-minor, semver-major" for `docker/library/python` and closed #22. That run failed on an ECR Public 429 (anonymous quota), not on the config |
+
+Not observed: which of the `deploy` hosts the ECR layer upload used (no blocked host, telemetry off). The list
+stays as built; a later block names any missing one.
+
 ## Checkpoint B (after PR B)
 
 1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The `plan`, `plan-role-guardrails` and both oidc-smoke-test jobs are green in block mode. This proves the token endpoint is implicit and that nothing needs `api.github.com`.
