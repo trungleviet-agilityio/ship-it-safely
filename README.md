@@ -150,7 +150,12 @@ Gates outside the trust policy:
 | [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist and the CI helper self-tests. It must never be listed in the bootstrap `workflow_files` |
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file or its scripts; `workflow_dispatch` | Diagnostic and negative tests. On a PR: the token is refused by the apply and deploy roles (N8), a 3601 s session on the plan role is refused and a 900 s one shows its expiry (N9), then the plan role is assumed. On dispatch: every role refuses the non-PR token (N1). Each refusal also sends a security alert email, by design |
 
-Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA, and
+Every job starts with `step-security/harden-runner`. The seven jobs that assume an AWS role run it in `block` mode
+with telemetry off and an exact `allowed-endpoints` list (hosts that hold the account ID are built from
+`secrets.AWS_ACCOUNT_ID_DEV`, never written out); every other job runs `audit`. The repo-guard check
+`scripts/check-harden-runner.sh` fails a PR that breaks this shape. If a block-mode job fails on a blocked host,
+the job log names it: add it to that job's list (or set that job to `audit` while you look). Terraform runs with
+`CHECKPOINT_DISABLE=1`. Every action is pinned to a commit SHA, and
 tools (Terraform, tflint, Trivy, hadolint) are checksum-verified binaries. Fork and Dependabot PRs get no OIDC
 token, so the jobs that assume a role skip them.
 
@@ -158,11 +163,14 @@ token, so the jobs that assume a role skip them.
 
 [`.github/dependabot.yml`](.github/dependabot.yml) opens one grouped PR a month per ecosystem (GitHub Actions,
 the Docker base image, Terraform providers, pre-commit hooks), each after a 7-day cooldown; security updates come
-at once. Two rules when you handle them:
+at once. Three rules when you handle them:
 
 - **Terraform PRs get no plan** (Dependabot has no secrets). Before merging one, re-open it from your own
   branch: `gh pr checkout <N>`, `git switch -c deps/terraform-<date>`, `git push -u origin HEAD`, open a PR,
   read its plan comment, merge it, and close the Dependabot PR.
+- **The Python base image only gets digest and patch updates** (`ignore` on minor and major for
+  `docker/library/python`). Moving to a new Python is a planned change across `mise.toml`, `pyproject.toml` and
+  `app/Dockerfile`.
 - **Merging an actions PR touches every workflow**, so the `terraform-iac` apply and `app-deploy` start. If the
   stack is down, **reject** the pending apply: approving it re-creates the stack.
 

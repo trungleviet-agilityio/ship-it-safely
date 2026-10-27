@@ -188,6 +188,16 @@ open. harden-runner stays at v2.22.2, the latest release (checked 2026-10-27).
 | S46 | **Dependabot python ignore:** in the `docker` entry, `ignore` `dependency-name: "*python*"` (matched to the name Dependabot reports, checked by the agent) with `update-types: ["version-update:semver-minor", "version-update:semver-major"]`. Digest and patch updates of 3.13 still arrive. The user closes #22 after merge | Security rebuilds stay automatic; a runtime change stays a planned change | Moving to a new Python is manual |
 | S47 | **Rollout:** PR B's own checks prove the plan and smoke-test lists in block mode before merge. Apply, deploy and destroy are proven at checkpoint B on an empty stack. Rollback for one job is `egress-policy: audit` on that job, then add the host the log names | The risky lists are tested where a failure costs nothing | A blocked host mid-apply leaves a partial dev stack; `terraform-destroy` cleans it |
 
+Build hand-back questions, decided by the orchestrator:
+
+| Question | Decision | Pro | Con |
+|---|---|---|---|
+| `plan` gets the apply service endpoints, not only the A6 list (A6 ran on a destroyed stack, so refresh called nothing) | **Keep** | A PR plan against a live stack refreshes every resource and would fail otherwise | Seven hosts A6 did not observe |
+| Artifact download (`deploy`) and the OIDC token endpoint are not listed (runner endpoints are implicit in the community tier) | **Keep, prove it**: the PR's smoke-test job proves the token endpoint; checkpoint B proves the download | No guessed blob-storage host | Only a third-party write-up says results storage is implicit; if deploy blocks, add the host the log names |
+| ECR layer host `prod-<region>-starport-layer-bucket.s3.<region>.amazonaws.com` on `deploy` | **Keep**; checkpoint B shows whether push uses it | AWS documents the bucket; a fixed AWS-owned bucket, not a wildcard | Possibly one unused host |
+| `api.github.com` only on the jobs where A6 saw it | **Keep** | Lists follow evidence | Unknown caller; a blocked call shows in the log |
+| The YAML loader moved to `scripts/workflow_yaml.py`, shared by the trigger and harden-runner helpers through `run_workflow_helper` | **Keep** | One loader and one wrapper path (no duplication) | Small refactor of a PR A file |
+
 ### Least privilege summary
 
 | Item | Value | Wildcards |
