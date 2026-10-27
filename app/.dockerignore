@@ -5,4 +5,4 @@
 *.pyc
 .git
 Dockerfile
-docker-compose.yml
+compose.yaml
