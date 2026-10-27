@@ -5,6 +5,9 @@
 # revisions. Bootstrap is never destroyed here (ADR 0006, G17).
 # The file path is part of the apply role trust (ADR 0007 S2): the bootstrap `workflow_files.apply` must list
 # terraform-destroy.yml.
+# Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
+# Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
+# name in the log, add it here (the repo-guard workflow enforces the shape).
 name: terraform-destroy
 
 on:
@@ -26,6 +29,8 @@ permissions: {}
 env:
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
+  # No HashiCorp version check call: checkpoint-api.hashicorp.com is not in the allowlists (ADR 0007 S44).
+  CHECKPOINT_DISABLE: "1"
 
 jobs:
   confirm:
@@ -94,7 +99,23 @@ jobs:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            releases.hashicorp.com:443
+            registry.terraform.io:443
+            sts.${{ vars.AWS_REGION }}.amazonaws.com:443
+            sis-${{ env.ENV }}-tfstate-${{ secrets.AWS_ACCOUNT_ID_DEV }}-${{ vars.AWS_REGION }}-an.s3.${{ vars.AWS_REGION }}.amazonaws.com:443
+            ec2.${{ vars.AWS_REGION }}.amazonaws.com:443
+            elasticloadbalancing.${{ vars.AWS_REGION }}.amazonaws.com:443
+            ecs.${{ vars.AWS_REGION }}.amazonaws.com:443
+            api.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
+            logs.${{ vars.AWS_REGION }}.amazonaws.com:443
+            secretsmanager.${{ vars.AWS_REGION }}.amazonaws.com:443
+            iam.amazonaws.com:443
 
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

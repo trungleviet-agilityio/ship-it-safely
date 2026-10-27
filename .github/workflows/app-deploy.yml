@@ -6,6 +6,9 @@
 # Two jobs, because `id-token` and `environment` apply to every step of a job: `build-scan` runs the build, the
 # smoke test and the scan with no token, no environment and no secret (F9); `deploy` loads exactly the bytes that
 # job produced (sha256 checked) and is the only job that can assume the deploy role.
+# Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
+# Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
+# name in the log, add it here (the repo-guard workflow enforces the shape).
 name: app-deploy
 
 on:
@@ -108,7 +111,16 @@ jobs:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443
+            sts.${{ vars.AWS_REGION }}.amazonaws.com:443
+            api.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
+            ${{ secrets.AWS_ACCOUNT_ID_DEV }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
+            prod-${{ vars.AWS_REGION }}-starport-layer-bucket.s3.${{ vars.AWS_REGION }}.amazonaws.com:443
+            ecs.${{ vars.AWS_REGION }}.amazonaws.com:443
+            secretsmanager.${{ vars.AWS_REGION }}.amazonaws.com:443
 
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
