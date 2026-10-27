@@ -62,6 +62,11 @@ for dir in "${dirs[@]}"; do
     failed+=("$name (init)")
     continue
   fi
+  # What init resolved, not what the text says: remote modules and non-hashicorp providers fail here (ADR 0007).
+  if ! "$ROOT/scripts/tf-resolved-sources.sh" "$dir" "$data_dir"; then
+    failed+=("$name (resolved sources)")
+    continue
+  fi
   if ! terraform -chdir="$dir" validate -no-color >/dev/null; then
     failed+=("$name (validate)")
     continue
