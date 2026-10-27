@@ -515,9 +515,11 @@ Decisions taken at the checkpoint (same delegation as the decision log):
 
 ## Checkpoint B (after PR B)
 
-1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The plan and oidc-smoke-test jobs are green in block mode.
-2. Next session: approve the apply, deploy and destroy runs as in A7 steps 1 to 6. All green.
-3. The jobs show no new insights. If one fails with a blocked host, report the host from the job log.
+1. `gh pr checks <PR_B> --repo trungleviet-agilityio/ship-it-safely --watch`. The `plan`, `plan-role-guardrails` and both oidc-smoke-test jobs are green in block mode. This proves the token endpoint is implicit and that nothing needs `api.github.com`.
+2. On the PR's `plan` run, open the Job summary and search for `tfstate-` and `.dkr.ecr.` (reviewer M2): report whether harden-runner's summary shows an account-bearing host.
+3. Merge. Then approve the apply, set the secret, deploy and destroy as in A7 steps 1 to 6. All green. On the `deploy` log, copy the harden-runner lines that name implicit or blocked hosts (artifact download, ECR layer upload; security L3).
+4. A blocked host fails a job with the host in the log: report it, and the fix is a short PR that adds it.
+5. Close Dependabot #22 (the ignore now keeps Python on 3.13); the next monthly run must not reopen it.
 
 ## Sources
 
