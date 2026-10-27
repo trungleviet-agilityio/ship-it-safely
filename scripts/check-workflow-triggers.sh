@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Trigger allowlist for the workflow that assumes the apply role (ADR 0004, PR 1 verify finding L1).
+# Trigger allowlist for the workflow that assumes the apply role (ADR 0004, PR 1 verify finding L1; ADR 0007 S34).
 # The apply trust cannot tell `push` from `pull_request_target`, `issue_comment` or `workflow_run` on main,
 # so the repo refuses those triggers where they would be written. zizmor's dangerous-triggers audit is the
-# second layer. Reads the top-level `on:` block of a workflow; supports block, flow ([a, b]) and scalar forms.
+# second layer. The parsing is real YAML (scripts/workflow_triggers.py, PyYAML from the hash-locked venv): block,
+# flow, scalar, quoted and explicit-key forms all read the same way GitHub reads them.
 #
-# The role trust pins the workflow `name:`, so any workflow file can matter, path-filtered or not. With no
+# The role trust pins the workflow file path, so any workflow file can matter, path-filtered or not. With no
 # arguments every .github/workflows/*.yml and *.yaml is scanned.
 #
 # Usage: scripts/check-workflow-triggers.sh [workflow file ...]
+# Env:   CI_PYTHON  interpreter with PyYAML (default: .venv-ci/bin/python from `make venv`, else python3)
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
-
-allowed="pull_request push workflow_dispatch"
 
 files=()
 if [ $# -gt 0 ]; then
@@ -24,41 +24,24 @@ else
   [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
 fi
 
-bad=()
-for f in "${files[@]}"; do
-  [ -f "$f" ] || die "workflow not found: $f"
-  # shellcheck disable=SC2016  # awk program, not shell
-  triggers="$(awk '
-    /^(on|"on"|'\''on'\''):/ {
-      inon = 1
-      rest = $0
-      sub(/^[^:]*:[[:space:]]*/, "", rest)
-      sub(/[[:space:]]*#.*$/, "", rest)
-      gsub(/[][{},:"'\'']/, " ", rest)
-      n = split(rest, parts, /[[:space:]]+/)
-      for (i = 1; i <= n; i++) if (parts[i] != "") print parts[i]
-      next
-    }
-    inon && /^[^[:space:]#]/ { inon = 0 }
-    inon && /^[[:space:]]*#/ { next }
-    inon && /^[[:space:]]+["'\'']?[A-Za-z_]+["'\'']?[[:space:]]*:/ {
-      match($0, /^[[:space:]]+/)
-      indent = RLENGTH
-      if (child == 0) child = indent
-      if (indent == child) { key = $1; sub(/:.*/, "", key); gsub(/["'\'']/, "", key); print key }
-    }
-  ' "$f")"
-  [ -n "$triggers" ] || { bad+=("${f#"$ROOT"/}: no triggers found under on:"); continue; }
-  while IFS= read -r t; do
-    case " $allowed " in
-      *" $t "*) ;;
-      *) bad+=("${f#"$ROOT"/}: trigger '$t' is not allowed (allowed: $allowed)") ;;
-    esac
-  done <<<"$triggers"
-done
-
-if [ ${#bad[@]} -gt 0 ]; then
-  for b in "${bad[@]}"; do printf '  - %s\n' "$b" >&2; done
-  die "${#bad[@]} workflow trigger violation(s)"
+py="${CI_PYTHON:-}"
+if [ -z "$py" ]; then
+  if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
 fi
-ok "workflow triggers are within the allowlist: $allowed"
+"$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
+
+rc=0
+out="$("$py" -I "$ROOT/scripts/workflow_triggers.py" "${files[@]}")" || rc=$?
+case "$rc" in
+  0) ;;
+  1)
+    count=0
+    while IFS= read -r line; do
+      printf '  - %s\n' "${line#"$ROOT"/}" >&2
+      count=$((count + 1))
+    done <<<"$out"
+    die "${count} workflow trigger violation(s)"
+    ;;
+  *) die "workflow_triggers.py failed (exit code $rc)" ;;
+esac
+ok "workflow triggers are within the allowlist: pull_request push workflow_dispatch"

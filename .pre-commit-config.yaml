@@ -47,9 +47,9 @@ repos:
     rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
     hooks:
       - id: ruff-check
-        files: ^app/
+        files: ^(app/|scripts/.*\.py$)
       - id: ruff-format
-        files: ^app/
+        files: ^(app/|scripts/.*\.py$)
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: 2834ec6639549dd6796205c8f011dedcd587288b # frozen: v2.4.0

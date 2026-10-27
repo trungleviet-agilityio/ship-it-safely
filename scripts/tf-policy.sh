@@ -130,12 +130,48 @@ report 6 "provider or backend block under modules/ (modules take them from the r
 
 # (9) No code execution outside the providers (ADR 0006, I1): a provisioner or the external data source runs commands
 # on the runner during plan or apply, with the CI role credentials in the environment.
+# The labels may be quoted or bare (HCL accepts both), so neither form slips past.
 for dir in "$root/modules" "$root/envs"; do
   report 9 "provisioner blocks are forbidden under modules/ and envs/ (they run commands on the CI runner)" \
-    "$(scan '^[[:space:]]*provisioner[[:space:]]+"' "$dir")"
+    "$(scan '^[[:space:]]*provisioner([[:space:]]|")' "$dir")"
   report 9 "data \"external\" is forbidden under modules/ and envs/ (it runs a program on the CI runner)" \
-    "$(scan '^[[:space:]]*data[[:space:]]+"external"' "$dir")"
+    "$(scan '^[[:space:]]*data[[:space:]]+"?external"?[[:space:]{]' "$dir")"
 done
+
+# (10) No *.tf.json: the line based rules above read only *.tf, so a JSON twin of a file would bypass all of them
+# (ADR 0007 S11).
+tf_json="$(find "$root" -name '*.tf.json' -not -path '*/.terraform/*' 2>/dev/null | sort || true)"
+report 10 "*.tf.json is forbidden under infra/terraform (the policy rules read only *.tf)" "$tf_json"
+
+# (11) Module sources under envs/ and modules/ are local paths: a registry or git source would run unreviewed code
+# with the CI role credentials. awk follows each `module` block by brace depth (grep level, no HCL parser) and also
+# reads a `source` on the same line as the block opener.
+src_out=""
+for dir in "$root/modules" "$root/envs"; do
+  [ -d "$dir" ] || continue
+  src_out="$src_out$(
+    # shellcheck disable=SC2016  # awk program, not shell
+    find "$dir" -name '*.tf' -not -path '*/.terraform/*' -print0 |
+      xargs -0 awk '
+        FNR == 1 { inmod = 0; depth = 0 }
+        /^[[:space:]]*(#|\/\/)/ { next }
+        !inmod && /^[[:space:]]*module[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{/ { inmod = 1; depth = 0 }
+        inmod {
+          if (match($0, /(^|[^A-Za-z0-9_])source[[:space:]]*=[[:space:]]*/)) {
+            rest = substr($0, RSTART + RLENGTH)
+            if (rest !~ /^"\.\.?\//) printf "%s:%d:%s\n", FILENAME, FNR, $0
+          }
+          line = $0
+          depth += gsub(/\{/, "{", line)
+          line = $0
+          depth -= gsub(/\}/, "}", line)
+          if (depth <= 0) inmod = 0
+        }
+      ' 2>/dev/null || true
+  )"$'\n'
+done
+src_out="$(printf '%s' "$src_out" | grep -v '^$' || true)"
+report 11 "module source must be a local path (./ or ../) under modules/ and envs/" "$src_out"
 
 if [ ${#failures[@]} -gt 0 ]; then
   for f in "${failures[@]}"; do printf '  - %s\n' "$f" >&2; done
