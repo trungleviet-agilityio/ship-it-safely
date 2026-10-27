@@ -14,7 +14,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 2 OIDC smoke test | ✅ | 0003 | #9 | PR run assumed `sis-dev-gha-plan`; N1 (`workflow_dispatch` on main) refused with `AccessDenied`, both seen in CloudTrail |
 | 3 Infra pipeline + ECS | ✅ | 0004 | #10, #11, #13 | PR plan comment, approved apply (27 resources), `/health` 200 `ok`; plan role: `explicitDeny` on `GetSecretValue`, `implicitDeny` on creates |
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
-| 5 Hardening & teardown | ⏳ | 0006 | #19 | Built and verified (2 fix rounds, `make check` green); checkpoint pending: bootstrap re-apply (`DescribeSecret`), N5 to N7, destroy through `terraform-destroy` |
+| 5 Hardening & teardown | ✅ | 0006 | #19 | Bootstrap re-applied (deploy role `DescribeSecret` allowed, `GetSecretValue` explicitDeny); stack re-created; N5 deploy refused at Preflight before the secret had a value, then green with `/version` on the `main` SHA by digest; `terraform-destroy` removed 27 resources and deregistered revisions 4, 5, 6, 8 with no account ID in logs; N6 wrong phrase failed with no approval prompt; N7 "nothing to destroy" |
 | 6 Supply-chain hardening | 🟡 | | | Done early: SHA pins, checksum-verified tools, harden-runner (audit) in every job, gitleaks pre-commit and push protection, multi-platform lock files. Left: Dependabot (NFR-5), harden-runner `block` with an allowlist, Q1 exposure check |
 | 7 Stretch: prod account | ⏸ | | | Needs AWS Organizations and a prod account (user). Deploy scripts are already parameterized by `ENV` |
 
@@ -23,7 +23,7 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | Stack | State | Cost |
 |---|---|---|
 | Bootstrap (state bucket, OIDC provider, plan/apply/deploy roles, guardrails, ECS boundary, budget) | Live | Close to zero |
-| `envs/dev` (VPC, ALB, ECS, ECR, logs, secret shell, ECS roles) | **Destroyed** (2026-10-26) | Hourly when up (ALB + Fargate) |
+| `envs/dev` (VPC, ALB, ECS, ECR, logs, secret shell, ECS roles) | **Destroyed** (2026-10-26, by `terraform-destroy`) | Hourly when up (ALB + Fargate) |
 
 Re-create order for a session: Run workflow on `terraform-iac` and approve, set the secret value (one line, your
 own terminal), Run workflow on `app-deploy` and approve. Tear down at the end of the session.
@@ -43,7 +43,7 @@ harden-runner `block` (Phase 6) and the prod account with `BLUE_GREEN` (Phase 7)
 | Item | From | Target |
 |---|---|---|
 | Pin `job_workflow_ref` instead of the workflow `name:` in deploy/apply trust (reusable workflows) | ADR 0005 L2 | Phase 6 |
-| harden-runner insights may show hostnames with the account ID (Q1) | ADR 0005 Q1 | Phase 6 check |
+| harden-runner insights may show hostnames with the account ID (Q1; ADR 0006 step 10 not run) | ADR 0005 Q1 | Phase 6 check |
 | YAML-parser trigger allowlist (multi-line flow lists, explicit keys) | ADR 0004 L-a | Phase 6 (moved by ADR 0006) |
 | Wire `TF_VAR_alb_ingress_cidrs` from a secret to narrow the ALB | ADR 0004 L4 | Phase 6 (moved by ADR 0006) |
 | Deploy preflight: check the secret has an `AWSCURRENT` version (needs `DescribeSecret` in bootstrap) | Phase 4 run 3 | Built in Phase 5 (G14); proven live by N5 at the checkpoint |
@@ -54,3 +54,5 @@ harden-runner `block` (Phase 6) and the prod account with `BLUE_GREEN` (Phase 7)
 | Negative test: a PR job cannot assume the apply or deploy role (AccessDenied); demo that credentials expire after 1 hour | Hands-on notes, talk demo | Phase 6 checkpoint |
 | `tf-policy.sh` rule 9 misses unquoted labels, `*.tf.json` and remote module sources | ADR 0006 security re-check | Phase 6 |
 | Destroy summary says "Destroyed" in its heading even when the apply failed | ADR 0006 security re-check | Phase 6 |
+| `terraform-destroy.yml` comment says the typed phrase is never echoed, but GitHub prints the step `env:` block | Phase 5 checkpoint | Phase 6 |
+| Optional: delete the `INACTIVE` task definitions (`DeleteTaskDefinitions`) so they stop showing in the Tagging API | Phase 5 checkpoint | Phase 6 (optional) |

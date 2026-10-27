@@ -208,8 +208,9 @@ End of the lab (PLAN §9), in this order:
    1. Move the state back to local: write a `backend_override.tf` containing `terraform { backend "local" {} }`,
       run `terraform init -migrate-state -force-copy`, and check `terraform state list`.
    2. Before emptying anything, check that nothing is left: `terraform -chdir=infra/terraform/envs/dev state list`
-      prints nothing (after an `init` with the backend config), and the Resource Groups Tagging API shows only
-      bootstrap resources for `Project=ship-it-safely` (ADR 0006 checkpoint step 8). Then empty the state bucket
+      prints nothing (after an `init` with the backend config), and the per-service checks of ADR 0006 checkpoint
+      step 8 find no cluster, ALB, VPC, ECR repository or secret (the Tagging API lags behind deletes, so do not
+      rely on it). Then empty the state bucket
       `sis-dev-tfstate-<DEV_ACCOUNT_ID>-ap-southeast-1-an`, including every object version and delete marker (the
       bucket has `force_destroy = false`): list them with `aws s3api list-object-versions` and remove them with
       `aws s3api delete-objects`, at most 1000 keys per call. Double-check the bucket name: deleted versions
