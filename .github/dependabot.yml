@@ -1,7 +1,7 @@
 # Version updates (NFR-5, ADR 0007 S5). One monthly PR per ecosystem, with a cooldown so a bad release can be pulled
 # before it is proposed (security updates ignore the cooldown). Commit titles read `<prefix>(deps): ...`.
 # Not covered, so they get a monthly manual check (PROGRESS): the tool versions in mise.toml with
-# scripts/ci-tools.sha256, and scripts/ci-requirements.txt (a uv-compiled, hash-locked file; no `pip` entry on purpose).
+# scripts/ci/tools.sha256, and scripts/ci/requirements.txt (a uv-compiled, hash-locked file; no `pip` entry on purpose).
 # Terraform PRs from the bot get no plan (no secrets for Dependabot). Re-open one from a maintainer branch before
 # merging it, so the plan role runs.
 version: 2
@@ -21,7 +21,7 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The one `FROM ... AS base` line in app/Dockerfile (build-image.sh swaps its registry with a build context).
+  # The one `FROM ... AS base` line in app/Dockerfile (image/build.sh swaps its registry with a build context).
   # Python stays on 3.13: only digest and patch updates arrive (ADR 0007 S46).
   - package-ecosystem: docker
     directory: /app

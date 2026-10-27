@@ -38,7 +38,7 @@ jobs:
       # local hooks.
       - name: Install pre-commit and PyYAML (hash locked)
         run: |
-          scripts/ci-venv.sh "$RUNNER_TEMP/venv"
+          scripts/ci/venv.sh "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Workflow security audit (zizmor)
@@ -51,10 +51,10 @@ jobs:
         run: pre-commit run gitleaks --all-files --show-diff-on-failure
 
       - name: Workflow trigger allowlist (every workflow file)
-        run: scripts/check-workflow-triggers.sh
+        run: scripts/guard/workflow-triggers.sh
 
       - name: Harden-runner policy (block where credentials live, audit elsewhere)
-        run: scripts/check-harden-runner.sh
+        run: scripts/guard/harden-runner.sh
 
       - name: CI helper self-tests
-        run: scripts/ci-selftest.sh
+        run: scripts/ci/selftest.sh

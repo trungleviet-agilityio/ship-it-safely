@@ -53,7 +53,7 @@ module "app_ecs" {
   (`alb_http[0]`, ...) and their descriptions hold no CIDR, so neither plan output nor state keys reveal it
   (ADR 0007 S35).
 
-Offline checks: `make tf-check` runs `terraform test` with a mocked provider, plus the `tf-policy.sh` rules.
+Offline checks: `make tf-check` runs `terraform test` with a mocked provider, plus the `tf/policy.sh` rules.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

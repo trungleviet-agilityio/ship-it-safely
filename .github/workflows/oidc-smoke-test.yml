@@ -12,9 +12,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/oidc-smoke-test.yml
-      - scripts/assert-session-cap.sh
-      - scripts/assert-web-identity-denied.sh
-      - scripts/check-aws-config.sh
+      - scripts/aws/assert-session-cap.sh
+      - scripts/aws/assert-web-identity-denied.sh
+      - scripts/aws/check-config.sh
       - scripts/lib.sh
   # Runs only the negative job: a non-PR token must be refused by every role (N1).
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-plan
+        run: scripts/aws/check-config.sh sis-dev-gha-plan
 
       # N8: a pull_request token is refused by the apply and deploy roles (their sub is the dev environment).
       - name: Apply and deploy roles refuse a pull request token (N8)
@@ -68,7 +68,7 @@ jobs:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
           ENV: dev
-        run: scripts/assert-web-identity-denied.sh apply deploy
+        run: scripts/aws/assert-web-identity-denied.sh apply deploy
 
       # N9: the plan role caps a session at 3600 seconds, and a short session reports when it ends.
       - name: Plan role caps the session at one hour (N9)
@@ -76,7 +76,7 @@ jobs:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
           ENV: dev
-        run: scripts/assert-session-cap.sh plan
+        run: scripts/aws/assert-session-cap.sh plan
 
       - name: Assume the plan role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -142,7 +142,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/check-aws-config.sh sis-dev-gha-plan
+        run: scripts/aws/check-config.sh sis-dev-gha-plan
 
       # A script that calls STS directly, not configure-aws-credentials: that action fails on network, token or ARN
       # errors too, so "any failure" would pass. Here only an explicit AccessDenied passes. The workflow_dispatch
@@ -152,4 +152,4 @@ jobs:
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
           ENV: dev
-        run: scripts/assert-web-identity-denied.sh plan apply deploy
+        run: scripts/aws/assert-web-identity-denied.sh plan apply deploy

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Self-tests of the CI helper scripts: workflow trigger allowlist and the structure of the workflow files.
-# Run by scripts/ci-selftest.sh; also runnable alone. A bad fixture must fail with its message.
+# Run by scripts/ci/selftest.sh; also runnable alone. A bad fixture must fail with its message.
 
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
 
-# --- check-workflow-triggers.sh
+# --- guard/workflow-triggers.sh
 # case_check <check script> <label> <expected> <file>: run the check on the file and require either a pass (expected
 # "ok") or a failure whose message holds the expected text.
 case_check() {
@@ -18,7 +18,7 @@ case_check() {
 # case_trigger <label> <expected> <yaml>: write the workflow (printf %b escapes) and check its triggers.
 case_trigger() {
   printf '%b' "$3" >"$tmp/y.yml"
-  case_check check-workflow-triggers.sh "$1" "$2" "$tmp/y.yml"
+  case_check guard/workflow-triggers.sh "$1" "$2" "$tmp/y.yml"
 }
 good_on='name: good\non:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n'
 case_trigger "a good workflow" ok "$good_on"
@@ -46,24 +46,25 @@ case_trigger "push and dispatch" ok 'name: ok\non:\n  push:\n    branches: [main
 printf '#!/bin/sh\nexit 1\n' >"$tmp/nopy"
 chmod +x "$tmp/nopy"
 printf '%b' "$good_on" >"$tmp/good.yml"
-expect_fail "missing pyyaml" "run make venv" env CI_PYTHON="$tmp/nopy" "$ROOT/scripts/check-workflow-triggers.sh" "$tmp/good.yml"
+expect_fail "missing pyyaml" "run make venv" env CI_PYTHON="$tmp/nopy" "$ROOT/scripts/guard/workflow-triggers.sh" "$tmp/good.yml"
 ok "trigger check reads YAML semantics, not lines"
 
 # No arguments: every file under .github/workflows is scanned, including .yaml and path-filtered ones.
-mkdir -p "$tmp/repo/.github/workflows" "$tmp/repo/scripts"
-cp "$ROOT/scripts/check-workflow-triggers.sh" "$ROOT/scripts/workflow_triggers.py" "$ROOT/scripts/workflow_yaml.py" "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
+mkdir -p "$tmp/repo/.github/workflows" "$tmp/repo/scripts/guard"
+cp "$ROOT/scripts/guard/workflow-triggers.sh" "$ROOT/scripts/guard/workflow_triggers.py" "$ROOT/scripts/guard/workflow_yaml.py" "$tmp/repo/scripts/guard/"
+cp "$ROOT/scripts/lib.sh" "$tmp/repo/scripts/"
 cp "$tmp/good.yml" "$tmp/repo/.github/workflows/a.yml"
 # The copy has its own ROOT, so it cannot find the repo's .venv-ci: hand it the interpreter the real run uses.
 ci_python="${CI_PYTHON:-$ROOT/.venv-ci/bin/python}"
 [ -x "$ci_python" ] || ci_python=python3
-scan_tree() { env CI_PYTHON="$ci_python" "$tmp/repo/scripts/check-workflow-triggers.sh"; }
+scan_tree() { env CI_PYTHON="$ci_python" "$tmp/repo/scripts/guard/workflow-triggers.sh"; }
 scan_tree >/dev/null 2>&1 || die "selftest: default scan rejected a good tree"
 printf 'name: sneaky\non:\n  pull_request_target:\njobs: {}\n' >"$tmp/repo/.github/workflows/b.yaml"
 expect_fail "default scan of a .yaml file" "b.yaml" scan_tree
 
 # --- workflows: path filters list every script the pipeline runs, and build-scan holds no deploy credentials
 # check_paths <workflow>: every scripts/*.sh the workflow reaches (directly or through other scripts) is a path filter.
-script_refs() { { grep -Eo 'scripts/[a-z0-9-]+\.sh([^a-z0-9]|$)' "$1" || true; } | sed -E 's/[^a-z0-9]$//' | sort -u; }
+script_refs() { { grep -Eo 'scripts/[a-z0-9/_-]+\.sh([^a-z0-9]|$)' "$1" || true; } | sed -E 's/[^a-z0-9]$//' | sort -u; }
 check_paths() {
   local wf="$1" seen="" queue next s
   queue="$(script_refs "$wf")"
@@ -182,8 +183,8 @@ tf_cap() { grep -A3 "variable = \"ecs:$1\"" "$ROOT/infra/terraform/bootstrap/iam
 # One account-ID check and one role-name helper in the summaries of the three pipelines (the OIDC smoke test checks the
 # exact ARN on purpose and is left out): no inline 12-digit pattern, no inline assumed-role ARN parse.
 summary_wfs=("$iac_wf" "$destroy_wf" "$deploy_wf")
-! grep -En '\[0-9\]\{12\}' "${summary_wfs[@]}" || die "selftest: a workflow holds its own 12-digit pattern; use scripts/assert-no-account-id.sh"
-! grep -n 'assumed-role/' "${summary_wfs[@]}" || die "selftest: a workflow parses the assumed-role ARN; use scripts/assumed-role-name.sh"
+! grep -En '\[0-9\]\{12\}' "${summary_wfs[@]}" || die "selftest: a workflow holds its own 12-digit pattern; use scripts/aws/assert-no-account-id.sh"
+! grep -n 'assumed-role/' "${summary_wfs[@]}" || die "selftest: a workflow parses the assumed-role ARN; use scripts/names.sh role"
 ok "workflow path filters, build-scan isolation, cap parity and one account-ID check"
 
 # The comment job holds the only write token, so its checkout must be the trusted base commit and never the PR head.
@@ -234,9 +235,9 @@ awk '!done && /uses:.*@[0-9a-f]{40} # v/ { sub(/@[0-9a-f]{40}/, "@00000000000000
 ! pins_ok "$deploy_wf" "$tmp/wf-other-sha.yml" 2>/dev/null || die "selftest: the pin check missed two SHAs for one action"
 ok "every action is pinned to one SHA with a version comment"
 
-"$ROOT/scripts/check-workflow-triggers.sh"
+"$ROOT/scripts/guard/workflow-triggers.sh"
 
-# --- check-harden-runner.sh (ADR 0007 S45)
+# --- guard/harden-runner.sh (ADR 0007 S45)
 # write_hardening <file> <job id> <permissions line> <with: lines> [job line] [step line]: a one-job workflow whose
 # first step is harden-runner. The with, job and step lines are printf %b text and start with their indent.
 write_hardening() {
@@ -246,7 +247,7 @@ write_hardening() {
 # case_hardening <label> <expected> <permissions line> <with: lines> [job line] [step line]
 case_hardening() {
   write_hardening "$tmp/h.yml" j "$3" "$4" "${5:-}" "${6:-}"
-  case_check check-harden-runner.sh "$1" "$2" "$tmp/h.yml"
+  case_check guard/harden-runner.sh "$1" "$2" "$tmp/h.yml"
 }
 cred="id-token: write"
 audit_with='          egress-policy: audit\n'
@@ -288,21 +289,21 @@ case_hardening "credential-free job with container" ok "contents: read" "$audit_
 # The one named exception: app-deploy.yml deploy needs docker, so it may leave containers on; any other job may not.
 mkdir -p "$tmp/exc"
 write_hardening "$tmp/exc/app-deploy.yml" deploy "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
-case_check check-harden-runner.sh "app-deploy deploy without disable-sudo-and-containers" ok "$tmp/exc/app-deploy.yml"
+case_check guard/harden-runner.sh "app-deploy deploy without disable-sudo-and-containers" ok "$tmp/exc/app-deploy.yml"
 write_hardening "$tmp/exc/app-deploy.yml" other "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
-case_check check-harden-runner.sh "another app-deploy job without it" "disable-sudo-and-containers must be true" "$tmp/exc/app-deploy.yml"
+case_check guard/harden-runner.sh "another app-deploy job without it" "disable-sudo-and-containers must be true" "$tmp/exc/app-deploy.yml"
 write_hardening "$tmp/exc/other.yml" deploy "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
-case_check check-harden-runner.sh "deploy in another file without it" "disable-sudo-and-containers must be true" "$tmp/exc/other.yml"
+case_check guard/harden-runner.sh "deploy in another file without it" "disable-sudo-and-containers must be true" "$tmp/exc/other.yml"
 # A job without credentials in audit may list nothing; a missing harden-runner first step fails.
 printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n' >"$tmp/h.yml"
-expect_fail "job with no harden-runner first step" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+expect_fail "job with no harden-runner first step" "first step is not step-security/harden-runner" "$ROOT/scripts/guard/harden-runner.sh" "$tmp/h.yml"
 printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
-expect_fail "harden-runner not first" "first step is not step-security/harden-runner" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+expect_fail "harden-runner not first" "first step is not step-security/harden-runner" "$ROOT/scripts/guard/harden-runner.sh" "$tmp/h.yml"
 # A job inherits the workflow permissions: id-token at the top makes every job credentialed.
 printf 'name: x\non: push\npermissions:\n  id-token: write\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: step-security/harden-runner@%s # v2.22.2\n        with:\n          egress-policy: audit\n' "$commit" >"$tmp/h.yml"
-expect_fail "workflow-level id-token" "egress-policy must be block" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+expect_fail "workflow-level id-token" "egress-policy must be block" "$ROOT/scripts/guard/harden-runner.sh" "$tmp/h.yml"
 printf 'name: x\non: push\njobs: {\n' >"$tmp/h.yml"
-expect_fail "invalid YAML" "invalid YAML" "$ROOT/scripts/check-harden-runner.sh" "$tmp/h.yml"
+expect_fail "invalid YAML" "invalid YAML" "$ROOT/scripts/guard/harden-runner.sh" "$tmp/h.yml"
 ok "harden-runner policy reads YAML and enforces each rule"
 
-"$ROOT/scripts/check-harden-runner.sh"
+"$ROOT/scripts/guard/harden-runner.sh"

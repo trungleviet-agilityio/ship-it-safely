@@ -8,7 +8,7 @@ PYTHON ?= python3.13
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
 
 FULL_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo local)
-IMAGE := $(shell scripts/image-name.sh $(FULL_SHA))
+IMAGE := $(shell scripts/names.sh image $(FULL_SHA))
 
 .DEFAULT_GOAL := help
 .PHONY: help up down test image smoke scan verify venv lint tf-check docs check
@@ -29,21 +29,21 @@ test: ## App unit tests
 	cd app && $(PYTHON) -m unittest discover -s tests
 
 image: ## Build the app image the way CI does (single platform, tests run inside)
-	scripts/build-image.sh $(FULL_SHA) $(IMAGE)
+	scripts/image/build.sh $(FULL_SHA) $(IMAGE)
 
 smoke: ## Run the built image like Fargate and check it (run make image first)
-	scripts/app-smoke.sh $(IMAGE) $(FULL_SHA)
+	scripts/image/smoke.sh $(IMAGE) $(FULL_SHA)
 
 scan: ## Scan the built image with trivy; fixable HIGH or CRITICAL fails (run make image first)
-	scripts/scan-image.sh $(IMAGE) "$$(mktemp -d)"
+	scripts/image/scan.sh $(IMAGE) "$$(mktemp -d)"
 
 verify: ## Build, smoke test and scan in one go (what app-ci runs)
-	scripts/image-verify.sh $(FULL_SHA) "$$(mktemp -d)"
+	scripts/image/verify.sh $(FULL_SHA) "$$(mktemp -d)"
 
 # Built once and reused; rebuilt when the hash-locked requirements change. lint needs it for the YAML trigger check.
 # A stamp file, because the venv interpreter is a symlink that touch must not follow.
-.venv-ci/.installed: scripts/ci-requirements.txt
-	PYTHON=$(PYTHON) scripts/ci-venv.sh .venv-ci
+.venv-ci/.installed: scripts/ci/requirements.txt
+	PYTHON=$(PYTHON) scripts/ci/venv.sh .venv-ci
 	@touch $@
 
 venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
@@ -51,13 +51,13 @@ venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and t
 lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
-	shellcheck -x scripts/*.sh scripts/selftest/*.sh
-	scripts/ci-selftest.sh
+	shellcheck -x $$(find scripts -name '*.sh' | sort)
+	scripts/ci/selftest.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 
-tf-check: ## Offline Terraform policy rules (tf-policy.sh), README check, fmt, validate and test (no AWS)
-	scripts/tf-policy-selftest.sh
-	scripts/tf-check.sh
+tf-check: ## Offline Terraform policy rules (tf/policy.sh), README check, fmt, validate and test (no AWS)
+	scripts/tf/policy-selftest.sh
+	scripts/tf/check.sh
 
 docs: ## Regenerate terraform-docs tables in every Terraform README
 	pre-commit run terraform_docs --all-files
