@@ -147,8 +147,8 @@ Gates outside the trust policy:
   GitHub roles, guardrails, boundary or OIDC provider, no access to the bootstrap state.
 - **ECS role boundary:** any role the apply role creates is capped by `sis-dev-ecs-boundary`.
 - **Exact `iam:PassRole`:** only the two ECS roles, only to `ecs-tasks.amazonaws.com`.
-- **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch` (checked with a
-  real YAML parser).
+- **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch`, and only
+  `reusable-*.yml` files may use `workflow_call` (and nothing else); checked with a real YAML parser.
 - **Security alert:** a CloudTrail trail plus an EventBridge rule email you (SNS) about every refused
   `AssumeRoleWithWebIdentity` in ap-southeast-1 and any assumption with a `sub` other than the two trusted ones
   (ADR 0007 S8). The region pin means a success can only happen there; refused probes in other regions are not
@@ -164,10 +164,11 @@ Gates outside the trust policy:
 | [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev`) and `confirm`, which must be typed as `destroy-dev` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
 | [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
 | [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). The file path is in the deploy role trust: renaming the file needs a bootstrap re-apply |
-| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist and the CI helper self-tests. It must never be listed in the bootstrap `workflow_files` |
+| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist, the harden-runner policy, the environment parity guard and the CI helper self-tests. It must never be listed in the bootstrap `workflow_files` |
 | [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file or its scripts; `workflow_dispatch` | Diagnostic and negative tests. On a PR: the token is refused by the apply and deploy roles (N8), a 3601 s session on the plan role is refused and a 900 s one shows its expiry (N9), then the plan role is assumed. On dispatch: every role refuses the non-PR token (N1). Each refusal also sends a security alert email, by design |
 
-Every job starts with `step-security/harden-runner`. The seven jobs that assume an AWS role run it in `block` mode
+Every job with steps starts with `step-security/harden-runner` (a job that only calls a reusable workflow is
+checked through the callee's jobs). The seven jobs that assume an AWS role run it in `block` mode
 with telemetry off and an exact `allowed-endpoints` list (hosts that hold the account ID are built from
 `secrets.AWS_ACCOUNT_ID`, never written out), and all of them except `deploy` (which needs Docker) also
 disable sudo and containers, so code in the job cannot switch the firewall off; every other job runs `audit`. The repo-guard check
