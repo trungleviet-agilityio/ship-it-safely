@@ -17,14 +17,16 @@ resource "aws_security_group" "task" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
-  for_each = toset(var.alb_ingress_cidrs)
+  # Indexed, not keyed by CIDR, and no CIDR in the description: the list can come from a masked CI secret, and
+  # for_each keys and descriptions print in plan output (ADR 0007 S35). The length is not secret.
+  count = nonsensitive(length(var.alb_ingress_cidrs))
 
   security_group_id = aws_security_group.alb.id
-  description       = "HTTP from ${each.value}"
+  description       = "HTTP from allowed CIDR ${count.index}"
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
-  cidr_ipv4         = each.value
+  cidr_ipv4         = var.alb_ingress_cidrs[count.index]
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_task" {
