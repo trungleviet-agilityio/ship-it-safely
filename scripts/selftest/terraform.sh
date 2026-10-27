@@ -137,6 +137,7 @@ report_head() { report "$@" | head -n1; }
 [ "$(report_head 5 skipped 0)" = "### Destroy failed (dev)" ] || die "selftest: an apply that did not succeed must not read as Destroyed"
 [ "$(report_head 0 skipped 0)" = "### Nothing to destroy (dev)" ] || die "selftest: an empty plan must be headed Nothing to destroy"
 [ "$(report_head "" skipped 0)" = "### Destroy did not finish (dev)" ] || die "selftest: a missing plan check must be headed Destroy did not finish"
+# shellcheck disable=SC2016  # the backticks are Markdown, not a command
 case "$(report 5 success 4)" in
   *"Resources: 5 deleted"*"deregistered: 4"*'Role: `sis-dev-gha-apply`'*) ;;
   *) die "selftest: unexpected destroy report body" ;;
