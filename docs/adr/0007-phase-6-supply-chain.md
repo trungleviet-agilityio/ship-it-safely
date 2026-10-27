@@ -353,7 +353,7 @@ AWS_PROFILE=sis-dev-admin aws cloudtrail describe-trails --query 'trailList[].[N
 git switch phase-6-supply-chain && git pull
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap init -backend-config="bucket=sis-dev-tfstate-<DEV_ACCOUNT_ID>-ap-southeast-1-an"
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/dev.tfvars -out=bootstrap.tfplan
-# expect: about 12 to add, 3 to change (aws_iam_role.apply, aws_iam_role.deploy, aws_iam_policy.guardrails), 0 to destroy
+# expect: about 12 to add, 4 to change (aws_iam_role.plan, aws_iam_role.apply, aws_iam_role.deploy for the trust; aws_iam_policy.guardrails for G6), 0 to destroy
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap apply bootstrap.tfplan
 rm infra/terraform/bootstrap/bootstrap.tfplan
 AWS_PROFILE=sis-dev-admin aws iam get-role --role-name sis-dev-gha-apply --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals' --output json | sed -E 's/[0-9]{12}/<acct>/g'
