@@ -101,9 +101,9 @@ jobs:
         with:
           egress-policy: block
           disable-telemetry: true
+          disable-sudo-and-containers: true
           allowed-endpoints: >
             github.com:443
-            api.github.com:443
             release-assets.githubusercontent.com:443
             releases.hashicorp.com:443
             registry.terraform.io:443

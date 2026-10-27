@@ -13,14 +13,11 @@ Run through scripts/check-workflow-triggers.sh, which picks the interpreter and 
 
 import os
 import sys
-from pathlib import Path
 from typing import Any
-
-import yaml
 
 # `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_yaml import load_workflow  # noqa: E402  (import after the path setup above)
+from workflow_yaml import run  # noqa: E402  (import after the path setup above)
 
 ALLOWED = ("pull_request", "push", "workflow_dispatch")
 
@@ -47,13 +44,10 @@ def _triggers(document: Any) -> list[str]:
     return names
 
 
-def check(path: Path) -> list[str]:
-    """Violations of one workflow file, as `<file>: <message>` lines."""
-    shown = os.path.relpath(path)
+def check(shown: str, document: Any) -> list[str]:
+    """Violations of one parsed workflow, as `<file>: <message>` lines."""
     try:
-        names = _triggers(load_workflow(path.read_text(encoding="utf-8")))
-    except yaml.YAMLError as e:
-        return [f"{shown}: invalid YAML: {getattr(e, 'problem', None) or 'parse error'}"]
+        names = _triggers(document)
     except ValueError as e:
         return [f"{shown}: {e}"]
     return [
@@ -63,21 +57,5 @@ def check(path: Path) -> list[str]:
     ]
 
 
-def main(argv: list[str]) -> int:
-    if not argv:
-        print("usage: workflow_triggers.py <workflow file>...", file=sys.stderr)
-        return 2
-    problems: list[str] = []
-    for name in argv:
-        path = Path(name)
-        if not path.is_file():
-            problems.append(f"{os.path.relpath(path)}: workflow not found")
-            continue
-        problems.extend(check(path))
-    for line in problems:
-        print(line)
-    return 1 if problems else 0
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(run("workflow_triggers.py", check, sys.argv[1:]))
