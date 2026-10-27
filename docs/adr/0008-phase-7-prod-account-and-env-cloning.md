@@ -19,7 +19,7 @@ Phase 7 adds a second AWS account (`prod`) under AWS Organizations. Prod is boot
 | FR-13 | Prod account in Organizations, bootstrapped with `accounts/prod.tfvars`. Same digest dev ECR to prod ECR. Trigger by dispatch or release tag. `prod` environment with a reviewer | Not started. Bootstrap `env` validation allows `dev` or `prod`. Deploy scripts are already parameterized by `ENV`, and their self-tests already cover `prod` (`tf-init`, `render-task-def`, `ecs-preflight`, `ecs-deregister-revisions`) |
 | FR-15 | Dev `ROLLING` with circuit breaker. Prod `BLUE_GREEN` with ALB, two target groups, bake time and alarm rollback | Dev is `ROLLING` with circuit breaker and rollback. The module has one target group, and the listener's default action forwards to it |
 | NFR-1 | Account-bearing values are secrets, repo level for PR plans and environment level for apply and deploy | Repo: `AWS_ACCOUNT_ID_DEV`, `AWS_PLAN_ROLE_ARN_DEV`, `ALB_INGRESS_CIDRS_DEV`. Env `dev`: `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`. Environment jobs also read the repo secret `AWS_ACCOUNT_ID_DEV` |
-| NFR-2, NFR-4 | Explicit permissions. harden-runner first, block on credentialed jobs | `harden_runner_policy.py` accepts only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV` and `env.ENV` in credentialed endpoints |
+| NFR-2, NFR-4 | Explicit permissions. harden-runner first, block on credentialed jobs | `scripts/guard/harden_runner_policy.py` accepts only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV` and `env.ENV` in credentialed endpoints |
 | NFR-3 | New tools pinned by version and checksum | crane is new (P9) |
 | NFR-5 | Lock files, Dependabot | Dependabot `directories` include `/infra/terraform/envs/*` |
 | NFR-7 | Session cap, trail and alert per account | Bootstrap creates the trail, the rule and the SNS email per account |
@@ -73,10 +73,10 @@ Phase 7 adds a second AWS account (`prod`) under AWS Organizations. Prod is boot
 ### Repo facts that shape the design
 
 - About 38 workflow lines are dev-specific: literal `environment: dev`, the `secrets.AWS_ACCOUNT_ID_DEV` hosts, the `terraform-envs-dev` groups and `options: [dev]`.
-- The trigger allowlist (`workflow_triggers.py`) accepts only `pull_request`, `push` and `workflow_dispatch`, so a reusable workflow (`workflow_call`) needs a policy change.
-- `render-task-def.sh` replaces only the image of the **latest ACTIVE revision**. A revision the user registers by hand would therefore carry over into the next deploy (relevant to the P16 demo).
+- The trigger allowlist (`scripts/guard/workflow_triggers.py`) accepts only `pull_request`, `push` and `workflow_dispatch`, so a reusable workflow (`workflow_call`) needs a policy change.
+- `scripts/ecs/render-task-def.sh` replaces only the image of the **latest ACTIVE revision**. A revision the user registers by hand would therefore carry over into the next deploy (relevant to the P16 demo).
 - Two Phase 7 items were deferred: the YAML loader for the workflow self-tests (ADR 0007), and the composite action for the AWS preamble (ADR 0006).
-- `harden_runner_policy.py` N1 Low ("refuse `secrets` expressions in audit jobs") is due "when the policy is next touched".
+- `scripts/guard/harden_runner_policy.py` N1 Low ("refuse `secrets` expressions in audit jobs") is due "when the policy is next touched".
 
 ### Evaluation of the reference clone script (`create_environment.sh <name>`)
 
@@ -101,22 +101,22 @@ Verdict: the idea (one command plus printed next steps) is right. The mechanism 
 | # | Decision | Alternatives | Pro | Con |
 |---|---|---|---|---|
 | P1 | **One thin root per environment (PLAN layout).** `envs/dev/` and `envs/prod/` each hold `main.tf`, `variables.tf`, `locals.tf`, `providers.tf`, `versions.tf`, `outputs.tf`, `backend.tf`, `.terraform.lock.hcl`, `README.md`, `tests/envs.tftest.hcl` and a committed `terraform.tfvars`. Every root calls `modules/app-ecs`. The parity guard (P3) allows only four differences: `terraform.tfvars`, the `key` line of `backend.tf`, `versions.tf` and `.terraform.lock.hcl` | (s) One shared root with `<env>.tfvars` per env. (w) Terraform workspaces | Matches PLAN 7.3 and FR-6 as written, and HashiCorp's guidance to keep environments with separate accounts and credentials in separate configurations. **Staged upgrades:** each env has its own lock file, so Dependabot opens the provider bump for dev first, and prod follows after dev is proven. No migration: `envs/dev/` and its state key stay as they are | About 150 lines are copied per env. They cannot drift, because the parity guard fails a PR on any other difference. (s) would remove the copies, but a provider or Terraform bump would reach prod in the same merge as dev. (w) was rejected per Finding 9 |
-| P2 | **Clone tool `scripts/new-env.sh` with `make new-env`** (spec in C). It generates the root `envs/<env>/` from `envs/<from>/`, `bootstrap/accounts/<env>.tfvars.example` and the gitignored `accounts/<env>.tfvars` with placeholders. It rewrites only named keys, refuses clearly on any doubt, and prints the user-run steps. It never runs `terraform`, `aws`, `gh` or `git` writes | The reference script as is. Docs only, no script. A script that also edits workflows and runs `gh` | One command, deterministic, testable offline, atomic. The workflow wiring is left to a reviewed diff that the parity guard enforces | Wiring is still manual (about 15 lines per env, printed by the script) |
-| P3 | **Environment parity guard** in repo-guard and `make lint` (`scripts/workflow_envs.py` on the shared YAML loader). The env set `E` is the directories under `envs/`. Each root must be byte-identical to `envs/dev/` except the four files P1 allows, and must have `env = "<name>"` and `key = "envs/<name>/terraform.tfstate"`, a unique `vpc_cidr`, an `accounts/<name>.tfvars.example`, and an entry in every workflow env list (D) | No guard | A half-cloned env fails `guard (no AWS)` with a message naming the missing piece | One more helper with fixtures |
+| P2 | **Clone tool `scripts/tf/new-env.sh` with `make new-env`** (spec in C). It generates the root `envs/<env>/` from `envs/<from>/`, `bootstrap/accounts/<env>.tfvars.example` and the gitignored `accounts/<env>.tfvars` with placeholders. It rewrites only named keys, refuses clearly on any doubt, and prints the user-run steps. It never runs `terraform`, `aws`, `gh` or `git` writes | The reference script as is. Docs only, no script. A script that also edits workflows and runs `gh` | One command, deterministic, testable offline, atomic. The workflow wiring is left to a reviewed diff that the parity guard enforces | Wiring is still manual (about 15 lines per env, printed by the script) |
+| P3 | **Environment parity guard** in repo-guard and `make lint` (`scripts/guard/env_parity.py` on the shared YAML loader). The env set `E` is the directories under `envs/`. Each root must be byte-identical to `envs/dev/` except the four files P1 allows, and must have `env = "<name>"` and `key = "envs/<name>/terraform.tfstate"`, a unique `vpc_cidr`, an `accounts/<name>.tfvars.example`, and an entry in every workflow env list (D) | No guard | A half-cloned env fails `guard (no AWS)` with a message naming the missing piece | One more helper with fixtures |
 | P4 | **Env name rule** `^[a-z][a-z0-9]{1,7}$` everywhere (`lib.sh valid_env`, bootstrap and module `env` validation). The script also refuses `local`, `bootstrap`, `modules`, `tests`, `shared`, `all`, `env` | Keep the `["dev","prod"]` allowlist in Terraform | A third env needs no Terraform edit. The 8-character cap keeps every AWS name in limits: the CloudTrail bucket `sis-<env>-cloudtrail-<acct>-<region>-an` is at most 63 characters, the ALB and target group names at most 32 | The allowlist added no security (an env still needs bootstrap, a trust and a GitHub environment) but was easy to read |
-| P5 | **Secret names** (table in H). Environment jobs read **environment-level, env-agnostic** names: `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `ALB_INGRESS_CIDRS`, plus `PROMOTION_TARGET_ACCOUNT_ID` in `dev` only. PR plan jobs (no environment) read **repo-level, suffixed** names `AWS_ACCOUNT_ID_<ENV>`, `AWS_PLAN_ROLE_ARN_<ENV>` and `ALB_INGRESS_CIDRS_<ENV>`. No name exists at two levels | One suffixed repo set for everything (today's dev model) | A parametrized job never needs `secrets[...]` with a computed name. No dependence on secret precedence (Finding 8) | The account ID is stored twice per env (repo and environment). `check-aws-config.sh` already fails on a mismatch with the role ARN |
+| P5 | **Secret names** (table in H). Environment jobs read **environment-level, env-agnostic** names: `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `ALB_INGRESS_CIDRS`, plus `PROMOTION_TARGET_ACCOUNT_ID` in `dev` only. PR plan jobs (no environment) read **repo-level, suffixed** names `AWS_ACCOUNT_ID_<ENV>`, `AWS_PLAN_ROLE_ARN_<ENV>` and `ALB_INGRESS_CIDRS_<ENV>`. No name exists at two levels | One suffixed repo set for everything (today's dev model) | A parametrized job never needs `secrets[...]` with a computed name. No dependence on secret precedence (Finding 8) | The account ID is stored twice per env (repo and environment). `scripts/aws/check-config.sh` already fails on a mismatch with the role ARN |
 | P6 | **Workflow parametrization.** (1) Environment-gated jobs stay in **top-level files**, parametrized by a `workflow_dispatch` choice input `env`: `environment: ${{ inputs.env \|\| 'dev' }}`, concurrency `terraform-envs-<env>`, workflow `env.ENV` from the same expression, validated by a step. Push to `main` still applies **dev only**. (2) The PR plan (no environment) moves to **one reusable workflow** `reusable-terraform-plan.yml` (plan, plan-role guardrails, sticky comment), called **once per env** from `terraform-iac.yml` with explicit secret mapping, never `secrets: inherit`. (3) `app-deploy.yml` stays the dev build-and-deploy file. Prod gets `app-promote.yml` (P9, P10). (4) No composite action: harden-runner must be step 1 with a per-job allowlist, and only 3 short preamble steps remain. The ADR 0006 deferred item is closed | (c1) Everything reusable, including apply and deploy. (c3) A workflow file per env. (c4) A matrix with `secrets[format(...)]` | The trust pin (`job_workflow_ref`) stays on the **top-level file** that holds the credentialed job, which is the strongest pin. The dev-only literals collapse to one choice list per file. Adding an env costs one 10-line caller job and three choice entries | Two patterns (top-level for env jobs, reusable for PR plan). (c1) would move the pin to the callee, which any merged caller on `main` can invoke, and environment secrets in callees still need passing (Finding 8). (c4) is flagged by zizmor's `overprovisioned-secrets` and by our endpoint policy |
 | P7 | **OIDC trust shape unchanged.** `aud`, `sub`, `repository_id`, `repository_owner_id`, `ref = refs/heads/main` (apply, deploy) or `refs/pull/*/merge` (plan), `aws:RequestedRegion`, and `job_workflow_ref` on apply and deploy. The `workflow_files` local derives the deploy file: `app-deploy.yml` when `promotion_source_account_id` is null (dev, the build env), `app-promote.yml` otherwise (prod). Apply stays `terraform-iac.yml` plus `terraform-destroy.yml`. The plan role never pins a workflow, so the reusable plan needs no trust change | Pin the reusable callee. A tag `ref` for prod | No new trust concept. Dev trust does not change, so PR A needs **no bootstrap re-apply** | A third promoted env reuses `app-promote.yml` (intended) |
 | P8 | **Policy updates (repo-guard).** Trigger allowlist: `workflow_call` only in `reusable-*.yml`, and such files carry nothing else. harden-runner policy: (1) a job with `uses:` (a reusable call) has no steps, so it is checked through its callee, and must not use `secrets: inherit`. (2) Credentialed endpoints may use only `vars.AWS_REGION`, `env.ENV` and `secrets.AWS_ACCOUNT_ID`. `secrets.AWS_ACCOUNT_ID_DEV` is allowed **only** in `app-promote.yml` job `promote`, for the source registry host. (3) The N1 Low item: audit jobs may not reference `secrets` in any form in endpoints (`secrets.`, `secrets[`, `toJSON(secrets)`), nor an `env` value built from a secret. (4) The workflow self-tests move from `sed` ranges to the YAML loader (ADR 0007 deferred) | Leave the policies as they are | Reusable workflows cannot widen triggers. One account expression per env job. Closes two carried items | More rules and fixtures |
-| P9 | **Promotion = `crane copy` by digest, dev ECR to prod ECR, in the approved prod job.** The dev repository gets a **pull-only** repository policy: Principal is the prod account root, with Condition `StringEquals aws:PrincipalArn = arn:aws:iam::<prod>:role/sis-prod-gha-deploy` and actions `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer`. The prod deploy role gets a matching identity statement on the one dev repository ARN. crane v0.22.1 is installed by `install-ci-tools.sh` (checksum-verified, `mise.toml` pin), with `DOCKER_CONFIG` in `$RUNNER_TEMP` (deleted after). No Docker is needed, so the job keeps `disable-sudo-and-containers: true` | (r) ECR cross-account replication. (d) `docker pull` and `push`. (l) An AWS CLI layer-by-layer copy. (x) Prod tasks pull straight from dev ECR. (art) Pass the image as an artifact from a dev-role job | Digest preserved by design (Finding 7). Prod never depends on dev at run time. Least privilege: one repo, two read actions, one principal | (r) replicates **every** dev push and keeps the source **repository name** (`sis-dev-app` would appear in prod, off the name contract and the boundary, and outside Terraform). (d) Docker recompresses layers, so the digest can change. (l) is about 100 lines of blob handling. (x) breaks when dev is torn down. (art) needs dev-role trust for a prod workflow and a public 1-day artifact. Cost of P9: the dev apply role gains `SetRepositoryPolicy` (R21), and a new tool to pin |
+| P9 | **Promotion = `crane copy` by digest, dev ECR to prod ECR, in the approved prod job.** The dev repository gets a **pull-only** repository policy: Principal is the prod account root, with Condition `StringEquals aws:PrincipalArn = arn:aws:iam::<prod>:role/sis-prod-gha-deploy` and actions `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer`. The prod deploy role gets a matching identity statement on the one dev repository ARN. crane v0.22.1 is installed by `scripts/ci/install-tools.sh` (checksum-verified, `mise.toml` pin), with `DOCKER_CONFIG` in `$RUNNER_TEMP` (deleted after). No Docker is needed, so the job keeps `disable-sudo-and-containers: true` | (r) ECR cross-account replication. (d) `docker pull` and `push`. (l) An AWS CLI layer-by-layer copy. (x) Prod tasks pull straight from dev ECR. (art) Pass the image as an artifact from a dev-role job | Digest preserved by design (Finding 7). Prod never depends on dev at run time. Least privilege: one repo, two read actions, one principal | (r) replicates **every** dev push and keeps the source **repository name** (`sis-dev-app` would appear in prod, off the name contract and the boundary, and outside Terraform). (d) Docker recompresses layers, so the digest can change. (l) is about 100 lines of blob handling. (x) breaks when dev is torn down. (art) needs dev-role trust for a prod workflow and a public 1-day artifact. Cost of P9: the dev apply role gains `SetRepositoryPolicy` (R21), and a new tool to pin |
 | P10 | **Prod release trigger = `workflow_dispatch` on `main`** with input `sha` (40 hex). A credential-free `resolve` job checks that the SHA is an ancestor of `origin/main` and that an `app-deploy` run for that SHA on `main` **succeeded** (`gh run list --workflow app-deploy.yml --commit <sha> --branch main`, `actions: read`). Only then does `promote` start | Tag `v*` (`on.push.tags`) | Keeps `ref = refs/heads/main` (`StringEquals`) on the prod trust, with no tag ruleset needed. "Promote what was green in dev" becomes a check, not a habit | No release object. Tags stay an optional later step (needs `StringLike ref` and a tag ruleset) |
 | P11 | **Prod `BLUE_GREEN` in `modules/app-ecs`** behind `deployment_strategy` (`ROLLING` default, or `BLUE_GREEN`), detailed in E. Dev stays `ROLLING` with an unchanged resource shape | A separate prod module | One module, FR-6 | Conditional (`count` and `dynamic`) code paths, each covered by a test |
 | P12 | **ECS load balancer infrastructure role** `sis-<env>-ecs-elb`, created by **bootstrap** (admin). Its inline policy is the managed policy's action set scoped to `sis-<env>-*`: ELB Describe on `*` (no resource-level support), `Register/DeregisterTargets` on `targetgroup/sis-<env>-*/*`, `ModifyListener` on `listener/app/sis-<env>-*/*/*`, `ModifyRule` on `listener-rule/app/sis-<env>-*/*/*/*`. Trust exactly as AWS documents it. Guardrail G4 protects it | Attach the AWS managed policy. Have the module (apply role) create the role | The apply role never creates a role with ELB write rights. The policy reaches only this env's ALB, while the managed policy covers every ALB and NLB in the account | AWS has edited the managed policy 6 times. A future ECS need fails closed (R20). The fallback is to attach the managed policy |
 | P13 | **Uniform bootstrap** in every account: the infra role, the apply alarm statements, `PassRole` on the infra role, and the deploy service-deployment reads. Only the cross-account ECR read and the deploy workflow file depend on `promotion_source_account_id` | Prod-only statements by env name | One code path, so dev could switch strategy with a tfvars change | Dev holds unused grants scoped to `sis-dev-*` |
 | P14 | **One rollout waiter for both strategies** on the service deployments API: `list-service-deployments`, then `describe-service-deployments`, then `describe-service-revisions` to match the target task definition. `SUCCESSFUL` passes. `ROLLBACK_*` and `STOPPED` fail with `statusReason`. The log prints `lifecycleStage`. The timeout covers the bake time | Keep `describe-services` for dev and add a second evaluator for prod | One evaluator, and the documented view of blue/green stages | A proven dev path changes. Dev needs the bootstrap re-apply first (B6) |
-| P15 | **Two deploy guards.** (1) Preflight refuses while any `sis-<env>-*` alarm is in `ALARM` (Finding 3: ECS would ignore alarms for that deployment), using `cloudwatch:DescribeAlarms` on `alarm:sis-<env>-*`. (2) `render-task-def.sh` refuses a source revision whose container `environment` is not exactly `[{APP_ENV: <env>}]` | None | An alarm can never be silently ignored. A hand-made demo revision (P16) can never be promoted by accident | One read permission and one render rule |
+| P15 | **Two deploy guards.** (1) Preflight refuses while any `sis-<env>-*` alarm is in `ALARM` (Finding 3: ECS would ignore alarms for that deployment), using `cloudwatch:DescribeAlarms` on `alarm:sis-<env>-*`. (2) `scripts/ecs/render-task-def.sh` refuses a source revision whose container `environment` is not exactly `[{APP_ENV: <env>}]` | None | An alarm can never be silently ignored. A hand-made demo revision (P16) can never be promoted by accident | One read permission and one render rule |
 | P16 | **Rollback demos.** Required: the user, with prod admin SSO, registers a revision with `BREAK=true` (same digest) and runs `update-service`. Green targets fail `/health`, the unhealthy-host alarm (or the circuit breaker) fails the deployment, and ECS rolls back while blue keeps serving. Then the revision is deregistered. Optional: during `BAKE_TIME` of a good promote, `set-alarm-state ALARM` shows traffic return to blue | A broken image through the pipeline (needs a broken commit on `main` or a promote input that accepts non-main tags) | No weakening of "only green `main` commits reach prod". No app change | "Broken" is a revision setting, not a different image. The P15 render rule keeps it from leaking |
-| P17 | **Negative test N10** (PLAN 7.5): `app-promote.yml` dispatch input `mode: prove-isolation` runs job `isolation` with `environment: dev`. It runs `assert-web-identity-denied.sh plan apply deploy` with `ACCOUNT = secrets.AWS_ACCOUNT_ID_PROD` and `ENV=prod`. Its token carries `job_workflow_ref = app-promote.yml@refs/heads/main`, which the prod deploy role trusts, so **only `sub` differs** for that role | A step in the dev deploy job (its file is not in the prod trust, so two claims would differ). A no-environment job (tests the wrong claim) | Proves exactly "a dev-environment job is refused by prod". The prod alert email fires (a demo of NFR-7) | Needs a dev approval and sends prod alert emails |
+| P17 | **Negative test N10** (PLAN 7.5): `app-promote.yml` dispatch input `mode: prove-isolation` runs job `isolation` with `environment: dev`. It runs `scripts/aws/assert-web-identity-denied.sh plan apply deploy` with `ACCOUNT = secrets.AWS_ACCOUNT_ID_PROD` and `ENV=prod`. Its token carries `job_workflow_ref = app-promote.yml@refs/heads/main`, which the prod deploy role trusts, so **only `sub` differs** for that role | A step in the dev deploy job (its file is not in the prod trust, so two claims would differ). A no-environment job (tests the wrong claim) | Proves exactly "a dev-environment job is refused by prod". The prod alert email fires (a demo of NFR-7) | Needs a dev approval and sends prod alert emails |
 | P18 | **PR plans run for prod too** (read-only prod plan role, FR-3 parity) | Plan only inside the approved prod apply | Reviewers see prod impact before merge | ADR 0007 residual M1 now spans prod read-only metadata (R25) |
 | P19 | **ECR stays in the env stack** | Move both ECR repositories to bootstrap (persistent) | No re-architecture of a proven stack | Promotion needs the dev stack up (R22). Recorded as the next improvement |
 | P20 | **Organizations.** A management account with no workloads, prod as a member, and the IAM Identity Center organization instance with an `AdministratorAccess` permission set assigned to the user (CLI profile `sis-prod-admin`). Phase 7 adds no SCPs | Prod as a standalone account. A region-deny SCP now | Matches PLAN 7.1. Costs nothing | Depends on Q1 (where dev's Identity Center lives) |
@@ -144,7 +144,7 @@ infra/terraform/
 
 - `tests/dev.tftest.hcl` becomes the generic `tests/envs.tftest.hcl` in PR A: every expected name is built from
   `var.env` (`"sis-${var.env}-cluster"`), and strategy-specific asserts key on `var.deployment_strategy`.
-- `.gitignore`, `tf-init.sh` (`infra/terraform/envs/${ENV}`), `tf-check.sh` (one pass per root) and Dependabot
+- `.gitignore`, `scripts/tf/init.sh` (`infra/terraform/envs/${ENV}`), `scripts/tf/check.sh` (one pass per root) and Dependabot
   (`/infra/terraform/envs/*`) already fit this layout. Only `.terraform-*/` (per-account `TF_DATA_DIR` for
   bootstrap) is added to `.gitignore`.
 - `terraform-iac` push paths: `infra/terraform/envs/dev/**` and `infra/terraform/modules/**`, as today. A change
@@ -152,12 +152,12 @@ infra/terraform/
 - **Staged upgrade flow:** Dependabot opens one PR per root. Merge the dev one, apply, check, then merge the prod
   one. Between the two, the parity guard accepts the version difference in `versions.tf` and the lock file only.
 
-### C. Clone script spec (`scripts/new-env.sh`)
+### C. Clone script spec (`scripts/tf/new-env.sh`)
 
 **Usage**
 
 ```
-scripts/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--strategy ROLLING|BLUE_GREEN] [--dry-run]
+scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--strategy ROLLING|BLUE_GREEN] [--dry-run]
 make new-env ENV=<env> [FROM=dev] [CIDR=...] [STRATEGY=...] [DRY_RUN=1]
 ```
 
@@ -169,7 +169,7 @@ Exit codes: 0 created (or dry run shown), 1 refused, 2 usage.
 2. The source root `envs/<from>/` and `bootstrap/accounts/<from>.tfvars.example` exist.
 3. **None** of the targets exist: `envs/<env>/`, `accounts/<env>.tfvars.example`, `accounts/<env>.tfvars`. Otherwise the script refuses and lists them (no partial overwrite, no "merge").
 4. The source tfvars holds no `aws_account_id` and no 12-digit run.
-5. Each rewritten key matches `^<key>[[:space:]]*=` **exactly once** in the source. Otherwise: "source format changed: update new-env.sh".
+5. Each rewritten key matches `^<key>[[:space:]]*=` **exactly once** in the source. Otherwise: "source format changed: update scripts/tf/new-env.sh".
 6. CIDR: given, or the next free `10.N.0.0/16` (N = highest used second octet + 10, at most 250). It must be a `/16` inside `10.0.0.0/8`, and its second octet must be unused by every `envs/*/terraform.tfvars`.
 7. `accounts/<env>.tfvars` is confirmed ignored with `git check-ignore -q` before it is written.
 
@@ -177,7 +177,7 @@ Exit codes: 0 created (or dry run shown), 1 refused, 2 usage.
 
 | File | Content |
 |---|---|
-| `envs/<env>/` | Copy of the **tracked** files of `envs/<from>/` only (`git ls-files`), so `.terraform/`, `*.auto.tfvars`, local state and plan files are never copied, and the lock file is. Then in `terraform.tfvars`: header replaced ("Generated by scripts/new-env.sh from `<from>`; review every value"), rewritten keys `env`, `vpc_cidr`, `deployment_strategy` (if `--strategy`) and `promotion_target_env = ""` (a new env is never a promotion source). In `backend.tf`: the `key` line becomes `envs/<env>/terraform.tfstate`. Every other file and line is byte-identical |
+| `envs/<env>/` | Copy of the **tracked** files of `envs/<from>/` only (`git ls-files`), so `.terraform/`, `*.auto.tfvars`, local state and plan files are never copied, and the lock file is. Then in `terraform.tfvars`: header replaced ("Generated by scripts/tf/new-env.sh from `<from>`; review every value"), rewritten keys `env`, `vpc_cidr`, `deployment_strategy` (if `--strategy`) and `promotion_target_env = ""` (a new env is never a promotion source). In `backend.tf`: the `key` line becomes `envs/<env>/terraform.tfstate`. Every other file and line is byte-identical |
 | `bootstrap/accounts/<env>.tfvars.example` | Copy of the source example. Header "Copy to `<env>.tfvars`". Placeholder `<FROM_ACCOUNT_ID>` becomes `<ENV_ACCOUNT_ID>` (uppercase via `tr`, bash 3.2) |
 | `bootstrap/accounts/<env>.tfvars` (gitignored, mode 600) | Same placeholders, for the user to fill. The script never takes or prints an account ID |
 
@@ -195,7 +195,7 @@ The repo slug comes from `git remote get-url origin`, with a placeholder as fall
 
 **Never:** runs `terraform`, `aws`, `gh`, `git add`, `commit` or `push`; calls the network; prints a 12-digit run.
 
-**Self-test** (`scripts/selftest/new-env.sh`, run by `ci-selftest.sh`; a temp git repo with fixture files plus copies of `lib.sh` and the script):
+**Self-test** (`scripts/selftest/new-env.sh`, run by `scripts/ci/selftest.sh`; a temp git repo with fixture files plus copies of `lib.sh` and the script):
 
 | T | Case | Expect |
 |---|---|---|
@@ -386,8 +386,8 @@ Expect green: `guard (no AWS)` (parity guard, policies, self-tests), `checks (no
 
 **A3. Script, locally (no AWS)**
 ```bash
-scripts/new-env.sh qa --from dev --dry-run
-scripts/new-env.sh Dev
+scripts/tf/new-env.sh qa --from dev --dry-run
+scripts/tf/new-env.sh Dev
 git status --short
 ```
 Expect: the dry run lists `envs/qa/` with `vpc_cidr = "10.50.0.0/16"`; `Dev` is refused; no files appear.
@@ -549,9 +549,9 @@ Create a branch from the phase branch (lesson 25). Read this ADR at its absolute
 - `bootstrap/variables.tf`: env regex, no other change.
 - `scripts/`:
   - `lib.sh`: `valid_env` rule;
-  - `new-env.sh` (new);
-  - `workflow_envs.py` and `check-env-parity.sh` (new);
-  - `harden_runner_policy.py`, `workflow_triggers.py` (P8);
+  - `scripts/tf/new-env.sh` (new);
+  - `scripts/guard/env_parity.py` and `scripts/guard/env-parity.sh` (new);
+  - `scripts/guard/harden_runner_policy.py`, `scripts/guard/workflow_triggers.py` (P8);
   - `selftest/new-env.sh` (new);
   - `selftest/workflows.sh` (YAML loader instead of `sed` ranges);
 - `Makefile`: `new-env` target.
@@ -570,7 +570,7 @@ Create a branch from the phase branch (lesson 25). Read this ADR at its absolute
 - `make check` green on a fresh clone; actionlint and zizmor clean.
 - `terraform test` for envs, module and bootstrap passes offline.
 - No 12-digit literal anywhere.
-- `scripts/new-env.sh qa --dry-run` output pasted in the hand-back.
+- `scripts/tf/new-env.sh qa --dry-run` output pasted in the hand-back.
 - No `apply` or `destroy` target. The script never invokes `terraform`, `aws` or `gh` (T10).
 
 ### devops-engineer, PR B
@@ -583,11 +583,11 @@ Create a branch from the phase branch (lesson 25). Read this ADR at its absolute
 - Root variables and `main.tf` wiring.
 - Bootstrap F: `iam_ecs_elb.tf` (new), `iam_apply.tf`, `iam_deploy.tf`, `iam_guardrails.tf`, `locals.tf`, `variables.tf`, `outputs.tf`, tests, README.
 - `scripts/`:
-  - `ecs-wait-deployment.sh` (P14, evaluator fixtures for SUCCESSFUL, IN_PROGRESS with a stage, ROLLBACK_SUCCESSFUL, ROLLBACK_FAILED, STOPPED, no matching revision);
-  - `ecs-preflight.sh` (alarm guard);
-  - `render-task-def.sh` (environment rule);
+  - `scripts/ecs/wait-deployment.sh` (P14, evaluator fixtures for SUCCESSFUL, IN_PROGRESS with a stage, ROLLBACK_SUCCESSFUL, ROLLBACK_FAILED, STOPPED, no matching revision);
+  - `scripts/ecs/preflight.sh` (alarm guard);
+  - `scripts/ecs/render-task-def.sh` (environment rule);
   - `ecr-promote.sh` (new: resolve, copy, verify, never prints an account);
-  - `install-ci-tools.sh`, `ci-tools.sha256` and `mise.toml` (crane v0.22.1; check the two digests in Finding 7 against `checksums.txt`);
+  - `scripts/ci/install-tools.sh`, `scripts/ci/tools.sha256` and `mise.toml` (crane v0.22.1; check the two digests in Finding 7 against `checksums.txt`);
   - policy exception for `app-promote.yml`.
 - Workflows per D (PR B column), `app-promote.yml`, `oidc-smoke-test.yml` N1.
 

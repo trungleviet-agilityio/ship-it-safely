@@ -26,11 +26,11 @@ Write `uses: <owner>/<repo>@<40-hex commit sha> # <tag>`. Use the same SHA in ev
 one so no copy is left behind. Skip a release published in the last few days unless it fixes a security issue.
 Dependabot keeps them current after that.
 
-## CLI tools: `mise.toml` and `scripts/ci-tools.sha256`
+## CLI tools: `mise.toml` and `scripts/ci/tools.sha256`
 
 1. Find the latest release on the tool's official release page or GitHub releases.
 2. Set the exact version in `mise.toml`.
-3. If CI installs it (`scripts/install-ci-tools.sh`), take the SHA-256 for the `linux_amd64` asset from the
+3. If CI installs it (`scripts/ci/install-tools.sh`), take the SHA-256 for the `linux_amd64` asset from the
    **published** checksums file of that release (for example `*_SHA256SUMS` or `checksums.txt`). Download
    the asset and confirm `shasum -a 256` matches before writing the line. A checksum computed only from your
    own download proves nothing.
@@ -53,7 +53,7 @@ can bump it. Python stays on the minor version that ADR 0007 fixes (only digest 
 ## Terraform providers and Terraform itself
 
 - `required_version` and provider constraints in `versions.tf`; bump the `terraform` version in `mise.toml` and
-  `ci-tools.sha256` together.
+  `scripts/ci/tools.sha256` together.
 - Refresh the lock file for both platforms in every root that changed:
 
 ```bash
