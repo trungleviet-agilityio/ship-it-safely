@@ -217,3 +217,18 @@ expect_fail "mask-cidrs with a JSON object" "must be a JSON list" env CIDRS='{"a
 out="$(quiet_run env CIDRS="bad 198.51.100.7" "$ROOT/scripts/mask-cidrs.sh")"
 case "$out" in *198.51.100.7*) die "selftest: mask-cidrs echoed a bad value" ;; esac
 ok "mask-cidrs masks each element and refuses anything but a JSON list"
+
+# --- Script modes (ADR 0007 S19): libraries are only sourced, so they are not executable; everything else is.
+modes="$(git -C "$ROOT" ls-files -s 'scripts/*.sh' 2>/dev/null || true)"
+if [ -z "$modes" ]; then
+  warn "no git index here, skipping the script mode check"
+else
+  while read -r mode _ _ path; do
+    case "$path" in
+      scripts/lib.sh | scripts/selftest/common.sh) want=100644 ;;
+      *) want=100755 ;;
+    esac
+    [ "$mode" = "$want" ] || die "selftest: $path is mode $mode, expected $want (libraries 100644, scripts 100755)"
+  done <<<"$modes"
+  ok "libraries are not executable and every script is"
+fi
