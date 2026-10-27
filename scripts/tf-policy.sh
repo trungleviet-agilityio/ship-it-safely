@@ -37,6 +37,7 @@ report() {
   fail "$1" "$2" "${lines[@]}"
 }
 
+# The patterns reach awk through the environment: `awk -v` would interpret backslashes (`\.` becomes `.`).
 # scan_sources <block opener regex> <allowed source regex> <dir>...: file:line:text of every `source =` inside a block
 # that is not allowed. awk follows the block by brace depth (grep level, no HCL parser); quoted strings and comment
 # tails are cut before the braces are counted, so a `"}"` or `# }` cannot end the block early. A `source` on the
@@ -49,9 +50,10 @@ scan_sources() {
     out="$out$(
       # shellcheck disable=SC2016  # awk program, not shell
       find "$dir" -name '*.tf' -not -path '*/.terraform/*' -print0 |
-        xargs -0 awk -v opener="$opener" -v allowed="$allowed" '
+        OPENER="$opener" ALLOWED="$allowed" xargs -0 awk '
           FNR == 1 { inblock = 0; depth = 0 }
           /^[[:space:]]*(#|\/\/)/ { next }
+          BEGIN { opener = ENVIRON["OPENER"]; allowed = ENVIRON["ALLOWED"] }
           !inblock && $0 ~ opener { inblock = 1; depth = 0 }
           inblock {
             if (match($0, /(^|[^A-Za-z0-9_])source[[:space:]]*=[[:space:]]*/)) {
@@ -170,9 +172,9 @@ fi
 # so the match is not anchored at the line start.
 for dir in "$root/modules" "$root/envs"; do
   report 9 "provisioner blocks are forbidden under modules/ and envs/ (they run commands on the CI runner)" \
-    "$(scan '(^|[[:space:]{;])provisioner[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{' "$dir")"
+    "$(scan '(^|[[:space:]{;])provisioner([[:space:]]+[A-Za-z0-9_-]+|[[:space:]]*"[A-Za-z0-9_-]+")[[:space:]]*\{' "$dir")"
   report 9 "data \"external\" is forbidden under modules/ and envs/ (it runs a program on the CI runner)" \
-    "$(scan '(^|[[:space:]{;])data[[:space:]]+"?external"?[[:space:]{]' "$dir")"
+    "$(scan '(^|[[:space:]{;])data([[:space:]]+external|[[:space:]]*"external")"?[[:space:]{]' "$dir")"
 done
 
 # (10) No *.tf.json: the line based rules above read only *.tf, so a JSON twin of a file would bypass all of them

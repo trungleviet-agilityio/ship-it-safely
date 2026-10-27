@@ -127,6 +127,9 @@ bad r9f 9 envs/dev/ext.tf 'data external x {\n  program = ["true"]\n}'
 bad r9g 9 modules/m/prov.tf 'resource "terraform_data" "x" { provisioner "local-exec" { command = "true" } }'
 bad r9h 9 envs/dev/ext.tf 'locals { a = 1 } data "external" "x" { program = ["true"] }'
 
+bad r9i 9 modules/m/prov.tf 'resource "terraform_data" "x" {\n  provisioner"local-exec" {\n    command = "true"\n  }\n}'
+bad r9j 9 envs/dev/ext.tf 'data"external" "x" {\n  program = ["true"]\n}'
+
 # Rule 10: a JSON twin of a configuration file escapes every line based rule.
 bad r10 10 envs/dev/main.tf.json '{"resource": {}}'
 
@@ -136,6 +139,10 @@ bad r11b 11 modules/m/mod.tf 'module "x" {\n  source  = "terraform-aws-modules/v
 bad r11c 11 envs/dev/mod.tf 'module "x" {\n  name = "n"\n  source = "github.com/example/m"\n}'
 bad r11d 11 envs/dev/mod.tf 'module "x" {\n  name = "}"\n  source = "github.com/example/m"\n}'
 bad r11e 11 envs/dev/mod.tf 'module "x" {\n  name = "n" # }\n  source = "github.com/example/m"\n}'
+
+# Registry-looking sources that a regex without its backslashes would let through ("ab/mod/aws", "a/b").
+bad r11f 11 envs/dev/mod.tf 'module "x" {\n  source = "ab/mod/aws"\n}'
+bad r11g 11 envs/dev/mod.tf 'module "x" {\n  source = "a/b"\n}'
 
 # Rule 12: provider sources are hashicorp/*, in bootstrap too.
 bad r12a 12 envs/dev/versions.tf 'terraform {\n  required_providers {\n    aws = {\n      source = "example/aws"\n    }\n  }\n}'
