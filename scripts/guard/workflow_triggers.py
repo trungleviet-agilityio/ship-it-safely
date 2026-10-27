@@ -19,7 +19,7 @@ from typing import Any
 
 # `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_yaml import run  # noqa: E402  (import after the path setup above)
+from workflow_yaml import run, workflow_on  # noqa: E402  (import after the path setup above)
 
 ALLOWED = ("pull_request", "push", "workflow_dispatch")
 REUSABLE_TRIGGER = "workflow_call"
@@ -32,13 +32,7 @@ def _is_reusable_file(shown: str) -> bool:
 
 def _triggers(document: Any) -> list[str]:
     """Names under the top-level `on`, or raise ValueError saying why they cannot be read."""
-    if not isinstance(document, dict):
-        raise ValueError("the workflow is not a YAML mapping")
-    # YAML 1.1 (PyYAML) reads an unquoted `on` as True; GitHub reads it as the string "on".
-    keys = [k for k in document if k == "on" or k is True]
-    if len(keys) > 1:
-        raise ValueError("both `on` and its YAML 1.1 form `true` are present")
-    value = document[keys[0]] if keys else None
+    value = workflow_on(document)
     # A scalar is one trigger; a list or mapping is read by items or keys; anything else names none.
     names: list[Any] = []
     if isinstance(value, str):

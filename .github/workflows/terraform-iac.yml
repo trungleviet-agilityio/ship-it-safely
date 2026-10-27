@@ -15,6 +15,7 @@ on:
       - infra/**
       - .github/workflows/terraform-iac.yml
       - .github/workflows/reusable-terraform-plan.yml
+      - .github/actions/terraform-setup/action.yml
       - scripts/tf/check.sh
       - scripts/tf/policy.sh
       - scripts/tf/resolved-sources.sh
@@ -54,8 +55,10 @@ permissions: {}
 
 # Nothing is cancelled mid-run: a cancelled plan can leave the state lock held, so runs queue instead.
 # The no-AWS checks job cannot hold a lock, but one setting keeps the rule simple.
+# The environment is part of the group, so a dev apply that waits for approval cannot block or replace a prod dispatch.
+# The job-level group of the apply (terraform-envs-<env>) is the one that serialises writers of one state.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.env || 'dev' }}
   cancel-in-progress: false
 
 env:
@@ -105,12 +108,16 @@ jobs:
   plan-dev:
     name: plan-dev
     needs: checks
-    if: github.event_name == 'pull_request'
+    # Fork and Dependabot PRs get no secrets, and the called workflow requires them: skip the caller, not just the jobs.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
     permissions:
       contents: read
       id-token: write # the called plan jobs assume the plan role
       pull-requests: write # the called comment job posts the sticky comment
-    uses: ./.github/workflows/reusable-terraform-plan.yml
+    uses: ./.github/workflows/reusable-terraform-plan.yml # zizmor: ignore[self-repository]
     with:
       env: dev
     secrets:
@@ -128,6 +135,7 @@ jobs:
     timeout-minutes: 30
     # The environment adds the required reviewer and sets the OIDC subject the apply role trusts. Its secrets
     # (AWS_ACCOUNT_ID, AWS_APPLY_ROLE_ARN, ALB_INGRESS_CIDRS) belong to that environment, under the same names in each.
+    # ALB_INGRESS_CIDRS is required: the apply fails while it is empty (a JSON list, or ["0.0.0.0/0"] to be open).
     environment: ${{ inputs.env || 'dev' }}
     concurrency:
       group: terraform-envs-${{ inputs.env || 'dev' }}
@@ -162,43 +170,23 @@ jobs:
         with:
           persist-credentials: false
 
-      # Validates the name (2 to 8 lowercase letters and digits) and that the root exists, before any credential is used.
-      - name: Select the environment root
-        run: echo "TF_DIR=$(scripts/names.sh env-root)" >> "$GITHUB_ENV"
-
-      - name: Install Terraform and tflint (checksum verified)
-        run: scripts/ci/install-tools.sh "$RUNNER_TEMP/tools"
-
-      - name: Check configuration
-        env:
-          ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh "sis-${ENV}-gha-apply"
-
-      - name: Assume the apply role
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      # Select the root, install the tools, check the config, assume the apply role, init and mask the CIDRs. The
+      # apply refuses an empty ALB_INGRESS_CIDRS before the role is assumed: unset would open the ALB to 0.0.0.0/0
+      # while the PR plan (repository secret ALB_INGRESS_CIDRS_<ENV>) looked restricted. To open it on purpose, set the
+      # environment secret to ["0.0.0.0/0"]. A local action: it needs the checkout above.
+      - name: Set up Terraform with the apply role
+        uses: ./.github/actions/terraform-setup # zizmor: ignore[self-repository]
         with:
-          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: gha-apply-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-          retry-max-attempts: 3
-
-      - name: Terraform init
-        env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/tf/init.sh
+          env: ${{ env.ENV }}
+          role-kind: apply
+          role-arn: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION }}
+          session-prefix: apply
+          alb-ingress-cidrs: ${{ secrets.ALB_INGRESS_CIDRS }}
+          require-alb-ingress-cidrs: "true"
 
       # A fresh plan of main inside the approved job, not a saved PR plan (ADR 0004, E24, R5).
-      # Optional environment secret: a JSON list of CIDRs allowed to reach the ALB. Unset means 0.0.0.0/0 (ADR 0007 S10).
-      # Each element is masked before Terraform can print it.
-      - name: Mask the ALB ingress CIDRs
-        env:
-          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS }}
-        run: scripts/tf/mask-cidrs.sh
-
       - name: Terraform plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}

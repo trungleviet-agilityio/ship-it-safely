@@ -55,6 +55,8 @@ ne() {
 # --- T1 qa from dev: the files, the rewrites, nothing local copied
 r="$tmp/t1"
 mk_repo "$r"
+# With a remote the printed commands name the repository, so they are runnable as printed (no <OWNER>/<REPO> placeholder).
+git -C "$r" remote add origin https://github.com/octo/repo.git
 new_env="$r/scripts/tf/new-env.sh"
 out="$("$new_env" qa --from dev 2>&1)" || die "selftest: new-env qa failed: $out"
 qa="$r/infra/terraform/envs/qa" accounts="$r/infra/terraform/bootstrap/accounts"
@@ -85,6 +87,53 @@ ok "new-env: qa clone holds the tracked files, rewrites only the named keys, cop
 case "$out" in *"<ENV_ACCOUNT_ID>"*"plan-qa:"*"reusable-terraform-plan.yml"*) ;; *) die "selftest: the next steps lack the placeholder or the plan caller snippet" ;; esac
 ! grep -Eq "$ACCOUNT_ID_DIGITS" <<<"$out" || die "selftest: new-env printed a 12-digit run"
 ok "new-env: the output has the YAML snippet and a placeholder, and no 12-digit run"
+# Every printed command (the lines indented by five spaces) must work when pasted into a shell as printed: no heredoc
+# (an indented terminator never ends it, so the paste hangs) and no here-string, and the block must parse.
+printf '%s\n' "$out" >"$tmp/next-steps.txt"
+grep -E '^     [^ ]' "$tmp/next-steps.txt" >"$tmp/commands.sh" || die "selftest: the next steps print no command lines"
+! grep -nE '<<|^[[:space:]]+(JSON|EOF)$' "$tmp/commands.sh" || die "selftest: a printed command uses a heredoc or here-string (it hangs when pasted)"
+bash -n "$tmp/commands.sh" || die "selftest: the printed commands do not parse as shell"
+if command -v zsh >/dev/null 2>&1; then zsh -n "$tmp/commands.sh" || die "selftest: the printed commands do not parse in zsh"; fi
+# The environment-creation call sends valid JSON built by the printed printf (the id is a stand-in here).
+env_payload="$(grep -F 'printf '"'"'{"reviewers"' "$tmp/commands.sh" | sed -E 's/ \| gh api.*$//')"
+[ -n "$env_payload" ] || die "selftest: the next steps lack the environment payload command"
+MY_ID=42 bash -c "$env_payload" | jq -e '.reviewers[0].id == 42 and .deployment_branch_policy.custom_branch_policies == true' >/dev/null \
+  || die "selftest: the printed environment payload is not the expected JSON"
+# The printed caller job is the real plan-dev job with the environment renamed, so a change to one cannot drift from the
+# other; its `uses:` line carries the zizmor ignore too (comments are not in the parsed YAML).
+"$(ci_python)" -I - "$tmp/next-steps.txt" "$ROOT/.github/workflows/terraform-iac.yml" <<'PY' || die "selftest: the printed plan-qa job differs from plan-dev"
+import re
+import sys
+import textwrap
+
+import yaml
+
+printed = open(sys.argv[1]).read()
+real_text = open(sys.argv[2]).read()
+block = re.search(r"^        plan-qa:\n(.*?)(?=^   b\. )", printed, re.S | re.M)
+if not block:
+    sys.exit("no plan-qa snippet in the next steps")
+snippet = textwrap.dedent("        plan-qa:\n" + block.group(1))
+job = yaml.safe_load(snippet)["plan-qa"]
+
+
+def rename(node):
+    if isinstance(node, dict):
+        return {k: rename(v) for k, v in node.items()}
+    if isinstance(node, str):
+        return "qa" if node == "dev" else node.replace("plan-dev", "plan-qa").replace("_DEV", "_QA")
+    return node
+
+
+expected = rename(yaml.safe_load(real_text)["jobs"]["plan-dev"])
+if job != expected:
+    sys.exit(f"printed job {job}\nexpected    {expected}")
+uses = [ln.strip() for ln in snippet.splitlines() if ln.strip().startswith("uses:")]
+real_uses = [ln.strip() for ln in real_text.splitlines() if ln.strip().startswith("uses: ./.github/workflows/reusable-")]
+if uses != real_uses or "# zizmor: ignore[self-repository]" not in uses[0]:
+    sys.exit(f"the uses line differs: {uses} vs {real_uses}")
+PY
+ok "new-env: the printed commands are pasteable and the printed caller job equals plan-dev"
 
 # --- T2 run again: refused, files unchanged
 before="$(tree_hash "$r")"
@@ -179,6 +228,21 @@ else
   warn "running as root: skipping the unwritable-directory case (T12)"
 fi
 
+# --- T12b a later move fails (a stub mv refuses one target): everything already moved in is rolled back
+mkdir -p "$tmp/mvstub"
+# shellcheck disable=SC2016  # the stub's own script text, not an expansion here
+printf '#!/bin/sh\nfor last; do :; done\ncase "$last" in *"$MV_FAIL_SUFFIX") exit 1 ;; esac\nexec /bin/mv "$@"\n' >"$tmp/mvstub/mv"
+chmod +x "$tmp/mvstub/mv"
+for fail_on in "/qa" "qa.tfvars.example" "qa.tfvars"; do
+  r="$tmp/t12b"
+  rm -rf "$r"
+  mk_repo "$r"
+  ne "a failing move of ${fail_on}" "cannot create" env PATH="$tmp/mvstub:$PATH" MV_FAIL_SUFFIX="$fail_on" "$r/scripts/tf/new-env.sh" qa
+  [ "$(ls -A "$r/infra/terraform/envs")" = "dev" ] || die "selftest: a failed move of ${fail_on} left $(ls -A "$r/infra/terraform/envs") under envs/"
+  [ "$(ls -A "$r/infra/terraform/bootstrap/accounts")" = "dev.tfvars.example" ] || die "selftest: a failed move of ${fail_on} left account files: $(ls -A "$r/infra/terraform/bootstrap/accounts")"
+done
+ok "new-env: a failing move rolls back the targets already moved in"
+
 # --- T14 the account file must be ignored
 r="$tmp/t14"
 mk_repo "$r"
@@ -226,6 +290,10 @@ parity_case "a missing destroy choice" "missing from the terraform-destroy.yml d
 parity_case "a missing destroy allowed_envs entry" "missing from the terraform-destroy.yml allowed_envs" 's/allowed_envs="dev qa"/allowed_envs="dev"/' .github/workflows/terraform-destroy.yml
 parity_case "a caller job named wrongly" "must be named plan-qa" 's/^  plan-qa:/  plan-qa2:/' .github/workflows/terraform-iac.yml
 parity_case "a caller job for another env" "no plan-qa caller job" 's/^      env: qa$/      env: zz/' .github/workflows/terraform-iac.yml
+parity_case "a qa caller mapped to a dev secret" "must be a secrets.<NAME> ending in _QA" 's/secrets\.AWS_PLAN_ROLE_ARN_QA/secrets.AWS_PLAN_ROLE_ARN_DEV/' .github/workflows/terraform-iac.yml
+parity_case "a qa caller mapped to an unsuffixed secret" "must be a secrets.<NAME> ending in _QA" 's/secrets\.ALB_INGRESS_CIDRS_QA/secrets.ALB_INGRESS_CIDRS/' .github/workflows/terraform-iac.yml
+# shellcheck disable=SC2016  # the sed pattern is YAML text
+parity_case "a qa caller mapped to a literal" "must be a secrets.<NAME> ending in _QA" 's/\${{ secrets\.AWS_ACCOUNT_ID_QA }}/123/' .github/workflows/terraform-iac.yml
 parity_case "a mismatched env line" "must have exactly one line env = \"qa\"" 's/^env  *= "qa"/env = "dev"/' infra/terraform/envs/qa/terraform.tfvars
 parity_case "a duplicate CIDR" "used by more than one env" 's#10\.50\.0\.0/16#10.40.0.0/16#' infra/terraform/envs/qa/terraform.tfvars
 parity_case "a wrong backend key" "backend.tf key must be envs/qa/terraform.tfstate" 's#envs/qa/terraform#envs/dev/terraform#' infra/terraform/envs/qa/backend.tf

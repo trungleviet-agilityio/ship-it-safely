@@ -7,9 +7,11 @@
 version: 2
 
 updates:
-  # Every workflow in one PR. The version stays in the comment after the SHA.
+  # Every workflow and the local composite action in one PR. The version stays in the comment after the SHA.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/terraform-setup
     schedule:
       interval: monthly
     cooldown:

@@ -146,28 +146,33 @@ Next steps (you run these; this script never runs terraform, aws or gh):
    The second plan must say "No changes".
 4. GitHub environment @ENV@ (reviewer, main only) and secrets:
      MY_ID="$(gh api user --jq .id)"
-     gh api -X PUT repos/@SLUG@/environments/@ENV@ --input - <<JSON
-     {"reviewers":[{"type":"User","id":${MY_ID}}],"prevent_self_review":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
-     JSON
+     printf '{"reviewers":[{"type":"User","id":%s}],"prevent_self_review":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' "$MY_ID" | gh api -X PUT repos/@SLUG@/environments/@ENV@ --input -
      gh api -X POST repos/@SLUG@/environments/@ENV@/deployment-branch-policies -f name=main -f type=branch
      AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw apply_role_arn | gh secret set AWS_APPLY_ROLE_ARN --env @ENV@ --repo @SLUG@
      AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw deploy_role_arn | gh secret set AWS_DEPLOY_ROLE_ARN --env @ENV@ --repo @SLUG@
      AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_@ENVUP@ --repo @SLUG@
      gh secret set AWS_ACCOUNT_ID --env @ENV@ --repo @SLUG@
      gh secret set AWS_ACCOUNT_ID_@ENVUP@ --repo @SLUG@
-   The last two prompt: paste <ENV_ACCOUNT_ID> each time. Optional ALB allow-list: ALB_INGRESS_CIDRS (environment @ENV@)
-   and ALB_INGRESS_CIDRS_@ENVUP@ (repository), the same JSON list.
+   The last two prompt: paste <ENV_ACCOUNT_ID> each time. Then the ALB allow-list, a JSON list such as ["<YOUR_IP>/32"]:
+     gh secret set ALB_INGRESS_CIDRS --env @ENV@ --repo @SLUG@
+     gh secret set ALB_INGRESS_CIDRS_@ENVUP@ --repo @SLUG@
+   Paste the same list each time. The environment secret is required: the apply of @ENV@ fails while it is empty, so a
+   forgotten copy cannot open the ALB. To be open on purpose, set it to ["0.0.0.0/0"]. The repository secret feeds
+   the PR plan, which treats an unset value as open.
 5. Wire the workflows (a reviewed diff; the parity guard checks it):
    a. .github/workflows/terraform-iac.yml: add the job below, and add @ENV@ to the options of the dispatch input env.
         plan-@ENV@:
           name: plan-@ENV@
           needs: checks
-          if: github.event_name == 'pull_request'
+          if: >-
+            github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository
+            && github.event.pull_request.user.login != 'dependabot[bot]'
           permissions:
             contents: read
             id-token: write
             pull-requests: write
-          uses: ./.github/workflows/reusable-terraform-plan.yml
+          uses: ./.github/workflows/reusable-terraform-plan.yml # zizmor: ignore[self-repository]
           with:
             env: @ENV@
           secrets:

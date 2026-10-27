@@ -5,6 +5,7 @@
 # trust does not name this file and it must stay out of the bootstrap `workflow_files`.
 # No `environment:` on any job: it would change the OIDC subject the plan role trusts (ADR 0003).
 # Workflow-level `env` of the caller is not propagated, so ENV is set again below from the input.
+# The plan job starts from the local action .github/actions/terraform-setup, shared with the apply and destroy jobs.
 name: reusable-terraform-plan
 
 on:
@@ -77,42 +78,18 @@ jobs:
         with:
           persist-credentials: false
 
-      # Validates the name (2 to 8 lowercase letters and digits) and that the root exists, before any credential is used.
-      - name: Select the environment root
-        run: echo "TF_DIR=$(scripts/names.sh env-root)" >> "$GITHUB_ENV"
-
-      - name: Install Terraform and tflint (checksum verified)
-        run: scripts/ci/install-tools.sh "$RUNNER_TEMP/tools"
-
-      - name: Check configuration
-        env:
-          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN }}
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh "sis-${ENV}-gha-plan"
-
-      - name: Assume the plan role
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      # Select the root, install the tools, check the config, assume the plan role, init and mask the CIDRs (shared with
+      # the apply and destroy jobs). A local action: it needs the checkout above.
+      - name: Set up Terraform with the plan role
+        uses: ./.github/actions/terraform-setup # zizmor: ignore[self-repository]
         with:
-          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: gha-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-          retry-max-attempts: 3
-
-      # tf/init.sh derives the state bucket name (ADR 0002, B8), so there is no bucket secret.
-      - name: Terraform init
-        env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/tf/init.sh
-
-      # Optional secret: a JSON list of CIDRs allowed to reach the ALB. Unset means 0.0.0.0/0 (ADR 0007 S10).
-      # Each element is masked before Terraform can print it.
-      - name: Mask the ALB ingress CIDRs
-        env:
-          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS }}
-        run: scripts/tf/mask-cidrs.sh
+          env: ${{ env.ENV }}
+          role-kind: plan
+          role-arn: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION }}
+          session-prefix: plan
+          alb-ingress-cidrs: ${{ secrets.ALB_INGRESS_CIDRS }}
 
       - name: Terraform plan
         env:
@@ -203,7 +180,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # The only job with a write token: no AWS credentials, and a checkout that holds scripts/ only (the shared
-    # account-ID check), without persisting the token.
+    # account-ID check), without persisting the token. The base-commit checkout below protects scripts/ only: the
+    # `run:` text of this step comes from the PR head's copy of this workflow, so it must stay free of anything a PR
+    # could steer (inputs reach it through `env:`, never through a `${{ }}` in the script).
     permissions:
       contents: read
       pull-requests: write # create or update the sticky plan comment
@@ -216,8 +195,9 @@ jobs:
       - name: Check out the helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The base commit, not the PR head: this job holds a write token, so it must run only scripts that were
-          # already reviewed and merged. With the head, a PR could change scripts/ and run its own code here.
+          # The base commit, not the PR head: this job holds a write token, so the helper scripts it runs must be
+          # ones that were already reviewed and merged. With the head, a PR could change scripts/ and run its own
+          # code here. Only scripts/ is protected: this job's own steps still come from the PR's workflow file.
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: scripts

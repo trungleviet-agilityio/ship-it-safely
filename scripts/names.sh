@@ -5,7 +5,8 @@
 #   scripts/names.sh app                  the resource names of ENV (default dev) as KEY=value lines, ready to
 #                                         append to $GITHUB_ENV (app_names): ENV=dev scripts/names.sh app >> "$GITHUB_ENV"
 #   scripts/names.sh env-root             the Terraform root of ENV (default dev), validated: infra/terraform/envs/<env>.
-#                                         echo "TF_DIR=$(scripts/names.sh env-root)" >> "$GITHUB_ENV"
+#                                         tf_dir="$(scripts/names.sh env-root)"; echo "TF_DIR=${tf_dir}" >> "$GITHUB_ENV"
+#                                         (assign first: inside echo "...$(...)" a failure would not fail the step)
 #   scripts/names.sh role                 the name of the AWS role the job assumed (never the session name, which
 #                                         carries the run ID), for a job summary. Exits 1 when no role is assumed;
 #                                         a summary step turns that into "not assumed". Needs the AWS CLI.

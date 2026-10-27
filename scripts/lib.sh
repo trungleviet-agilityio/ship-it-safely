@@ -132,11 +132,25 @@ ci_python() {
   printf '%s' "$py"
 }
 
-# run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run a Python helper from scripts/guard/ over the
-# workflow files (default: every .github/workflows/*.yml and *.yaml) with the CI interpreter (ci_python). The helper
-# prints one violation per line and exits 1 for violations.
+# run_guard_helper <helper.py> <what it enforces> [argument ...]: run a Python helper from scripts/guard/ with the CI
+# interpreter (ci_python). The helper prints one violation per line and exits 1 for violations (shown as a list, then a
+# count by `what`); any other non-zero exit is a helper failure.
+run_guard_helper() {
+  local helper="$1" what="$2" py out rc=0
+  shift 2
+  py="$(ci_python)"
+  out="$("$py" -I "$ROOT/scripts/guard/$helper" "$@")" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    printf '%s\n' "$out" | sed 's/^/  - /' >&2
+    die "$(grep -c '' <<<"$out") ${what} violation(s)"
+  fi
+  [ "$rc" -eq 0 ] || die "${helper} failed (exit code $rc)"
+}
+
+# run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run_guard_helper over the workflow files
+# (default: every .github/workflows/*.yml and *.yaml).
 run_workflow_helper() {
-  local helper="$1" what="$2" py f out rc=0
+  local helper="$1" what="$2" f
   shift 2
   local files=("$@")
   if [ ${#files[@]} -eq 0 ]; then
@@ -145,13 +159,7 @@ run_workflow_helper() {
     done
     [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
   fi
-  py="$(ci_python)"
-  out="$("$py" -I "$ROOT/scripts/guard/$helper" "${files[@]}")" || rc=$?
-  if [ "$rc" -eq 1 ]; then
-    printf '%s\n' "$out" | sed 's/^/  - /' >&2
-    die "$(grep -c '' <<<"$out") ${what} violation(s)"
-  fi
-  [ "$rc" -eq 0 ] || die "${helper} failed (exit code $rc)"
+  run_guard_helper "$helper" "$what" "${files[@]}"
 }
 
 # sha256_of <file>: hex digest on Linux and macOS.
