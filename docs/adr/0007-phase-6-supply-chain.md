@@ -174,6 +174,20 @@ Total: about 0 USD a month, well inside the 20 USD budget. A second trail would 
 | S40 | Selftest for PR B:<br>- every job with `id-token: write` has `egress-policy: block` and `disable-telemetry: true`;<br>- every endpoint has `:port`;<br>- no entry is `*`, `*:443`, `*.amazonaws.com:443`, `*.githubusercontent.com:443` or `*.github.com:443`;<br>- jobs without credentials still name `audit` explicitly |
 | S41 | Expected endpoint families, to be confirmed from the log, not copied blindly:<br>- `github.com`, `api.github.com`, release asset hosts (checkout, tflint download);<br>- `releases.hashicorp.com`, `registry.terraform.io` (Terraform, providers);<br>- `sts.<region>.amazonaws.com`;<br>- the regional service endpoints the job calls (`ec2`, `ecs`, `elasticloadbalancing`, `logs`, `secretsmanager`, `api.ecr`) and `iam.amazonaws.com`;<br>- the ECR layer bucket host for pushes;<br>- the state bucket host (S39).<br>Runner-required endpoints are allowed implicitly in the community tier (v2.21.1 notes) |
 
+### F. PR B decisions after checkpoint A (2026-10-27, same delegation)
+
+The A6 list covers the plan, plan-role-guardrails and smoke-test jobs. These decisions fill what S39 to S41 left
+open. harden-runner stays at v2.22.2, the latest release (checked 2026-10-27).
+
+| # | Decision | Pro | Con |
+|---|---|---|---|
+| S42 | **Seven jobs go to `block`:** terraform-iac `plan`, `plan-role-guardrails`, `apply`; terraform-destroy `destroy`; app-deploy `deploy`; both oidc-smoke-test jobs (every job with `id-token: write`). All other jobs keep `audit`, written out | Blocking where AWS credentials live; insights stay on credential-free jobs, where they are useful and hold no account host | Seven allowlists to keep current |
+| S43 | **Hosts for jobs A6 did not capture** (apply, destroy, deploy) come from the code, not a guess: the plan job's list plus the regional endpoint of every AWS service in `envs/dev` and `modules/app-ecs` (`ec2`, `elasticloadbalancing`, `ecs`, `api.ecr`, `logs`, `secretsmanager`) and `iam.amazonaws.com`; deploy from its scripts and actions (artifact download, ECR registry and layer host, `ecs`, `secretsmanager`). The build agent confirms each against AWS and StepSecurity docs | Every host traces to a resource or script line | A missed host fails a job (R16); checkpoint B is the proof |
+| S44 | **`CHECKPOINT_DISABLE=1`** in the workflow `env:` of terraform-iac and terraform-destroy. `checkpoint-api.hashicorp.com` leaves the allowlists | One host fewer; no version-check call to HashiCorp | No upgrade notice in CI logs (Dependabot covers that) |
+| S45 | **The S40 rules are a repo-guard check, not only a self-test:** a Python helper on the hash-locked PyYAML venv (like `workflow_triggers.py`) reads every workflow and fails when a credentialed job is not `block` with telemetry off, an endpoint has no `:port`, an entry is a broad wildcard (S40 list), a literal 12-digit number appears, or a non-credentialed job does not say `audit`. Self-tests cover each rule | A new credentialed job cannot ship in audit by accident; YAML read the way GitHub reads it | One more helper and its fixtures |
+| S46 | **Dependabot python ignore:** in the `docker` entry, `ignore` `dependency-name: "*python*"` (matched to the name Dependabot reports, checked by the agent) with `update-types: ["version-update:semver-minor", "version-update:semver-major"]`. Digest and patch updates of 3.13 still arrive. The user closes #22 after merge | Security rebuilds stay automatic; a runtime change stays a planned change | Moving to a new Python is manual |
+| S47 | **Rollout:** PR B's own checks prove the plan and smoke-test lists in block mode before merge. Apply, deploy and destroy are proven at checkpoint B on an empty stack. Rollback for one job is `egress-policy: audit` on that job, then add the host the log names | The risky lists are tested where a failure costs nothing | A blocked host mid-apply leaves a partial dev stack; `terraform-destroy` cleans it |
+
 ### Least privilege summary
 
 | Item | Value | Wildcards |
