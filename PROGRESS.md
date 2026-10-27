@@ -59,7 +59,7 @@ with `BLUE_GREEN` (Phase 7).
 | `terraform-destroy.yml` comment says the typed phrase is never echoed, but GitHub prints the step `env:` block | Phase 5 checkpoint | Built in Phase 6 PR A (ADR 0007 S13) |
 | Optional: delete the `INACTIVE` task definitions (`DeleteTaskDefinitions`) so they stop showing in the Tagging API | Phase 5 checkpoint | Dropped (ADR 0007 S14: they cost nothing) |
 | harden-runner `block` with an explicit allowlist on the credentialed jobs | ADR 0007 S4, S39 to S47 | Built in PR B (#24), proven at checkpoint B |
-| Monthly manual check: `mise.toml` tool versions with `scripts/ci-tools.sha256`, and `scripts/ci-requirements.txt` (not covered by Dependabot) | ADR 0007 B | Ongoing |
+| Monthly manual check: `mise.toml` tool versions with `scripts/ci/tools.sha256`, and `scripts/ci/requirements.txt` (not covered by Dependabot) | ADR 0007 B | Ongoing |
 | Turn on "require review from code owners" when a second maintainer joins | ADR 0007 Q6 | Later |
 | Workflow self-tests on a YAML loader instead of `sed` ranges | ADR 0007 verify | Phase 7, before more workflows |
 | harden-runner policy: refuse any expression mentioning `secrets` in audit jobs' endpoints, and `env` values built from secrets (N1, Low) | ADR 0007 PR B verify round 2 | When the policy is next touched |

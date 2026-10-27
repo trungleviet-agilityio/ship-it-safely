@@ -131,7 +131,7 @@ pass. Skip an area the PR does not touch.
 | Terraform | `terraform init -backend=false && terraform validate` in each root and module |
 | Terraform | `tflint --init && tflint --recursive` |
 | Workflows | `actionlint` |
-| Shell scripts | `shellcheck -x scripts/*.sh` |
+| Shell scripts | `make lint` (`shellcheck -x` on every `scripts/**/*.sh`) |
 | Everything | `pre-commit run --all-files` (gitleaks, file checks, the hooks above) |
 
 Use the tool versions pinned in `.pre-commit-config.yaml` when running them through `uvx`

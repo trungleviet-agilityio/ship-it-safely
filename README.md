@@ -87,7 +87,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 | `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint, CI helper self-tests |
 | `make tf-check` | Offline Terraform policy rules (with their self-test), README check, `fmt`, `validate`, `terraform test` (no AWS; uses a temporary data dir, so a real S3 `init` in the checkout does not break it) |
 | `make docs` | Regenerate the `terraform-docs` tables in Terraform READMEs |
-| `make verify` (or `make image` / `make smoke` / `make scan`) | Build the app image the way CI does, run it like Fargate (read-only, UID 10001, root-owned `/tmp`), scan it with Trivy (fixable HIGH or CRITICAL fails). The same recipe as `app-ci` (`scripts/image-verify.sh`). Not part of `make check` |
+| `make verify` (or `make image` / `make smoke` / `make scan`) | Build the app image the way CI does, run it like Fargate (read-only, UID 10001, root-owned `/tmp`), scan it with Trivy (fixable HIGH or CRITICAL fails). The same recipe as `app-ci` (`scripts/image/verify.sh`). Not part of `make check` |
 | `make check` | All of the above checks; what a PR must pass |
 
 There is no `apply` or `destroy` target (ADR 0001, D15): `envs/dev` is applied by `terraform-iac` and destroyed
@@ -154,7 +154,7 @@ Every job starts with `step-security/harden-runner`. The seven jobs that assume 
 with telemetry off and an exact `allowed-endpoints` list (hosts that hold the account ID are built from
 `secrets.AWS_ACCOUNT_ID_DEV`, never written out), and all of them except `deploy` (which needs Docker) also
 disable sudo and containers, so code in the job cannot switch the firewall off; every other job runs `audit`. The repo-guard check
-`scripts/check-harden-runner.sh` fails a PR that breaks this shape. If a block-mode job fails on a blocked host,
+`scripts/guard/harden-runner.sh` fails a PR that breaks this shape. If a block-mode job fails on a blocked host,
 the job log names it: add it to that job's list in a short PR (the guard check refuses `audit` on these jobs, so
 there is no audit fallback on `main`). Terraform runs with
 `CHECKPOINT_DISABLE=1`. Every action is pinned to a commit SHA, and
@@ -177,7 +177,7 @@ at once. Three rules when you handle them:
   stack is down, **reject** the pending apply: approving it re-creates the stack.
 
 Not covered by Dependabot, so check them monthly by hand: the tool versions in `mise.toml` with
-`scripts/ci-tools.sha256`, and `scripts/ci-requirements.txt`.
+`scripts/ci/tools.sha256`, and `scripts/ci/requirements.txt`.
 
 ### Repo configuration the pipelines read
 
@@ -280,7 +280,7 @@ Troubleshooting:
 
 | Env | Strategy | Why |
 |---|---|---|
-| dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `ecs-wait-deployment.sh` fails the run on a rollback |
+| dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `scripts/ecs/wait-deployment.sh` fails the run on a rollback |
 | prod (Phase 7) | ECS built-in `BLUE_GREEN`: two target groups, bake time, CloudWatch alarm rollback | All traffic moves once green is healthy; fast rollback during the bake time; needs up to twice the tasks during a deploy |
 | Later | ECS built-in `CANARY` or `LINEAR` | Needs real traffic and alarms that mean something: 10% of almost no requests gives no signal |
 
