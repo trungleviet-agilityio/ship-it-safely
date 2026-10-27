@@ -45,6 +45,7 @@ jobs:
         with:
           egress-policy: block
           disable-telemetry: true
+          disable-sudo-and-containers: true
           allowed-endpoints: >
             github.com:443
             sts.${{ vars.AWS_REGION }}.amazonaws.com:443
@@ -126,6 +127,7 @@ jobs:
         with:
           egress-policy: block
           disable-telemetry: true
+          disable-sudo-and-containers: true
           allowed-endpoints: >
             github.com:443
             sts.${{ vars.AWS_REGION }}.amazonaws.com:443

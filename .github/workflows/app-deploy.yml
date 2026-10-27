@@ -113,6 +113,7 @@ jobs:
         with:
           egress-policy: block
           disable-telemetry: true
+          # No disable-sudo-and-containers: this job runs docker load and docker push (named exception in the policy).
           allowed-endpoints: >
             github.com:443
             sts.${{ vars.AWS_REGION }}.amazonaws.com:443
