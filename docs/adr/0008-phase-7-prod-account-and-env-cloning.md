@@ -373,7 +373,7 @@ best-practice delegation:
 | # | Deviation | Why | Trade-off |
 |---|---|---|---|
 | D1 | The parity guard compares each `README.md` outside the generated `BEGIN_TF_DOCS` block | The generated Requirements table lists provider versions, which legitimately differ during a staged upgrade | A hand-written README change still has to be made in every env |
-| D2 | `.github/zizmor.yml` disables the `self-repository` audit (Low): zizmor 1.31.1 wants `uses: $/...` for a local reusable workflow, actionlint rejects that form | Both linters are required; `./...` resolves to the caller's own commit, so nothing is weaker | One audit is off for every file. The config names the removal condition (actionlint accepts `$/`) |
+| D2 | zizmor `self-repository` (Low) is ignored inline on each local `uses: ./...` line (round 1 replaced a global disable): zizmor 1.31.1 wants `uses: $/...`, actionlint rejects that form | Both linters are required; `./...` resolves to the caller's own commit, so nothing is weaker; the audit stays on everywhere else | One comment per caller; a self-test requires it. Remove when actionlint accepts `$/` |
 | D3 | The env is validated by `scripts/names.sh env-root` (regex and `envs/<env>/` exists) as the first step after harden-runner, not by a separate job | No credential step runs before it; the dispatch choice limits the UI | A crafted API dispatch with an unknown env still makes GitHub create that empty environment (no secrets, so nothing runs) |
 | D4 | `new-env.sh` always sets `env = "<env>"` in the generated bootstrap example | The bootstrap `env` variable defaults to `dev`, so a copy would bootstrap dev names in the new account | None |
 | D5 | `--strategy` and the `promotion_target_env` rewrite apply only when the key exists in the source tfvars | The variables arrive in PR B | `--strategy` is refused with a message until then |
@@ -381,6 +381,32 @@ best-practice delegation:
 
 Check names after PR A: the plan jobs become `plan-dev / plan (read-only role)`, `plan-dev / plan role guardrails`
 and `plan-dev / sticky plan comment`. The required check `guard (no AWS)` is unchanged.
+
+## PR A verify, round 1 (2026-10-27)
+
+No Critical or High. Fixed in one round (`fix(ci)` commit):
+
+| Source | Finding | Decision |
+|---|---|---|
+| reviewer M1 | `echo "TF_DIR=$(...)"` stayed green on a bad env, so validation ran after credentials | Fixed: assign then write; a self-test runs the step with bad names; a grep bans the pattern |
+| reviewer M2, security M1 | A missing env `ALB_INGRESS_CIDRS` made the apply plan `0.0.0.0/0` while the PR plan looked restricted | Fixed, fail closed: the apply refuses an empty value; open on purpose is `["0.0.0.0/0"]`. Pro: no silent widening. Con: one more required secret per env. PR plan and teardown keep unset = open, so teardown always works |
+| reviewer M3 | Printed `gh api` heredoc hung when pasted | Fixed: one `printf ... \| gh api --input -` line; T13 runs `bash -n` and `zsh -n` on every printed command |
+| reviewer L4 | Caller `plan-dev` had no fork/Dependabot skip | Fixed |
+| reviewer L6 | T12 never reached the rollback | Fixed: T12b fails a later `mv` and checks the rollback |
+| reviewer L7 | `mask-cidrs.sh` named the wrong secret | Fixed |
+| reviewer L8 | Parity guard did not check a caller's secret suffix | Fixed: every mapped secret must end in `_<ENV>` |
+| security L1 | `env.ENV` in block-mode endpoints was not tied to a safe source | Fixed: a literal, or `inputs.env` from a `choice` dispatch input or a `workflow_call` input |
+| security L2 | A callee job without `permissions:` would be treated as an audit job | Fixed: reusable files need top-level `permissions: {}` and per-job permissions |
+| security L3 | `format()` or `env[...]` could pass a secret into an audit job's endpoints | Fixed: audit endpoints allow only `vars.X` and untainted `env.X` |
+| security L4 | `self-repository` was off for every file | Fixed: inline ignore per line (D2) |
+| security L5 | One workflow-level concurrency slot for every env | Fixed: the group includes the env |
+| reviewer L5 | Path filter misses `scripts/guard/*.py` | Accepted: those files do not run in `terraform-iac`; `repo-guard` has no filter |
+| simplifier 1, 3, 6, 7 | Repeated `on:` lookups, guard runner, self-test loops, env-line check | Fixed (`workflow_yaml.read_workflow`/`workflow_on`/`dispatch_options`, `run_guard_helper`, `mutation_cases`, `_env_line_problem`) |
+| simplifier 4 | Nine setup steps repeated in plan, apply and teardown | Fixed with the composite `.github/actions/terraform-setup`. **This reverses P6 point (4)**, which counted only three preamble steps. Pro: one place for the setup sequence. Con: one more file type for the pin test and zizmor (both now cover it). harden-runner stays step 1 and each job keeps its own allowlist, so least privilege and the trust pin are unchanged. `plan-role-guardrails` keeps its two inline steps (no tools, no init) |
+| simplifier 2, 5 | `sys.path` inserts, `new-env.sh` bookkeeping | Kept (`-I` hardening; tested path) |
+
+Accepted residual risk (unchanged from ADR 0007): a same-repo PR author controls the steps of the read-only
+plan job; the comment job's base-SHA checkout protects `scripts/` only.
 
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
@@ -393,7 +419,13 @@ Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_A>`, `<PR_B>`, `<SHA
 gh secret set AWS_ACCOUNT_ID --env dev --repo trungleviet-agilityio/ship-it-safely
 gh secret list --env dev --repo trungleviet-agilityio/ship-it-safely
 ```
-Only if `ALB_INGRESS_CIDRS_DEV` is set at repo level, also set `ALB_INGRESS_CIDRS` in env `dev` to the same value.
+Then set `ALB_INGRESS_CIDRS` in env `dev` (required since round 1: the apply refuses an empty value). Paste the
+same JSON list as the repo secret `ALB_INGRESS_CIDRS_DEV`, or `["0.0.0.0/0"]` if that one is unset:
+```bash
+gh secret set ALB_INGRESS_CIDRS --env dev --repo trungleviet-agilityio/ship-it-safely
+```
+Expect `gh secret list --env dev` to show `AWS_ACCOUNT_ID`, `ALB_INGRESS_CIDRS`, `AWS_APPLY_ROLE_ARN` and
+`AWS_DEPLOY_ROLE_ARN`.
 
 **A2. Checks**
 ```bash

@@ -203,8 +203,8 @@ Not covered by Dependabot, so check them monthly by hand: the tool versions in `
 |---|---|---|
 | Repo | `AWS_PLAN_ROLE_ARN_<ENV>`, `AWS_ACCOUNT_ID_<ENV>` | secrets for the PR plan, which has no environment (they hold the account ID; variables would print unmasked in public logs). `terraform-iac` maps them to the reusable plan by name |
 | Repo | `AWS_REGION` | variable |
-| Repo and environment | `ALB_INGRESS_CIDRS_<ENV>` (repo, for the PR plan) and `ALB_INGRESS_CIDRS` (environment, for apply), both optional, same value | secret: a JSON list such as `["<your IP>/32"]`. Unset means `0.0.0.0/0`. The plan masks each CIDR and the rules hold no CIDR in their names (ADR 0007 S10) |
-| Environment `<env>` | `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets with the same names in every environment, only readable by jobs you approved, so one job definition serves every env (ADR 0008 P5) |
+| Repo and environment | `ALB_INGRESS_CIDRS_<ENV>` (repo, for the PR plan, optional) and `ALB_INGRESS_CIDRS` (environment, **required** for apply), same value | secret: a JSON list such as `["<your IP>/32"]`, or `["0.0.0.0/0"]` to be open on purpose. The apply refuses an empty environment value, so a forgotten secret can never open the ALB (ADR 0008 round 1); the PR plan and the teardown treat unset as `0.0.0.0/0`. The plan masks each CIDR and the rules hold no CIDR in their names (ADR 0007 S10) |
+| Environment `<env>` | `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `ALB_INGRESS_CIDRS` | secrets with the same names in every environment, only readable by jobs you approved, so one job definition serves every env (ADR 0008 P5) |
 | Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
 | Repo | ruleset on the default branch: PR required, no force push, no deletion, status check `guard (no AWS)` required | ruleset |
 | Repo | [`.github/CODEOWNERS`](.github/CODEOWNERS) (`* @trungleviet-agilityio`); "require review from code owners" stays off while there is one maintainer | file |

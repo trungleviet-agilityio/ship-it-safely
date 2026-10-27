@@ -173,8 +173,13 @@ disagree, the ADR wins; update this file.
   `github.event.pull_request.head.repo.full_name == github.repository` and
   `github.event.pull_request.user.login != 'dependabot[bot]'` (not `github.actor`, which zizmor
   flags as spoofable).
-- Never use `pull_request_target`. zizmor (pre-commit) must pass with no ignore comments; the one audit
-  disabled in `.github/zizmor.yml` (`self-repository`, which conflicts with actionlint) is the only exception.
+- Never use `pull_request_target`. zizmor (pre-commit) must pass with no global disables. Two inline ignores are
+  allowed, each on the one line it covers: `# zizmor: ignore[self-repository]` on a local `uses: ./...` line
+  (actionlint rejects the `$/` form zizmor asks for; a self-test requires the comment), and
+  `# zizmor: ignore[github-env]` on the composite step that writes the validated `TF_DIR`.
+- Steps repeated by several Terraform jobs live in the local composite action
+  `.github/actions/terraform-setup` (root, tools, config check, CIDR mask, role, init). harden-runner and
+  checkout stay job steps, and each job keeps its own `allowed-endpoints`.
 - Reusable workflows are named `reusable-*.yml`, have `on: workflow_call` and nothing else, and are the only
   files with that trigger. Callers pass each secret by name, never `secrets: inherit`. A job that assumes a
   role on `main` (apply, deploy, destroy) stays in a top-level file, because the role trust pins that file
