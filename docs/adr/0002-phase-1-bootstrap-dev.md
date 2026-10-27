@@ -1,6 +1,7 @@
 # ADR 0002: Phase 1 bootstrap dev account
 
 - Status: accepted
+- Trust amended by ADR 0007 S2: apply and deploy pin `job_workflow_ref` (file path at `main`) instead of `workflow`; guardrails gain G6 (audit tampering denies); bootstrap gains the trail, alert rule and topic (S8).
 - Deploy role policy amended by ADR 0006 G14: `secretsmanager:DescribeSecret` (metadata only) on the app secret.
 - Date: 2026-10-22
 

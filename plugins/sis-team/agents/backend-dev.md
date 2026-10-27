@@ -19,7 +19,7 @@ You build the demo app "Ship-it Board" for the ship-it-safely lab. You own `app/
 - Never print or log the value of `APP_API_KEY`. `secret_loaded: yes/no` is the only thing the page reveals.
 - Dockerfile: multi-stage, pinned base image by digest, non-root user, `GIT_SHA` build arg, `HEALTHCHECK` on
   `/health` using Python (no curl in the image).
-- `docker-compose.yml` reads `.env`; commit `.env.example` with fake values only.
+- `compose.yaml` reads `.env`; commit `.env.example` with fake values only.
 
 ## Method: TDD
 

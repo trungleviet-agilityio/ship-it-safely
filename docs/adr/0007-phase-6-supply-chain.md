@@ -3,6 +3,13 @@
 - Status: accepted
 - Date: 2026-10-27 (accepted the same day under the user's delegation; see the decision log)
 
+> **As built (2026-10-27):** the bootstrap local and output are `workflow_files` (no `workflow_names` is left).
+> G6 is four Deny statements (`G6DenyAuditTrail`, `G6DenyAlertRule`, `G6DenyAlertTopic`, `G6DenyTrailBucket`),
+> because one statement with mixed resources would apply every action to every resource. `build-image.sh` takes
+> `PYTHON_IMAGE_MIRRORS` as a list whose word `dockerfile` means the `FROM` line as written (default
+> `dockerfile docker.io/library/python`). The orchestrator verified A11 locally: the build-context fallback works
+> with the default docker driver. Where the text below differs, the code and the verify table win.
+
 ## Context
 
 PLAN.md Phase 6 covers NFR-3 to NFR-7 and the items carried forward in PROGRESS.md. Several items were built early, and this ADR checks them against the repo. It then decides what is left: the carried items, the gaps from the conventions doc (G2 to G5), and the NFR-7 stretch.

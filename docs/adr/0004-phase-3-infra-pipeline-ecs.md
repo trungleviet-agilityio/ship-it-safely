@@ -1,6 +1,7 @@
 # ADR 0004: Phase 3 infra pipeline and ECS
 
 - Status: accepted
+- L4 (ALB CIDR from a secret) and L-a (YAML-parser trigger allowlist) are resolved by ADR 0007 S10 and S9.
 - Date: 2026-10-23 (accepted 2026-10-26)
 - L4 (ALB CIDR from a secret) and L-a (YAML-parser trigger allowlist) are deferred to Phase 6 by ADR 0006.
 - Partly superseded by ADR 0005 (Phase 4): `container_command` and the placeholder are removed (E6, E13, E17), and after the secret value is set the next step is the `app-deploy` run, not `--force-new-deployment` (B5).
