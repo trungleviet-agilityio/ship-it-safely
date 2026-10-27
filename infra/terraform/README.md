@@ -25,11 +25,11 @@ Order: `bootstrap` first (it creates the state bucket and the CI roles), then `e
 
 | Command | Does |
 |---|---|
-| `make tf-check` | Offline policy rules (`tf-policy.sh`), README check, `fmt`, `init -backend=false`, `validate`, `terraform test` (own temporary data dir, so a real `init` in a checkout does not disturb it) |
+| `make tf-check` | Offline policy rules (`tf/policy.sh`), README check, `fmt`, `init -backend=false`, `validate`, `terraform test` (own temporary data dir, so a real `init` in a checkout does not disturb it) |
 | `make docs` | Regenerate the `terraform-docs` tables in every README |
 
 `plan`, `apply` and `destroy` are never `make` targets: you run them at the checkpoint, or CI runs them with
 the OIDC roles. `envs/dev` is planned on every pull request and applied on `main` after approval by
 `.github/workflows/terraform-iac.yml`, and destroyed only by the approval-gated
-`.github/workflows/terraform-destroy.yml` (never from `make`); its CI tools are installed by `scripts/install-ci-tools.sh` with
+`.github/workflows/terraform-destroy.yml` (never from `make`); its CI tools are installed by `scripts/ci/install-tools.sh` with
 pinned SHA-256 checksums.

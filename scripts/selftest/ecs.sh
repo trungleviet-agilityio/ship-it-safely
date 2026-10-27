@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Self-tests of the CI helper scripts: the rollout evaluation and wait loop, the preflight, the service status helper and the revision cleanup.
-# Run by scripts/ci-selftest.sh; also runnable alone. A bad fixture must fail with its message.
+# Run by scripts/ci/selftest.sh; also runnable alone. A bad fixture must fail with its message.
 
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
 
-# --- ecs-wait-deployment.sh --evaluate
+# --- ecs/wait-deployment.sh --evaluate
 td_new="arn:aws:ecs:ap-southeast-1:${acct}:task-definition/sis-dev-app:8"
 td_old="arn:aws:ecs:ap-southeast-1:${acct}:task-definition/sis-dev-app:7"
 # svc <status> <deployments json> [events json]
@@ -14,7 +14,7 @@ svc() { printf '{"services":[{"status":"%s","deployments":%s,"events":%s}],"fail
 # Always called inside $( ): the ERR trap is cleared there so exit code 10 (continue) is not reported as a crash.
 eval_json() {
   trap - ERR
-  printf '%s' "$1" | "$ROOT/scripts/ecs-wait-deployment.sh" --evaluate "$td_new"
+  printf '%s' "$1" | "$ROOT/scripts/ecs/wait-deployment.sh" --evaluate "$td_new"
 }
 dep() { printf '{"status":"%s","rolloutState":"%s","taskDefinition":"%s","rolloutStateReason":"%s"}' "$1" "$2" "$3" "${4:-}"; }
 
@@ -42,10 +42,10 @@ expect_fail "evaluate an empty services list" "stack is not up" eval_json '{"ser
 expect_fail "evaluate a MISSING failure" "stack is not up" eval_json '{"services":[],"failures":[{"reason":"MISSING"}]}'
 expect_fail "evaluate an inactive service" "stack is not up" eval_json "$(svc DRAINING "[$(dep PRIMARY COMPLETED "$td_new")]")"
 
-# --- ecs-wait-deployment.sh polling loop
+# --- ecs/wait-deployment.sh polling loop
 progress="$(svc ACTIVE "[$(dep PRIMARY IN_PROGRESS "$td_new")]")"
 completed="$(svc ACTIVE "[$(dep PRIMARY COMPLETED "$td_new")]")"
-wait_script() { stubbed env ECS_WAIT_POLL=0 "$ROOT/scripts/ecs-wait-deployment.sh" c s "$td_new" "$@"; }
+wait_script() { stubbed env ECS_WAIT_POLL=0 "$ROOT/scripts/ecs/wait-deployment.sh" c s "$td_new" "$@"; }
 stub_reset
 stub aws-ecs-describe-services out "$progress" 0
 stub aws-ecs-describe-services out "$completed"
@@ -73,11 +73,11 @@ esac
 case "$out" in *"stack is not up"* | *"$acct"*) die "selftest: the failure must not blame the stack or print digits: $out" ;; esac
 ok "wait loop polls, tolerates two failures, stops on three, and times out"
 
-# --- ecs-preflight.sh
+# --- ecs/preflight.sh
 secret_denied="An error occurred (AccessDeniedException) when calling the GetSecretValue operation for ${acct}"
 version_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 stages_current="{\"${version_id}\":[\"AWSCURRENT\"],\"ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee\":[\"AWSPREVIOUS\"]}"
-preflight() { stubbed env ENV="${PREFLIGHT_ENV:-dev}" "$ROOT/scripts/ecs-preflight.sh"; }
+preflight() { stubbed env ENV="${PREFLIGHT_ENV:-dev}" "$ROOT/scripts/ecs/preflight.sh"; }
 preflight_ready() {
   stub_reset
   stub aws-ecs-describe-services out ACTIVE
@@ -177,9 +177,9 @@ ok "ecs_service_status maps every answer to one of four states and refuses the r
 preflight_ready
 stub aws-ecs-describe-services out STOPPED
 expect_fail "preflight with an unknown service status" "unexpected status" preflight
-# --- ecs-deregister-revisions.sh
+# --- ecs/deregister-revisions.sh
 # dereg [env [max revisions]]
-dereg() { stubbed env ENV="${1:-dev}" MAX_REVISIONS="${2:-200}" DEREGISTER_RETRY_SLEEP=0 "$ROOT/scripts/ecs-deregister-revisions.sh"; }
+dereg() { stubbed env ENV="${1:-dev}" MAX_REVISIONS="${2:-200}" DEREGISTER_RETRY_SLEEP=0 "$ROOT/scripts/ecs/deregister-revisions.sh"; }
 client_exception="An error occurred (ClientException) when calling the DescribeTaskDefinition operation: Unable to describe task definition."
 # dereg_ready <revision>...: the service is gone, the family returns the revisions in order, then ClientException.
 dereg_ready() {
@@ -195,8 +195,8 @@ dereg_ready() {
   stub aws-ecs-deregister-task-definition out INACTIVE
 }
 dereg_ready 9 8 7
-out="$(dereg 2>/dev/null)" || die "selftest: ecs-deregister-revisions failed on three revisions"
-[ "$out" = "DEREGISTERED=3" ] || die "selftest: ecs-deregister-revisions printed: $out"
+out="$(dereg 2>/dev/null)" || die "selftest: ecs/deregister-revisions failed on three revisions"
+[ "$out" = "DEREGISTERED=3" ] || die "selftest: ecs/deregister-revisions printed: $out"
 [ "$(grep -c 'deregister-task-definition' "$sd/calls")" = 3 ] || die "selftest: expected three deregistrations"
 [ "$(grep 'deregister-task-definition' "$sd/calls" | sed 's/.*--task-definition //; s/ .*//' | tr '\n' ' ')" = "sis-dev-app:9 sis-dev-app:8 sis-dev-app:7 " ] \
   || die "selftest: revisions were not deregistered newest first"
@@ -213,7 +213,7 @@ stub aws-ecs-describe-services out INACTIVE
 dereg_ready 3
 [ "$(dereg prod 2>/dev/null)" = "DEREGISTERED=1" ] || die "selftest: the prod revision cleanup failed"
 calls_have "sis-prod-app:3" || die "selftest: ENV=prod must derive sis-prod-app"
-ok "ecs-deregister-revisions cleans every active revision once the service is gone"
+ok "ecs/deregister-revisions cleans every active revision once the service is gone"
 for status in ACTIVE DRAINING; do
   dereg_ready 9
   stub aws-ecs-describe-services out "$status"
@@ -256,16 +256,16 @@ expect_fail "revision cleanup when the revision stays ACTIVE" "expected INACTIVE
 dereg_ready not-a-number
 expect_fail "revision cleanup with a non-numeric revision" "not a revision number" dereg
 
-# --- assumed-role-name.sh: the role name only, never the session name (it carries the run ID)
-role_name() { stubbed "$ROOT/scripts/assumed-role-name.sh"; }
+# --- names.sh role: the role name only, never the session name (it carries the run ID)
+role_name() { stubbed "$ROOT/scripts/names.sh" role; }
 stub_reset
 stub aws-sts-get-caller-identity out "arn:aws:sts::${acct}:assumed-role/sis-dev-gha-apply/gha-apply-12345-1"
-[ "$(role_name 2>/dev/null)" = "sis-dev-gha-apply" ] || die "selftest: assumed-role-name must print the role name only"
+[ "$(role_name 2>/dev/null)" = "sis-dev-gha-apply" ] || die "selftest: names role must print the role name only"
 stub_reset
 stub aws-sts-get-caller-identity out "arn:aws:iam::${acct}:user/someone"
-expect_fail "assumed-role-name for an IAM user" "not an assumed role" role_name
+expect_fail "names role for an IAM user" "not an assumed role" role_name
 stub_reset
 stub aws-sts-get-caller-identity rc 254
 stub aws-sts-get-caller-identity err "An error occurred (ExpiredToken) for ${acct}"
-expect_fail "assumed-role-name without credentials" "not an assumed role" role_name
-ok "assumed-role-name prints the role name and fails closed"
+expect_fail "names role without credentials" "not an assumed role" role_name
+ok "names role prints the role name and fails closed"

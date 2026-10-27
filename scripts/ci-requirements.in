@@ -1,3 +1,0 @@
-# CI-only Python tools. Hash-locked: uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 -o ci-requirements.txt ci-requirements.in
-# The pre-commit version matches mise.toml.
-pre-commit==4.7.0

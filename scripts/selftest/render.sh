@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-tests of the CI helper scripts: the task definition render.
-# Run by scripts/ci-selftest.sh; also runnable alone. A bad fixture must fail with its message.
+# Run by scripts/ci/selftest.sh; also runnable alone. A bad fixture must fail with its message.
 
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
@@ -33,7 +33,7 @@ cat >"$tmp/td-good.json" <<EOF
   }]
 }
 EOF
-render() { "$ROOT/scripts/render-task-def.sh" --env dev "$1" "$image" "$commit"; }
+render() { "$ROOT/scripts/ecs/render-task-def.sh" --env dev "$1" "$image" "$commit"; }
 # mutate <name> <jq filter>: a copy of the good fixture with one thing broken.
 mutate() { jq "$2" "$tmp/td-good.json" >"$tmp/td-$1.json"; }
 
@@ -77,7 +77,7 @@ expect_fail "render with two secrets" "secrets must be exactly APP_API_KEY" rend
 mutate ckey '.containerDefinitions[0].fooBar = true'
 expect_fail "render with an unknown container key" "unknown container key: fooBar" render "$tmp/td-ckey.json"
 # Every denied key is refused, even though the ECS schema has it (the list is read from the script).
-denied_keys="$(sed -n "s/^denied_container_keys='\(.*\)'\$/\1/p" "$ROOT/scripts/render-task-def.sh" | jq -r '.[]')"
+denied_keys="$(sed -n "s/^denied_container_keys='\(.*\)'\$/\1/p" "$ROOT/scripts/ecs/render-task-def.sh" | jq -r '.[]')"
 [ "$(printf '%s\n' "$denied_keys" | wc -l | tr -d ' ')" -ge 8 ] || die "selftest: could not read the denied container keys"
 for k in $denied_keys; do
   mutate "deny-$k" ".containerDefinitions[0].$k = true"
@@ -113,17 +113,17 @@ expect_fail "render with no containers" "exactly one container" render "$tmp/td-
 # A task definition for another environment renders for that environment only.
 sed 's/sis-dev/sis-prod/g; s#sis/dev#sis/prod#g' "$tmp/td-good.json" >"$tmp/td-prod.json"
 image_prod="${image/sis-dev-app/sis-prod-app}"
-"$ROOT/scripts/render-task-def.sh" --env prod "$tmp/td-prod.json" "$image_prod" "$commit" 2>/dev/null \
+"$ROOT/scripts/ecs/render-task-def.sh" --env prod "$tmp/td-prod.json" "$image_prod" "$commit" 2>/dev/null \
   | jq -e '(.tags | map({(.key): .value}) | add).Env == "prod"' >/dev/null || die "selftest: the prod task definition was not rendered with Env prod"
 expect_fail "render of the dev task definition for prod" "the group /ecs/sis-prod-app" \
-  "$ROOT/scripts/render-task-def.sh" --env prod "$tmp/td-good.json" "$image_prod" "$commit"
-expect_fail "render without --env" "usage:" "$ROOT/scripts/render-task-def.sh" "$tmp/td-good.json" "$image" "$commit"
-expect_fail "render with an invalid env" "ENV must be lowercase" "$ROOT/scripts/render-task-def.sh" --env "../x" "$tmp/td-good.json" "$image" "$commit"
+  "$ROOT/scripts/ecs/render-task-def.sh" --env prod "$tmp/td-good.json" "$image_prod" "$commit"
+expect_fail "render without --env" "usage:" "$ROOT/scripts/ecs/render-task-def.sh" "$tmp/td-good.json" "$image" "$commit"
+expect_fail "render with an invalid env" "ENV must be lowercase" "$ROOT/scripts/ecs/render-task-def.sh" --env "../x" "$tmp/td-good.json" "$image" "$commit"
 expect_fail "render with a tag instead of a digest" "image argument" \
-  "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app:latest" "$commit"
+  "$ROOT/scripts/ecs/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app:latest" "$commit"
 expect_fail "render with another repository" "image argument" \
-  "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/other@sha256:${digest}" "$commit"
-expect_fail "render with a short commit" "40 hex" "$ROOT/scripts/render-task-def.sh" --env dev "$tmp/td-good.json" "$image" abc123
+  "$ROOT/scripts/ecs/render-task-def.sh" --env dev "$tmp/td-good.json" "${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/other@sha256:${digest}" "$commit"
+expect_fail "render with a short commit" "40 hex" "$ROOT/scripts/ecs/render-task-def.sh" --env dev "$tmp/td-good.json" "$image" abc123
 # A describe-task-definition response (wrapped in "taskDefinition") renders the same as the bare object.
 jq '{taskDefinition: ., tags: []}' "$tmp/td-good.json" >"$tmp/td-wrapped.json"
 render "$tmp/td-wrapped.json" 2>/dev/null | jq -e '.family == "sis-dev-app"' >/dev/null || die "selftest: wrapped describe output rejected"

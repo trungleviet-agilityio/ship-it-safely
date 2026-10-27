@@ -10,15 +10,15 @@ on:
       - app/**
       - .github/workflows/app-ci.yml
       - scripts/lib.sh
-      - scripts/app-smoke.sh
-      - scripts/build-image.sh
-      - scripts/ci-requirements.txt
-      - scripts/ci-venv.sh
-      - scripts/ci-tools.sha256
-      - scripts/image-name.sh
-      - scripts/image-verify.sh
-      - scripts/install-ci-tools.sh
-      - scripts/scan-image.sh
+      - scripts/image/smoke.sh
+      - scripts/image/build.sh
+      - scripts/ci/requirements.txt
+      - scripts/ci/venv.sh
+      - scripts/ci/tools.sha256
+      - scripts/names.sh
+      - scripts/image/verify.sh
+      - scripts/ci/install-tools.sh
+      - scripts/image/scan.sh
       - mise.toml
 
 permissions: {}
@@ -50,14 +50,14 @@ jobs:
           persist-credentials: false
 
       - name: Install trivy and hadolint (checksum verified)
-        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/tools" trivy hadolint
+        run: scripts/ci/install-tools.sh "$RUNNER_TEMP/tools" trivy hadolint
 
       - name: Lint the Dockerfile
         run: hadolint app/Dockerfile
 
       - name: Install pre-commit (hash locked)
         run: |
-          scripts/ci-venv.sh "$RUNNER_TEMP/venv"
+          scripts/ci/venv.sh "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Python checks (ruff and mypy)
@@ -68,7 +68,7 @@ jobs:
 
       # Build (the unit tests run inside, one platform, one digest), smoke test like Fargate, scan.
       - name: Build, smoke test and scan the image
-        run: scripts/image-verify.sh "$GIT_SHA" "$RUNNER_TEMP/scan"
+        run: scripts/image/verify.sh "$GIT_SHA" "$RUNNER_TEMP/scan"
 
       # The scan step writes the Trivy counts and database version to the job summary.
       - name: Summary

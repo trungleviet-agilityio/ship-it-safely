@@ -1,5 +1,5 @@
 # shellcheck shell=bash disable=SC2034  # the variables are read by the scripts that source this file
-# Shared helpers for scripts/*.sh. Source it; do not run it.
+# Shared helpers for scripts/**/*.sh. Source it; do not run it.
 # Written for the bash 3.2 that ships with macOS: no mapfile, no associative arrays, and an empty
 # array must not be expanded under `set -u`.
 
@@ -121,7 +121,7 @@ web_identity_call() {
     --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
 }
 
-# run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run a Python helper from scripts/ over the
+# run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run a Python helper from scripts/guard/ over the
 # workflow files (default: every .github/workflows/*.yml and *.yaml) with the CI interpreter. The helper prints one
 # violation per line and exits 1 for violations. Env: CI_PYTHON, an interpreter with PyYAML (default: .venv-ci/bin/python
 # from `make venv`, else python3).
@@ -139,7 +139,7 @@ run_workflow_helper() {
     if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
   fi
   "$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
-  out="$("$py" -I "$ROOT/scripts/$helper" "${files[@]}")" || rc=$?
+  out="$("$py" -I "$ROOT/scripts/guard/$helper" "${files[@]}")" || rc=$?
   if [ "$rc" -eq 1 ]; then
     printf '%s\n' "$out" | sed 's/^/  - /' >&2
     die "$(grep -c '' <<<"$out") ${what} violation(s)"

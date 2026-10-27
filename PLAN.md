@@ -204,7 +204,7 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 ## 10. Instructions for Claude Code
 
 - Work phase by phase. At every **Checkpoint**, stop, summarize what was created, and list the exact commands for the user.
-- Look up current versions and SHAs for every action and tool you add; never guess. In use: `actions/checkout`, `aws-actions/configure-aws-credentials`, `actions/upload-artifact`, `actions/download-artifact`, `step-security/harden-runner`. Terraform, tflint, Trivy and hadolint are installed as checksum-verified binaries (`scripts/install-ci-tools.sh`), not through setup actions; ECR and ECS steps use the runner's AWS CLI, not the render/deploy actions (ADR 0005 F5, F8).
+- Look up current versions and SHAs for every action and tool you add; never guess. In use: `actions/checkout`, `aws-actions/configure-aws-credentials`, `actions/upload-artifact`, `actions/download-artifact`, `step-security/harden-runner`. Terraform, tflint, Trivy and hadolint are installed as checksum-verified binaries (`scripts/ci/install-tools.sh`), not through setup actions; ECR and ECS steps use the runner's AWS CLI, not the render/deploy actions (ADR 0005 F5, F8).
 - After every change, run `terraform fmt`, `validate` and `tflint`, plus `actionlint` and `hadolint` if available.
 - Never write secrets, real `.env` files or state files to git (NFR-9 applies).
 - Commit per phase, e.g. `feat(app-ecs): fargate service with secrets manager injection`.

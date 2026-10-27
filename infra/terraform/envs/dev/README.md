@@ -28,7 +28,7 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
   conditions depend on them, and standalone security group rules need them to be changeable.
 - **ALB ingress.** Open to `0.0.0.0/0` unless the optional repository secret `ALB_INGRESS_CIDRS_DEV` is set
   (a JSON list such as `["<your IP>/32"]`). CI passes it as `TF_VAR_alb_ingress_cidrs_json` and masks each
-  element in the log (`scripts/mask-cidrs.sh`). Only IPv4 CIDRs are accepted. A wrong value locks you out of
+  element in the log (`scripts/tf/mask-cidrs.sh`). Only IPv4 CIDRs are accepted. A wrong value locks you out of
   the ALB, never out of CI (ADR 0007 S10).
 - **Placeholder image.** `container_image` in `terraform.tfvars` is a digest-pinned image with no command, so
   it never serves. The first deployment after a create stalls by design (ADR 0005, F2) until app-deploy sets

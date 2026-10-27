@@ -1,4 +1,4 @@
-# Base pinned by index digest in one literal FROM so Dependabot can bump it; scripts/build-image.sh can swap the registry with a named build context (ADR 0007 S21).
+# Base pinned by index digest in one literal FROM so Dependabot can bump it; scripts/image/build.sh can swap the registry with a named build context (ADR 0007 S21).
 FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS base
 
 FROM base AS test

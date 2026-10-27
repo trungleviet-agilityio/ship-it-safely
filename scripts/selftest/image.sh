@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Self-tests of the CI helper scripts: the image build mirror policy, the ECR push and the image archive export and import.
-# Run by scripts/ci-selftest.sh; also runnable alone. A bad fixture must fail with its message.
+# Run by scripts/ci/selftest.sh; also runnable alone. A bad fixture must fail with its message.
 
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
 
-# --- build-image.sh mirror policy: a registry refusal moves to the next mirror through a named build context (same
+# --- image/build.sh mirror policy: a registry refusal moves to the next mirror through a named build context (same
 # digest); other failures are final. The fixture Dockerfile has the one literal base line (ADR 0007 S21), so the test
 # does not depend on the live app/Dockerfile.
 mkdir -p "$tmp/app-fixture"
 printf 'FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:%s AS base\nFROM base AS test\nFROM base AS runtime\n' "$digest" >"$tmp/app-fixture/Dockerfile"
-build() { stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" PYTHON_IMAGE_MIRRORS="dockerfile mirror-b" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
+build() { stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" PYTHON_IMAGE_MIRRORS="dockerfile mirror-b" "$ROOT/scripts/image/build.sh" "$commit" sis-app:test; }
 data_limit="429 Too Many Requests - Server message: toomanyrequests: Data limit exceeded"
 stub_reset
 stub docker-buildx rc 1 0
@@ -26,7 +26,7 @@ ok "build falls back to the next mirror through a named build context on a regis
 stub_reset
 stub docker-buildx rc 1 0
 stub docker-buildx err "$data_limit" 0
-stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test >/dev/null 2>&1 \
+stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" "$ROOT/scripts/image/build.sh" "$commit" sis-app:test >/dev/null 2>&1 \
   || die "selftest: the default mirrors should succeed on the second attempt"
 grep -q -- "base=docker-image://docker.io/library/python:3.13-slim@sha256:${digest} " "$sd/calls" \
   || die "selftest: the default fallback must be Docker Hub with the Dockerfile digest"
@@ -56,7 +56,7 @@ expect_fail "build when every registry keeps refusing" "kept refusing after 4 at
 ref_digest="sha256:${digest}"
 oci="application/vnd.oci.image.manifest.v1+json"
 ecr_line() { printf '%s\t%s\n' "$1" "$2"; }
-ecr_push() { stubbed env ACCOUNT="$acct" REGION=ap-southeast-1 "$ROOT/scripts/ecr-push.sh" sis-dev-app "$commit" sis-app:local; }
+ecr_push() { stubbed env ACCOUNT="$acct" REGION=ap-southeast-1 "$ROOT/scripts/image/ecr-push.sh" sis-dev-app "$commit" sis-app:local; }
 stub_reset
 stub aws-ecr-describe-images out "$(ecr_line "$ref_digest" "$oci")"
 out="$(ecr_push 2>/dev/null)" || die "selftest: ecr-push of an existing tag failed"
@@ -84,17 +84,17 @@ stub_reset
 stub aws-ecr-describe-images out "$(ecr_line "sha256:abc" "$oci")"
 expect_fail "ecr-push with a malformed digest" "unexpected format" ecr_push
 
-# --- image-export.sh, image-import.sh
+# --- image/export.sh, image/import.sh
 stub_reset
-export_out="$(stubbed "$ROOT/scripts/image-export.sh" "$commit" "$tmp/export" 2>/dev/null)" || die "selftest: image-export failed"
-[ "$export_out" = "sha256=$(sha256_of "$tmp/export/image.tar")" ] || die "selftest: image-export printed: $export_out"
-calls_have "docker save -o $tmp/export/image.tar sis-app:${commit}" || die "selftest: image-export saved the wrong image"
+export_out="$(stubbed "$ROOT/scripts/image/export.sh" "$commit" "$tmp/export" 2>/dev/null)" || die "selftest: image/export failed"
+[ "$export_out" = "sha256=$(sha256_of "$tmp/export/image.tar")" ] || die "selftest: image/export printed: $export_out"
+calls_have "docker save -o $tmp/export/image.tar sis-app:${commit}" || die "selftest: image/export saved the wrong image"
 tar_sum="$(sha256_of "$tmp/export/image.tar")"
 stub_reset
-stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" "$tar_sum" >/dev/null 2>&1 || die "selftest: image-import of the right archive failed"
-calls_have "docker load -i $tmp/export/image.tar" || die "selftest: image-import did not load the archive"
+stubbed "$ROOT/scripts/image/import.sh" "$tmp/export/image.tar" "$tar_sum" >/dev/null 2>&1 || die "selftest: image/import of the right archive failed"
+calls_have "docker load -i $tmp/export/image.tar" || die "selftest: image/import did not load the archive"
 stub_reset
-expect_fail "image-import with the wrong sha256" "differs from the build job output" stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" "$digest"
+expect_fail "image/import with the wrong sha256" "differs from the build job output" stubbed "$ROOT/scripts/image/import.sh" "$tmp/export/image.tar" "$digest"
 ! calls_have "docker load" || die "selftest: a tampered archive must not be loaded"
-expect_fail "image-import with a malformed sha256" "64 hex" stubbed "$ROOT/scripts/image-import.sh" "$tmp/export/image.tar" abc
+expect_fail "image/import with a malformed sha256" "64 hex" stubbed "$ROOT/scripts/image/import.sh" "$tmp/export/image.tar" abc
 ok "image export and import verify the archive before docker load"
