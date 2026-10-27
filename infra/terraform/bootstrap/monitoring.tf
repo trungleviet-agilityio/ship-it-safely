@@ -10,9 +10,7 @@ locals {
   # Built from names, not from aws_cloudtrail.this: the bucket policy must exist before the trail can be created.
   trail_arn  = "arn:${local.partition}:cloudtrail:${local.region}:${local.account_id}:trail/${local.trail_name}"
   topic_name = "${local.name}-security-alerts"
-  topic_arn  = "arn:${local.partition}:sns:${local.region}:${local.account_id}:${local.topic_name}"
   rule_name  = "${local.name}-oidc-unexpected"
-  rule_arn   = "arn:${local.partition}:events:${local.region}:${local.account_id}:rule/${local.rule_name}"
 
   # The subjects a healthy pipeline presents. They hold owner and repo IDs, never the account ID.
   expected_subs = distinct([for t in local.trust : t.sub])
@@ -183,7 +181,7 @@ data "aws_iam_policy_document" "security_alerts" {
     sid       = "EventBridgePublish"
     effect    = "Allow"
     actions   = ["sns:Publish"]
-    resources = [local.topic_arn]
+    resources = [aws_sns_topic.security_alerts.arn]
 
     principals {
       type        = "Service"
@@ -193,7 +191,7 @@ data "aws_iam_policy_document" "security_alerts" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [local.rule_arn]
+      values   = [aws_cloudwatch_event_rule.oidc_unexpected.arn]
     }
   }
 }

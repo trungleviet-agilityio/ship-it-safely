@@ -244,16 +244,32 @@ run "job_workflow_ref_pinned" {
 run "only_documented_condition_keys" {
   command = plan
 
-  # Documented GitHub keys in the IAM condition keys reference. event_name and workflow_ref are not on the list.
+  # Documented GitHub keys in the IAM condition keys reference, plus the global aws:RequestedRegion.
+  # event_name and workflow_ref are not on the list.
   assert {
     condition = alltrue(flatten([
       for k, d in data.aws_iam_policy_document.trust : [
         for c in d.statement[0].condition : contains(
-          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "job_workflow_ref"],
+          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "job_workflow_ref", "aws:RequestedRegion"],
           trimprefix(c.variable, "token.actions.githubusercontent.com:")
         )
       ]
     ]))
-    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, job_workflow_ref"
+    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, job_workflow_ref, aws:RequestedRegion"
+  }
+}
+
+run "requested_region_pinned_on_every_role" {
+  command = plan
+
+  # The alert rule sees one region only; a call through the global endpoint carries us-east-1 and is refused.
+  assert {
+    condition = alltrue([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : c.test == "StringEquals" && c.values == ["ap-southeast-1"]
+        if c.variable == "aws:RequestedRegion"
+      ] != [] && length([for c in d.statement[0].condition : c if c.variable == "aws:RequestedRegion"]) == 1
+    ])
+    error_message = "every role must require aws:RequestedRegion = the bootstrap region, exactly once"
   }
 }

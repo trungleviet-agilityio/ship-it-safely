@@ -184,6 +184,16 @@ run "alb_ingress_follows_the_input" {
   }
 }
 
+run "validation_rejects_an_ipv6_alb_cidr" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs = ["::/0"]
+  }
+
+  expect_failures = [var.alb_ingress_cidrs]
+}
+
 run "validation_rejects_an_invalid_alb_cidr" {
   command = plan
 

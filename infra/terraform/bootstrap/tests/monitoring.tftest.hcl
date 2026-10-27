@@ -14,6 +14,12 @@ mock_provider "aws" {
   mock_resource "aws_iam_policy" {
     defaults = { arn = "arn:aws:iam::123456789012:policy/mock" }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:ap-southeast-1:123456789012:sis-dev-security-alerts" }
+  }
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = { arn = "arn:aws:events:ap-southeast-1:123456789012:rule/sis-dev-oidc-unexpected" }
+  }
 }
 
 variables {
@@ -188,7 +194,7 @@ run "topic_policy_and_subscription" {
           && toset(s.actions) == toset(["sns:Publish"])
           && toset(flatten([for p in s.principals : p.identifiers])) == toset(["events.amazonaws.com"])
           && anytrue([
-            for c in s.condition : c.variable == "aws:SourceArn" && toset(c.values) == toset([local.rule_arn])
+            for c in s.condition : c.variable == "aws:SourceArn" && toset(c.values) == toset([aws_cloudwatch_event_rule.oidc_unexpected.arn])
           ])
         )
       ])
