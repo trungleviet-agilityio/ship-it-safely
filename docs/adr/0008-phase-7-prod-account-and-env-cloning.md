@@ -467,6 +467,18 @@ AWS_PROFILE=sis-dev-admin aws s3 ls s3://sis-dev-tfstate-<DEV_ACCOUNT_ID>-ap-sou
 ```
 Expect `terraform.tfstate` under the unchanged key. Then re-run and approve `app-deploy`; `/version` shows the `main` SHA. Then Run workflow `terraform-destroy`: env `dev`, type **destroy-dev**, approve. Expect 27 destroyed and no account ID in any log.
 
+### PR A checkpoint results (2026-10-27)
+
+| Step | Result |
+|---|---|
+| A1 | `dev` environment secrets `AWS_ACCOUNT_ID` and `ALB_INGRESS_CIDRS` (`["0.0.0.0/0"]`, no repo CIDR set) added in the web UI: the PAT has no "Environments: write". Repo secrets are only `AWS_ACCOUNT_ID_DEV` and `AWS_PLAN_ROLE_ARN_DEV`, so nothing shadows an environment name (N2) |
+| A2 | #27 checks green: `guard (no AWS)`, `checks (no AWS)`, `plan-dev / plan (read-only role)` and `plan-dev / plan role guardrails` in block mode (first run of the reusable plan, no blocked host). `plan-dev / sticky plan comment` failed with exit 127 until #26 was merged (it runs `scripts/` from `main`), then posted `terraform-iac:plan:dev` with 27 to add |
+| A3 | Covered by e2e: `new-env.sh qa` dry run, real run in a scratch clone (validate and test pass), refusal of reruns and bad names, parity guard results |
+| A4 | The #26 merge apply (old workflow) created the stack: 27 added. The #27 merge apply (new reusable layout, composite setup, explicit CIDR list) then planned `No changes` and applied 0, which proves the layout change is drift-free. Secret value set; app-deploy green (account ID in log: 0); `/version` = `cc9a4c0` with its digest. Teardown with input `env=dev` and **destroy-dev**: 27 destroyed, revisions deregistered, account ID in log: 0 |
+
+Not observed: a blocked host (none occurred). Dependabot's docker job failed on an ECR Public 429 again (lesson 42),
+not on the config.
+
 ### PR B
 
 **B0. Answer Q1 to Q4 first.**
