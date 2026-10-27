@@ -123,3 +123,30 @@ expect_fail "guardrails when the plan role could create a VPC" "N3 (plan role, C
 guardrails_ready
 stub aws-ec2-create-vpc rc 0
 expect_fail "guardrails when the VPC call succeeds" "N3 (plan role, CreateVpc dry run) failed: the call succeeded" guardrails
+
+# --- tf-destroy-report.sh: the heading states the real outcome (ADR 0007 S12)
+# report <deletes> <apply outcome> [deregistered]: without the third argument DEREGISTERED stays unset.
+report() {
+  local dereg=()
+  if [ $# -ge 3 ]; then dereg=("DEREGISTERED=$3"); fi
+  env -u DEREGISTERED ENV=dev DELETES="$1" APPLY_OUTCOME="$2" ROLE=sis-dev-gha-apply ${dereg[@]+"${dereg[@]}"} "$ROOT/scripts/tf-destroy-report.sh"
+}
+report_head() { report "$@" | head -n1; }
+[ "$(report_head 5 success 4)" = "### Destroyed (dev)" ] || die "selftest: a successful destroy must be headed Destroyed"
+[ "$(report_head 5 failure 0)" = "### Destroy failed (dev)" ] || die "selftest: a failed apply must be headed Destroy failed"
+[ "$(report_head 5 skipped 0)" = "### Destroy failed (dev)" ] || die "selftest: an apply that did not succeed must not read as Destroyed"
+[ "$(report_head 0 skipped 0)" = "### Nothing to destroy (dev)" ] || die "selftest: an empty plan must be headed Nothing to destroy"
+[ "$(report_head "" skipped 0)" = "### Destroy did not finish (dev)" ] || die "selftest: a missing plan check must be headed Destroy did not finish"
+case "$(report 5 success 4)" in
+  *"Resources: 5 deleted"*"deregistered: 4"*'Role: `sis-dev-gha-apply`'*) ;;
+  *) die "selftest: unexpected destroy report body" ;;
+esac
+case "$(report 5 failure)" in
+  *"deregistered: not known (the cleanup did not start)"*) ;;
+  *) die "selftest: an unset DEREGISTERED must read as not known" ;;
+esac
+case "$(report 5 failure 0)" in
+  *"5 planned; the apply did not succeed (failure)"*) ;;
+  *) die "selftest: a failed apply must say so" ;;
+esac
+ok "destroy report headings follow the real outcome"
