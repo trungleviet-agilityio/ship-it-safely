@@ -120,6 +120,7 @@ one role. The role's trust policy decides which tokens it accepts (ADR 0002 B13,
 | `repository_id`, `repository_owner_id` | numeric IDs | The same, as a second check |
 | `ref` on the plan role | `StringLike refs/pull/*/merge` | `pull_request_target` runs and dispatched runs, which carry `refs/heads/main` |
 | `ref` on apply and deploy | `refs/heads/main` | A branch run that adds `environment: dev` to a job |
+| `aws:RequestedRegion` on every role | `ap-southeast-1` | An assumption through another region's STS or the global endpoint, where the security alert does not look (ADR 0007 verify M1) |
 | `job_workflow_ref` on apply and deploy | `OWNER/REPO/.github/workflows/terraform-iac.yml@refs/heads/main` and `.../terraform-destroy.yml@refs/heads/main` (apply); `.../app-deploy.yml@refs/heads/main` (deploy) | Any other workflow file, even one that copies a trusted `name:`; a renamed file needs a bootstrap re-apply (ADR 0007 S2) |
 
 Gates outside the trust policy:
@@ -132,7 +133,9 @@ Gates outside the trust policy:
 - **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch` (checked with a
   real YAML parser).
 - **Security alert:** a CloudTrail trail plus an EventBridge rule email you (SNS) about every refused
-  `AssumeRoleWithWebIdentity` and any assumption with a `sub` other than the two trusted ones (ADR 0007 S8).
+  `AssumeRoleWithWebIdentity` in ap-southeast-1 and any assumption with a `sub` other than the two trusted ones
+  (ADR 0007 S8). The region pin means a success can only happen there; refused probes in other regions are not
+  alerted (accepted: they grant nothing).
 
 ## Pipelines (`.github/workflows/`)
 
