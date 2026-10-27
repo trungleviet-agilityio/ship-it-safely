@@ -259,11 +259,17 @@ gh run view "$RUN_ID" --repo trungleviet-agilityio/ship-it-safely --log | grep -
 **8. Verify that nothing is left (admin, read-only)**
 
 ```bash
-AWS_PROFILE=sis-dev-admin aws resourcegroupstaggingapi get-resources --region ap-southeast-1 --tag-filters Key=Project,Values=ship-it-safely Key=Env,Values=dev --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' | grep -Ev ':(iam|s3|budgets)::' || echo "only bootstrap resources left"
+AWS_PROFILE=sis-dev-admin aws ecs describe-clusters --region ap-southeast-1 --clusters sis-dev-cluster --query 'clusters[0].status' --output text   # INACTIVE or None
+AWS_PROFILE=sis-dev-admin aws elbv2 describe-load-balancers --region ap-southeast-1 --names sis-dev-alb 2>&1 | grep -o LoadBalancerNotFound
+AWS_PROFILE=sis-dev-admin aws ec2 describe-vpcs --region ap-southeast-1 --filters Name=tag:Project,Values=ship-it-safely Name=tag:Env,Values=dev --query 'length(Vpcs)' --output text   # expect 0
 AWS_PROFILE=sis-dev-admin aws ecs list-task-definitions --region ap-southeast-1 --family-prefix sis-dev-app --status ACTIVE --query 'taskDefinitionArns' --output text   # expect empty
 AWS_PROFILE=sis-dev-admin aws ecr describe-repositories --region ap-southeast-1 --repository-names sis-dev-app 2>&1 | grep -o RepositoryNotFoundException
 AWS_PROFILE=sis-dev-admin aws secretsmanager describe-secret --region ap-southeast-1 --secret-id sis/dev/app-api-key 2>&1 | grep -o ResourceNotFoundException
 ```
+
+Ask each service, not the Resource Groups Tagging API: it keeps listing deleted clusters, services and
+security-group rules for a while, and lists `INACTIVE` (deregistered) task definitions until they are deleted with
+`DeleteTaskDefinitions` (checkpoint run, 2026-10-26). `INACTIVE` revisions cost nothing and cannot run.
 
 **9. N7: idempotent second run.** Web UI: Run workflow with `destroy-dev` again, then approve. Expect green with the notice "nothing to destroy" and 0 revisions deregistered.
 
