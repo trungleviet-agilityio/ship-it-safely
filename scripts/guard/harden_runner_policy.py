@@ -15,7 +15,12 @@ Rules, per job:
   4. every allowed endpoint is `host:port` and holds no 12-digit literal (an account ID);
   5. in a credentialed job an endpoint holds no `*`, and the only expressions are the ones in
      ALLOWED_EXPRESSIONS (account hosts come from the secret, never from a literal);
-  6. in any other job no endpoint holds a `secrets.` expression.
+  6. in any other job (audit) an endpoint may not use `secrets` in any form (`secrets.`,
+     `secrets[`, `toJSON(secrets)`), nor an `env.X` whose value is built from a secret
+     (ADR 0007 N1 Low, ADR 0008 P8);
+  7. a job with `uses:` calls a reusable workflow. It has no steps, so it is checked through its
+     callee (the reusable-*.yml file is checked like any workflow). It must call
+     ./.github/workflows/reusable-*.yml and must not pass `secrets: inherit`.
 
 Usage: python -I scripts/guard/harden_runner_policy.py <workflow file>...
 Prints one violation per line on stdout, with paths relative to the working directory.
@@ -38,7 +43,11 @@ ENDPOINT = re.compile(r"(?:\$\{\{.*?\}\}|\S)+")
 EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 PORT = re.compile(r":[0-9]{1,5}$")
 ACCOUNT_ID = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
-ALLOWED_EXPRESSIONS = ("vars.AWS_REGION", "secrets.AWS_ACCOUNT_ID_DEV", "env.ENV")
+# The account ID is the environment secret AWS_ACCOUNT_ID (a reusable workflow gets that name too).
+ALLOWED_EXPRESSIONS = ("vars.AWS_REGION", "secrets.AWS_ACCOUNT_ID", "env.ENV")
+SECRETS_REF = re.compile(r"\bsecrets\b")
+ENV_REF = re.compile(r"^env\.([A-Za-z_][A-Za-z0-9_]*)$")
+REUSABLE_CALL = re.compile(r"^\./\.github/workflows/reusable-[A-Za-z0-9._-]+\.ya?ml$")
 # The one credentialed job that needs Docker (docker load and docker push), so it cannot disable
 # containers. The residual risk is recorded in ADR 0007. Keyed by (workflow file name, job id).
 NEEDS_CONTAINERS = (("app-deploy.yml", "deploy"),)
@@ -50,7 +59,7 @@ def _has_id_token(permissions: Any) -> bool:
     return isinstance(permissions, dict) and permissions.get("id-token") == "write"
 
 
-def _endpoint_problems(endpoint: str, credentialed: bool) -> list[str]:
+def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -> list[str]:
     problems: list[str] = []
     expressions = EXPRESSION.findall(endpoint)
     literal = EXPRESSION.sub("", endpoint)
@@ -67,12 +76,24 @@ def _endpoint_problems(endpoint: str, credentialed: bool) -> list[str]:
             for e in expressions
             if e not in ALLOWED_EXPRESSIONS
         )
-    elif any(e.startswith("secrets.") for e in expressions):
-        problems.append(f"endpoint '{endpoint}' reads a secret in a job without credentials")
+    else:
+        for e in expressions:
+            ref = ENV_REF.match(e)
+            if SECRETS_REF.search(e):
+                problems.append(
+                    f"endpoint '{endpoint}' reads a secret in a job without credentials"
+                )
+            elif ref and SECRETS_REF.search(str(env.get(ref.group(1), ""))):
+                problems.append(
+                    f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret, "
+                    "in a job without credentials"
+                )
     return problems
 
 
-def _step_problems(step: Any, credentialed: bool, needs_containers: bool) -> list[str]:
+def _step_problems(
+    step: Any, credentialed: bool, needs_containers: bool, env: dict[str, Any]
+) -> list[str]:
     uses = step.get("uses") if isinstance(step, dict) else None
     if not isinstance(uses, str) or not uses.startswith(ACTION):
         return ["the first step is not step-security/harden-runner"]
@@ -97,8 +118,27 @@ def _step_problems(step: Any, credentialed: bool, needs_containers: bool) -> lis
         problems.append("has no id-token: write, so egress-policy must be audit (written out)")
     endpoints = with_.get("allowed-endpoints")
     for endpoint in ENDPOINT.findall(endpoints if isinstance(endpoints, str) else ""):
-        problems.extend(_endpoint_problems(endpoint, credentialed))
+        problems.extend(_endpoint_problems(endpoint, credentialed, env))
     return problems
+
+
+def _call_problems(job: dict[str, Any]) -> list[str]:
+    problems: list[str] = []
+    if not REUSABLE_CALL.match(str(job["uses"])):
+        problems.append("a reusable call must target ./.github/workflows/reusable-*.yml")
+    if job.get("secrets") == "inherit":
+        problems.append("a reusable call must pass its secrets by name, never `secrets: inherit`")
+    return problems
+
+
+def _merged_env(document: Any, job: dict[str, Any], step: Any) -> dict[str, Any]:
+    """Workflow, job and first-step `env:` values, the narrowest scope winning."""
+    merged: dict[str, Any] = {}
+    for scope in (document, job, step):
+        env = scope.get("env") if isinstance(scope, dict) else None
+        if isinstance(env, dict):
+            merged.update(env)
+    return merged
 
 
 def check(shown: str, document: Any) -> list[str]:
@@ -110,12 +150,17 @@ def check(shown: str, document: Any) -> list[str]:
     problems: list[str] = []
     for job_id, job in jobs.items():
         job = job if isinstance(job, dict) else {}
+        if "uses" in job:
+            problems.extend(f"{shown}: job '{job_id}': {m}" for m in _call_problems(job))
+            continue
         # A job without its own `permissions:` inherits the workflow's.
         credentialed = _has_id_token(job.get("permissions", workflow_permissions))
         steps = job.get("steps")
         first = steps[0] if isinstance(steps, list) and steps else None
         needs_containers = (os.path.basename(shown), job_id) in NEEDS_CONTAINERS
-        messages = _step_problems(first, credentialed, needs_containers)
+        messages = _step_problems(
+            first, credentialed, needs_containers, _merged_env(document, job, first)
+        )
         if credentialed:
             messages += [
                 f"has id-token: write, so `{k}:` is not allowed"

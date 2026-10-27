@@ -1,0 +1,7 @@
+# zizmor settings. Every audit stays on except the one below (ADR 0008, deviation D2).
+rules:
+  # It asks for `uses: $/.github/workflows/...` instead of `./...`. actionlint (a required `make lint` step) rejects
+  # the `$/` form as not following "owner/repo/path@ref" or "./path", so the two tools disagree. Both forms resolve to
+  # the same commit as the caller. Remove this entry once actionlint accepts `$/`, then switch the one caller job.
+  self-repository:
+    disable: true

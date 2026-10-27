@@ -25,7 +25,16 @@ names="$(ENV=prod "$ROOT/scripts/names.sh" app)"
 [ "$names" = "$(printf 'CLUSTER=sis-prod-cluster\nSERVICE=sis-prod-app\nFAMILY=sis-prod-app\nREPOSITORY=sis-prod-app')" ] || die "selftest: names app printed: $names"
 [ "$("$ROOT/scripts/names.sh" app | head -n1)" = "CLUSTER=sis-dev-cluster" ] || die "selftest: names app must default to dev"
 [ "$("$ROOT/scripts/names.sh" image "$commit")" = "sis-app:${commit}" ] || die "selftest: names image printed the wrong name"
-ok "lib helpers: die, run_capture and names"
+[ "$(ENV=dev "$ROOT/scripts/names.sh" env-root)" = "infra/terraform/envs/dev" ] || die "selftest: names env-root printed the wrong root"
+[ "$("$ROOT/scripts/names.sh" env-root)" = "infra/terraform/envs/dev" ] || die "selftest: names env-root must default to dev"
+for bad_env in Dev a toolongname ../x "dev prod"; do
+  expect_fail "names env-root with ENV '$bad_env'" "ENV must be" env ENV="$bad_env" "$ROOT/scripts/names.sh" env-root
+done
+expect_fail "names env-root for a root that does not exist" "no environment root" env ENV=zz "$ROOT/scripts/names.sh" env-root
+# valid_env: the one name rule (ADR 0008, P4): 2 to 8 lowercase letters and digits, starting with a letter.
+for good_env in dev prod qa a1 abcdefgh; do valid_env "$good_env" || die "selftest: valid_env rejected '$good_env'"; done
+for bad_env in "" a Dev 1ab abcdefghi a-b "a b" "$(printf 'qa\n../x')"; do ! valid_env "$bad_env" || die "selftest: valid_env accepted '${bad_env//$'\n'/ NEWLINE }'"; done
+ok "lib helpers: die, run_capture, names and the environment name rule"
 
 # --- ci/install-tools.sh on scratch copies: nothing here touches the network (CI_TOOLS_BASE_URL is a directory)
 mkdir -p "$tmp/mirror" "$tmp/pack"
@@ -92,7 +101,7 @@ ok "redact filter replaces 12-digit runs"
 # scan`, which need Docker and the trivy database; their argument contracts are checked here, with the rest.
 # A script that takes arguments prints its usage when called with none.
 for s in image/build image/smoke ecs/render-task-def image/verify image/export image/import image/ecr-push aws/check-config \
-  aws/assert-web-identity-denied aws/assert-session-cap ci/venv tf/resolved-sources; do
+  aws/assert-web-identity-denied aws/assert-session-cap ci/venv tf/resolved-sources tf/new-env; do
   expect_fail "$s without arguments" "usage:" "$ROOT/scripts/$s.sh"
 done
 expect_fail "names without arguments" "usage:" "$ROOT/scripts/names.sh"

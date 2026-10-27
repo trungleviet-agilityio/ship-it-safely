@@ -477,11 +477,77 @@ run "validation_rejects_one_az" {
   expect_failures = [var.azs]
 }
 
-run "validation_rejects_unknown_env" {
+run "validation_accepts_a_new_env_name" {
   command = plan
 
   variables {
     env = "qa"
+  }
+}
+
+run "validation_accepts_prod" {
+  command = plan
+
+  variables {
+    env = "prod"
+  }
+}
+
+run "validation_rejects_env_uppercase" {
+  command = plan
+
+  variables {
+    env = "Dev"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "validation_rejects_env_one_character" {
+  command = plan
+
+  variables {
+    env = "a"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "validation_rejects_env_nine_characters" {
+  command = plan
+
+  variables {
+    env = "toolongnm"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "validation_rejects_env_leading_digit" {
+  command = plan
+
+  variables {
+    env = "9qa"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "validation_rejects_env_hyphen" {
+  command = plan
+
+  variables {
+    env = "qa-x"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "validation_rejects_env_path" {
+  command = plan
+
+  variables {
+    env = "../x"
   }
 
   expect_failures = [var.env]

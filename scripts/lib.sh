@@ -121,12 +121,22 @@ web_identity_call() {
     --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
 }
 
+# ci_python: print the interpreter the guard helpers use (a Python with PyYAML): CI_PYTHON, else .venv-ci/bin/python
+# from `make venv`, else python3. Dies with the fix when PyYAML is missing.
+ci_python() {
+  local py="${CI_PYTHON:-}"
+  if [ -z "$py" ]; then
+    if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
+  fi
+  "$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
+  printf '%s' "$py"
+}
+
 # run_workflow_helper <helper.py> <what it enforces> [workflow file ...]: run a Python helper from scripts/guard/ over the
-# workflow files (default: every .github/workflows/*.yml and *.yaml) with the CI interpreter. The helper prints one
-# violation per line and exits 1 for violations. Env: CI_PYTHON, an interpreter with PyYAML (default: .venv-ci/bin/python
-# from `make venv`, else python3).
+# workflow files (default: every .github/workflows/*.yml and *.yaml) with the CI interpreter (ci_python). The helper
+# prints one violation per line and exits 1 for violations.
 run_workflow_helper() {
-  local helper="$1" what="$2" py="${CI_PYTHON:-}" f out rc=0
+  local helper="$1" what="$2" py f out rc=0
   shift 2
   local files=("$@")
   if [ ${#files[@]} -eq 0 ]; then
@@ -135,10 +145,7 @@ run_workflow_helper() {
     done
     [ ${#files[@]} -gt 0 ] || die "no workflow files found under .github/workflows"
   fi
-  if [ -z "$py" ]; then
-    if [ -x "$ROOT/.venv-ci/bin/python" ]; then py="$ROOT/.venv-ci/bin/python"; else py=python3; fi
-  fi
-  "$py" -I -c 'import yaml' >/dev/null 2>&1 || die "pyyaml missing: run make venv (hash locked)"
+  py="$(ci_python)"
   out="$("$py" -I "$ROOT/scripts/guard/$helper" "${files[@]}")" || rc=$?
   if [ "$rc" -eq 1 ]; then
     printf '%s\n' "$out" | sed 's/^/  - /' >&2
@@ -157,16 +164,30 @@ sha256_of() {
 # image_name <commit sha>: the local image name every build, smoke, scan and push step uses.
 image_name() { printf 'sis-app:%s' "$1"; }
 
-# valid_env <name>: an environment name is lowercase letters and digits, starting with a letter (ADR 0001, naming).
+# The one rule for an environment name (ADR 0008, P4): 2 to 8 lowercase letters and digits, starting with a letter. The
+# cap keeps every AWS name built from it in its limit. The Terraform validations use the same pattern. RESERVED_ENVS
+# are names that would collide with a directory or a word in the repo (new-env.sh refuses them).
+ENV_NAME_RE='^[a-z][a-z0-9]{1,7}$'
+RESERVED_ENVS="local bootstrap modules tests shared all env"
+ENV_NAME_HINT="2 to 8 lowercase letters and digits, starting with a letter"
+
+# valid_env <name>: [[ =~ ]] matches the whole value, so a newline cannot smuggle a second line past it.
 valid_env() {
-  local re='^[a-z][a-z0-9]*$' # [[ =~ ]] matches the whole value, so a newline cannot smuggle a second line past it
-  [[ "$1" =~ $re ]]
+  [[ "$1" =~ $ENV_NAME_RE ]]
 }
 
 # require_env: ENV defaults to dev and must be a valid environment name.
 require_env() {
   ENV="${ENV:-dev}"
-  valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
+  valid_env "$ENV" || die "ENV must be lowercase letters and digits (${ENV_NAME_HINT}), got '$ENV'"
+}
+
+# env_root <env>: print the Terraform root of an environment (relative to the repo root). Dies when the name is invalid or
+# the root does not exist, so a typo never reaches a credentialed step.
+env_root() {
+  valid_env "$1" || die "ENV must be lowercase letters and digits (${ENV_NAME_HINT}), got '$1'"
+  [ -d "$ROOT/infra/terraform/envs/$1" ] || die "no environment root infra/terraform/envs/$1"
+  printf 'infra/terraform/envs/%s' "$1"
 }
 
 # app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).

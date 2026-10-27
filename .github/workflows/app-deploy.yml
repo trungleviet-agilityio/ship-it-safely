@@ -116,7 +116,7 @@ jobs:
             github.com:443
             sts.${{ vars.AWS_REGION }}.amazonaws.com:443
             api.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
-            ${{ secrets.AWS_ACCOUNT_ID_DEV }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443
             prod-${{ vars.AWS_REGION }}-starport-layer-bucket.s3.${{ vars.AWS_REGION }}.amazonaws.com:443
             ecs.${{ vars.AWS_REGION }}.amazonaws.com:443
             secretsmanager.${{ vars.AWS_REGION }}.amazonaws.com:443
@@ -144,7 +144,7 @@ jobs:
       - name: Check configuration
         env:
           ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           REGION: ${{ vars.AWS_REGION }}
         run: scripts/aws/check-config.sh "sis-${ENV}-gha-deploy"
 
@@ -165,7 +165,7 @@ jobs:
       # Push once, by immutable tag; a re-run reuses the image that was scanned. The digest comes from ECR.
       - name: Push the image to ECR
         env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           REGION: ${{ vars.AWS_REGION }}
         run: scripts/image/ecr-push.sh "$REPOSITORY" "$GIT_SHA" "$(scripts/names.sh image "$GIT_SHA")" >> "$GITHUB_ENV"
 
@@ -204,7 +204,7 @@ jobs:
       - name: Summary
         if: always()
         env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           JOB_STATUS: ${{ job.status }}
         run: |
           set -euo pipefail

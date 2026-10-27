@@ -20,7 +20,12 @@ variable "prefix" {
 
 variable "env" {
   type        = string
-  description = "Environment name."
+  description = "Environment name. Must equal the directory name of this root (the parity guard checks it)."
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{1,7}$", var.env))
+    error_message = "env must be 2 to 8 lowercase letters and digits, starting with a letter (ADR 0008, P4)."
+  }
 }
 
 variable "azs" {
@@ -66,7 +71,7 @@ variable "secret_recovery_window_days" {
 
 variable "alb_ingress_cidrs_json" {
   type        = string
-  description = "JSON list of IPv4 CIDRs allowed to reach the ALB on port 80, e.g. [\"198.51.100.7/32\"]. CI passes the repository secret ALB_INGRESS_CIDRS_DEV. Empty means 0.0.0.0/0 (ADR 0007 S10)."
+  description = "JSON list of IPv4 CIDRs allowed to reach the ALB on port 80, e.g. [\"198.51.100.7/32\"]. CI passes the secret ALB_INGRESS_CIDRS. Empty means 0.0.0.0/0 (ADR 0007 S10)."
   default     = ""
   sensitive   = true
 

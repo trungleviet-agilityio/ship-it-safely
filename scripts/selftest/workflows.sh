@@ -42,6 +42,16 @@ case_trigger "an empty on" "no triggers found" 'name: bad\non:\njobs: {}\n'
 case_trigger "non-mapping document" "not a YAML mapping" '- on\n- push\n'
 case_trigger "invalid YAML" "invalid YAML" 'name: bad\non:\n  push: {\njobs: {}\n'
 case_trigger "push and dispatch" ok 'name: ok\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n'
+# workflow_call is allowed in reusable-*.yml only, and such a file carries no other trigger (ADR 0008, P8).
+call_on='name: r\non:\n  workflow_call:\njobs: {}\n'
+printf '%b' "$call_on" >"$tmp/reusable-x.yml"
+case_check guard/workflow-triggers.sh "a reusable file with workflow_call only" ok "$tmp/reusable-x.yml"
+printf '%b' "$call_on" >"$tmp/not-reusable.yml"
+case_check guard/workflow-triggers.sh "workflow_call outside reusable-*.yml" "only allowed in a file named reusable" "$tmp/not-reusable.yml"
+printf 'name: r\non:\n  workflow_call:\n  push:\njobs: {}\n' >"$tmp/reusable-y.yml"
+case_check guard/workflow-triggers.sh "a reusable file with a second trigger" "must use \`workflow_call\` only, found 'push'" "$tmp/reusable-y.yml"
+printf 'name: r\non:\n  push:\njobs: {}\n' >"$tmp/reusable-z.yml"
+case_check guard/workflow-triggers.sh "a reusable file without workflow_call" "must use \`workflow_call\`" "$tmp/reusable-z.yml"
 # A missing PyYAML is a clear instruction, not a stack trace.
 printf '#!/bin/sh\nexit 1\n' >"$tmp/nopy"
 chmod +x "$tmp/nopy"
@@ -63,11 +73,17 @@ printf 'name: sneaky\non:\n  pull_request_target:\njobs: {}\n' >"$tmp/repo/.gith
 expect_fail "default scan of a .yaml file" "b.yaml" scan_tree
 
 # --- workflows: path filters list every script the pipeline runs, and build-scan holds no deploy credentials
-# check_paths <workflow>: every scripts/*.sh the workflow reaches (directly or through other scripts) is a path filter.
+# check_paths <workflow> [callee workflow...]: every scripts/*.sh the workflow (and the reusable workflows it calls)
+# reaches, directly or through other scripts, is a path filter of the workflow. The callee must be a path filter too.
 script_refs() { { grep -Eo 'scripts/[a-z0-9/_-]+\.sh([^a-z0-9]|$)' "$1" || true; } | sed -E 's/[^a-z0-9]$//' | sort -u; }
 check_paths() {
-  local wf="$1" seen="" queue next s
+  local wf="$1" seen="" queue next s callee
   queue="$(script_refs "$wf")"
+  shift
+  for callee in "$@"; do
+    queue="$queue $(script_refs "$callee")"
+    grep -qxF "      - .github/workflows/${callee##*/}" "$wf" || die "selftest: ${wf##*/} calls ${callee##*/} but does not list it under paths"
+  done
   while [ -n "$queue" ]; do
     next=""
     for s in $queue; do
@@ -84,56 +100,48 @@ check_paths() {
 }
 check_paths "$ROOT/.github/workflows/app-ci.yml"
 check_paths "$ROOT/.github/workflows/app-deploy.yml"
-check_paths "$ROOT/.github/workflows/terraform-iac.yml"
+check_paths "$ROOT/.github/workflows/terraform-iac.yml" "$ROOT/.github/workflows/reusable-terraform-plan.yml"
 check_paths "$ROOT/.github/workflows/oidc-smoke-test.yml"
-# build_scan_isolated <workflow>: the build-scan job holds no OIDC token, environment or secret.
-# Coupling: sed cuts the job out by its header lines, from "  build-scan:" up to the next job "  deploy:". Renaming or
-# reordering those two jobs (or changing the two-space job indent) must update this range, or the check would read
-# nothing and pass. The mutation tests below fail in that case, because the injected credential goes unseen.
-build_scan_isolated() {
-  ! sed -n '/^  build-scan:/,/^  deploy:/p' "$1" | grep -Eq 'id-token|environment:|secrets\.'
-}
-deploy_wf="$ROOT/.github/workflows/app-deploy.yml"
-build_scan_isolated "$deploy_wf" || die "selftest: the build-scan job must hold no OIDC token, environment or secret"
-# The check must fail on a copy of the workflow with each credential added to build-scan.
-sed 's/^  build-scan:$/  build-scan:\n    permissions:\n      id-token: write/' "$deploy_wf" >"$tmp/wf-idtoken.yml"
-grep -q 'id-token: write' "$tmp/wf-idtoken.yml" || die "selftest: could not mutate build-scan (id-token)"
-! build_scan_isolated "$tmp/wf-idtoken.yml" || die "selftest: the isolation check missed id-token in build-scan"
-sed 's/^  build-scan:$/  build-scan:\n    env:\n      X: ${{ secrets.X }}/' "$deploy_wf" >"$tmp/wf-secret.yml"
-grep -q 'secrets\.X' "$tmp/wf-secret.yml" || die "selftest: could not mutate build-scan (secrets)"
-! build_scan_isolated "$tmp/wf-secret.yml" || die "selftest: the isolation check missed secrets in build-scan"
 
-# --- terraform-destroy.yml (ADR 0006, G16). No check_paths: the workflow has no path filters.
+# The facts below come from the parsed YAML (selftest/workflow_facts.py on the shared loader), not from text ranges: a
+# job is found by its id, and a mutation is a change to the parsed job. `facts <command> <file> [args]`.
+py="$(ci_python)"
+facts() { "$py" -I "$ROOT/scripts/selftest/workflow_facts.py" "$@"; }
+# credential_free <job json> <extra pattern>: the job holds no OIDC token, environment or secret (nor the extra pattern).
+credential_free() { ! grep -Eq "id-token|\"environment\"|secrets\\.${2:+|$2}" <<<"$1"; }
+# job_json <file> <job id>: the job as JSON. A job that cannot be found fails the self-test (a check must not pass by
+# reading nothing).
+job_json() { facts job "$1" "$2" || die "selftest: ${1##*/} has no job '$2'"; }
+# build_scan_isolated: the build-scan job holds no OIDC token, environment or secret.
+deploy_wf="$ROOT/.github/workflows/app-deploy.yml"
+credential_free "$(job_json "$deploy_wf" build-scan)" || die "selftest: the build-scan job must hold no OIDC token, environment or secret"
+# The check must fail on the job with each credential added.
+# shellcheck disable=SC2016  # the mutations are workflow text, not shell
+for add in '{"permissions":{"id-token":"write"}}' '{"env":{"X":"${{ secrets.X }}"}}' '{"environment":"dev"}'; do
+  credential_free "$(facts merge "$deploy_wf" build-scan "$add")" && die "selftest: the isolation check missed '$add' in build-scan"
+done
+
+# --- terraform-destroy.yml (ADR 0006, G16, ADR 0008). No check_paths: the workflow has no path filters.
 destroy_wf="$ROOT/.github/workflows/terraform-destroy.yml"
 iac_wf="$ROOT/.github/workflows/terraform-iac.yml"
-# section <workflow> <first line regex> <last line regex>: the lines from the first match to the last match.
-# Coupling: the callers below name top-level keys and job headers ("on:", "permissions:", "  confirm:", "  destroy:"),
-# so these checks follow the layout of the destroy workflow (jobs in the order confirm, destroy). A layout change
-# must change the regexes here; the mutation tests fail if a range stops covering the confirm job.
-section() { sed -n "/$2/,/$3/p" "$1"; }
-# confirm_isolated <workflow>: the credential-free job holds no OIDC token, environment, secret, checkout or AWS action.
-confirm_isolated() {
-  ! section "$1" '^  confirm:' '^  destroy:' | grep -Eq 'id-token|environment:|secrets\.|actions/checkout|aws-actions'
-}
-# only_trigger <workflow> <trigger>: the `on:` block lists exactly that trigger.
-only_trigger() {
-  [ "$(section "$1" '^on:' '^permissions:' | grep -E '^  [a-z_]+:' | tr -d ' \n')" = "$2:" ]
-}
+# only_trigger <workflow> <trigger>: the workflow has exactly that trigger.
+only_trigger() { [ "$(facts on "$1" | tr -d '\n')" = "$2" ]; }
+# confirm_isolated <job json>: the credential-free job holds no OIDC token, environment, secret, checkout or AWS action.
+confirm_isolated() { credential_free "$1" 'actions/checkout|aws-actions'; }
 only_trigger "$destroy_wf" workflow_dispatch || die "selftest: terraform-destroy must have workflow_dispatch as its only trigger"
-! only_trigger "$iac_wf" workflow_dispatch || die "selftest: the trigger check must fail for a workflow with more triggers"
-confirm_isolated "$destroy_wf" || die "selftest: the confirm job must hold no OIDC token, environment, secret or checkout"
+only_trigger "$iac_wf" workflow_dispatch && die "selftest: the trigger check must fail for a workflow with more triggers"
+confirm_isolated "$(job_json "$destroy_wf" confirm)" || die "selftest: the confirm job must hold no OIDC token, environment, secret or checkout"
 # shellcheck disable=SC2016  # the mutations are workflow text, not shell
-for add in 'permissions:\n      id-token: write' 'environment: dev' 'env:\n      X: ${{ secrets.X }}' 'steps:\n      - uses: actions/checkout@v1'; do
-  # Each mutation adds one credential right under the confirm job header.
-  sed "s#^  confirm:\$#  confirm:\n    $add#" "$destroy_wf" >"$tmp/wf-confirm.yml"
-  ! cmp -s "$destroy_wf" "$tmp/wf-confirm.yml" || die "selftest: could not mutate confirm ($add)"
-  ! confirm_isolated "$tmp/wf-confirm.yml" || die "selftest: the isolation check missed '$add' in confirm"
+for add in '{"permissions":{"id-token":"write"}}' '{"environment":"dev"}' '{"env":{"X":"${{ secrets.X }}"}}' \
+  '{"steps":[{"uses":"actions/checkout@v1"}]}' '{"steps":[{"uses":"aws-actions/configure-aws-credentials@v1"}]}'; do
+  confirm_isolated "$(facts merge "$destroy_wf" confirm "$add")" && die "selftest: the isolation check missed '$add' in confirm"
 done
 # environment: and id-token: write belong to the destroy job only, never to the top level or confirm.
-! sed -n '1,/^jobs:/p' "$destroy_wf" | grep -Eq 'id-token|environment:' || die "selftest: terraform-destroy must set no id-token or environment above its jobs"
-destroy_job="$(sed -n '/^  destroy:/,$p' "$destroy_wf")" # the last job of the file
-grep -q '^    environment: dev$' <<<"$destroy_job" || die "selftest: the destroy job must use environment dev"
-grep -q 'id-token: write' <<<"$destroy_job" || die "selftest: the destroy job must have id-token: write"
+credential_free "$(facts top "$destroy_wf")" || die "selftest: terraform-destroy must set no id-token or environment above its jobs"
+destroy_job="$(job_json "$destroy_wf" destroy)"
+# shellcheck disable=SC2016  # workflow expressions, not shell
+grep -qF '"environment": "${{ inputs.env }}"' <<<"$destroy_job" || die "selftest: the destroy job must use the environment of the input"
+grep -qF '"id-token": "write"' <<<"$destroy_job" || die "selftest: the destroy job must have id-token: write"
 # The workflow file path is in the apply and deploy role trust (job_workflow_ref, ADR 0007 S38): every file the bootstrap
 # `workflow_files` lists exists, and the two workflows that hold no credentials are never listed.
 # workflow_files_ok <locals.tf>: lists the files and checks them against .github/workflows/.
@@ -156,14 +164,17 @@ sed 's/"app-deploy.yml"/"app-deploy.yml", "no-such-file.yml"/' "$bootstrap_local
 ! workflow_files_ok "$tmp/locals-unknown.tf" 2>/dev/null || die "selftest: the file parity check missed an unknown workflow file"
 sed 's/"app-deploy.yml"/"app-deploy.yml", "repo-guard.yml"/' "$bootstrap_locals" >"$tmp/locals-guard.tf"
 ! workflow_files_ok "$tmp/locals-guard.tf" 2>/dev/null || die "selftest: the file parity check missed repo-guard.yml in the trust"
-# Both writers of the dev state share one concurrency group.
-for wf in "$destroy_wf" "$iac_wf"; do
-  grep -qx '      group: terraform-envs-dev' "$wf" || die "selftest: ${wf##*/} must use the concurrency group terraform-envs-dev"
-done
+# Both writers of an environment's state share one concurrency group: the apply job (a push has no input, so dev) and the
+# destroy job name it from the same input.
+iac_group="$(facts group "$iac_wf" apply | sed "s/ || 'dev'//")"
+destroy_group="$(facts group "$destroy_wf" destroy)"
+# shellcheck disable=SC2016  # workflow expression, not shell
+{ [ "$iac_group" = 'terraform-envs-${{ inputs.env }}' ] && [ "$destroy_group" = "$iac_group" ]; } \
+  || die "selftest: apply and destroy must share the concurrency group terraform-envs-<env> (got '$iac_group' and '$destroy_group')"
 ! grep -Eq '^ *queue:' "$destroy_wf" "$iac_wf" || die "selftest: no queue: in the shared concurrency group (actionlint rejects it)"
 # The environment choice has one list: the case guard in the confirm job equals the options of the dispatch input.
-guard_envs="$(sed -n 's/^ *allowed_envs="\(.*\)"$/\1/p' "$destroy_wf")"
-input_envs="$(sed -n 's/^ *options: *\[\(.*\)\]$/\1/p' "$destroy_wf" | tr -d ' ' | tr ',' ' ')"
+guard_envs="$(facts step-run "$destroy_wf" confirm "Check the branch" | sed -n 's/^ *allowed_envs="\(.*\)"$/\1/p')"
+input_envs="$(facts options "$destroy_wf" env | tr '\n' ' ' | sed 's/ $//')"
 { [ -n "$guard_envs" ] && [ "$guard_envs" = "$input_envs" ]; } \
   || die "selftest: the confirm job allowed_envs ('$guard_envs') must equal the input options ('$input_envs')"
 # The plan summary runs before the guard, so a refused plan still shows its table.
@@ -182,38 +193,48 @@ tf_cap() { grep -A3 "variable = \"ecs:$1\"" "$ROOT/infra/terraform/bootstrap/iam
 [ "$(tf_cap task-memory)" = "$TASK_MEMORY_MAX" ] || die "selftest: TASK_MEMORY_MAX in lib.sh differs from iam_deploy.tf"
 # One account-ID check and one role-name helper in the summaries of the three pipelines (the OIDC smoke test checks the
 # exact ARN on purpose and is left out): no inline 12-digit pattern, no inline assumed-role ARN parse.
-summary_wfs=("$iac_wf" "$destroy_wf" "$deploy_wf")
+summary_wfs=("$iac_wf" "$destroy_wf" "$deploy_wf" "$ROOT/.github/workflows/reusable-terraform-plan.yml")
 ! grep -En '\[0-9\]\{12\}' "${summary_wfs[@]}" || die "selftest: a workflow holds its own 12-digit pattern; use scripts/aws/assert-no-account-id.sh"
 ! grep -n 'assumed-role/' "${summary_wfs[@]}" || die "selftest: a workflow parses the assumed-role ARN; use scripts/names.sh role"
 ok "workflow path filters, build-scan isolation, cap parity and one account-ID check"
 
 # The comment job holds the only write token, so its checkout must be the trusted base commit and never the PR head.
-# Coupling: the job is cut out from "  comment:" up to the next job "  apply:"; renaming or reordering them must update
-# this range (the mutations below fail if it reads nothing).
+# The job lives in the reusable plan workflow (ADR 0008, P6) and is read by its id from the parsed YAML.
+plan_wf="$ROOT/.github/workflows/reusable-terraform-plan.yml"
 # shellcheck disable=SC2016  # workflow text, not shell
+base_ref='"ref": "${{ github.event.pull_request.base.sha }}"'
+# comment_uses_base <job json>: the checkout pins the base commit, and no `ref` names the PR head.
 comment_uses_base() {
-  local job
-  job="$(sed -n '/^  comment:/,/^  apply:/p' "$1")"
-  grep -qF 'ref: ${{ github.event.pull_request.base.sha }}' <<<"$job" \
-    && ! grep -Eq 'pull_request\.head\.(sha|ref)|github\.head_ref' < <(grep -E '^\s+ref:' <<<"$job")
+  grep -qF "$base_ref" <<<"$1" && ! grep -Eo '"ref": "[^"]*"' <<<"$1" | grep -Eq 'pull_request\.head\.(sha|ref)|github\.head_ref'
 }
-comment_uses_base "$iac_wf" || die "selftest: the comment job must check out github.event.pull_request.base.sha and never the head"
+comment_job="$(job_json "$plan_wf" comment)"
+comment_uses_base "$comment_job" || die "selftest: the comment job must check out github.event.pull_request.base.sha and never the head"
+comment_uses_base "${comment_job//"$base_ref"/}" && die "selftest: the base-ref check missed a comment checkout without ref"
 # shellcheck disable=SC2016  # workflow text, not shell
-grep -v 'ref: \${{ github.event.pull_request.base.sha }}' "$iac_wf" >"$tmp/wf-noref.yml"
-! cmp -s "$iac_wf" "$tmp/wf-noref.yml" || die "selftest: could not mutate the comment checkout (no ref)"
-! comment_uses_base "$tmp/wf-noref.yml" || die "selftest: the base-ref check missed a comment checkout without ref"
+comment_uses_base "${comment_job//base.sha/head.sha}" && die "selftest: the base-ref check missed a head ref in the comment checkout"
 # shellcheck disable=SC2016  # workflow text, not shell
-sed 's#ref: \${{ github.event.pull_request.base.sha }}#ref: ${{ github.event.pull_request.head.sha }}#' "$iac_wf" >"$tmp/wf-head.yml"
-! cmp -s "$iac_wf" "$tmp/wf-head.yml" || die "selftest: could not mutate the comment checkout (head ref)"
-! comment_uses_base "$tmp/wf-head.yml" || die "selftest: the base-ref check missed a head ref in the comment checkout"
+comment_uses_base "$(facts merge "$plan_wf" comment '{"steps":[{"uses":"actions/checkout@v1","with":{"ref":"${{ github.head_ref }}"}}]}')" && die "selftest: the base-ref check missed a second checkout of the head"
 ok "comment job checks out the base commit only"
+# The plan jobs of the reusable workflow keep the plan role shape: no environment (it would change the OIDC subject),
+# and the caller passes secrets by name.
+credential_ok_plan() { ! grep -Eq '"environment"' <<<"$1"; }
+for j in plan plan-role-guardrails comment; do
+  credential_ok_plan "$(job_json "$plan_wf" "$j")" || die "selftest: the reusable plan job '$j' must not set an environment (the plan role trusts the pull_request subject only)"
+done
+credential_ok_plan "$(facts merge "$plan_wf" plan '{"environment":"dev"}')" && die "selftest: the plan environment check missed an environment"
+caller="$(job_json "$iac_wf" plan-dev)"
+grep -qF '"uses": "./.github/workflows/reusable-terraform-plan.yml"' <<<"$caller" || die "selftest: plan-dev must call the reusable plan workflow"
+grep -qF '"secrets": {' <<<"$caller" || die "selftest: plan-dev must map its secrets by name (never secrets: inherit)"
+! grep -qF '"environment"' <<<"$caller" || die "selftest: the plan-dev caller must not set an environment"
+ok "reusable plan: no environment on any job, explicit secrets in the caller"
 
 # Action pins (NFR-3, ADR 0007 S1): every `uses:` is a full commit SHA with its version in a comment, and one action
 # has one SHA across all workflows, so a half-finished bump (or a tag-only pin) fails here and not only in zizmor.
 # pins_ok <workflow file>...
 pins_ok() {
   local bad shas
-  bad="$(grep -hE '^[[:space:]]*(-[[:space:]]+)?uses:' "$@" | grep -vE 'uses:[[:space:]]+[A-Za-z0-9._/-]+@[0-9a-f]{40}[[:space:]]+# v[0-9]' || true)"
+  # A local reusable workflow (./.github/workflows/reusable-*.yml) is the same commit as its caller: no pin.
+  bad="$(grep -hE '^[[:space:]]*(-[[:space:]]+)?uses:' "$@" | grep -vE 'uses:[[:space:]]+\./\.github/workflows/reusable-[A-Za-z0-9._-]+\.yml[[:space:]]*$' | grep -vE 'uses:[[:space:]]+[A-Za-z0-9._/-]+@[0-9a-f]{40}[[:space:]]+# v[0-9]' || true)"
   [ -z "$bad" ] || { printf 'selftest: unpinned action: %s\n' "$bad" >&2; return 1; }
   shas="$(grep -hEo 'uses:[[:space:]]+[A-Za-z0-9._/-]+@[0-9a-f]{40}' "$@" | sed -E 's/uses:[[:space:]]+//' | sort -u | cut -d@ -f1 | uniq -d)"
   [ -z "$shas" ] || { printf 'selftest: more than one SHA for: %s\n' "$shas" >&2; return 1; }
@@ -255,13 +276,27 @@ block_with='          egress-policy: block\n          disable-telemetry: true\n 
 hosts_head='          allowed-endpoints: >\n'
 # shellcheck disable=SC2016  # the ${{ }} is literal fixture text, not a shell expansion
 {
-good_hosts='            github.com:443\n            sts.${{ vars.AWS_REGION }}.amazonaws.com:443\n            ${{ secrets.AWS_ACCOUNT_ID_DEV }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443\n            sis-${{ env.ENV }}-x.s3.${{ vars.AWS_REGION }}.amazonaws.com:443\n'
+good_hosts='            github.com:443\n            sts.${{ vars.AWS_REGION }}.amazonaws.com:443\n            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443\n            sis-${{ env.ENV }}-x.s3.${{ vars.AWS_REGION }}.amazonaws.com:443\n'
 case_hardening "credentialed job in block with exact hosts" ok "$cred" "${block_with}${hosts_head}${good_hosts}"
 case_hardening "credentialed job with another expression" "uses the expression" "$cred" "${block_with}${hosts_head}            \${{ secrets.OTHER }}.example.com:443\n"
 case_hardening "credentialed job with a github context host" "uses the expression" "$cred" "${block_with}${hosts_head}            \${{ github.actor }}.example.com:443\n"
-case_hardening "credential-free job with a secret host" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets.AWS_ACCOUNT_ID_DEV }}.example.com:443\n"
+case_hardening "credential-free job with a secret host" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets.AWS_ACCOUNT_ID }}.example.com:443\n"
 case_hardening "credential-free job with a non-secret expression" ok "contents: read" "${audit_with}${hosts_head}            \${{ vars.AWS_REGION }}.example.com:443\n"
-for wild in '*:443' '*' '*.amazonaws.com:443' '*.githubusercontent.com:443' '*.github.com:443' '*.s3.ap-southeast-1.amazonaws.com:443' '*.data.mcr.microsoft.com:443' 'sis-*.example.com:443'; do
+case_hardening "the old repo-level account secret in a credentialed job" "uses the expression" "$cred" "${block_with}${hosts_head}            \${{ secrets.AWS_ACCOUNT_ID_DEV }}.example.com:443\n"
+case_hardening "secrets[ in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets['X'] }}.example.com:443\n"
+case_hardening "toJSON(secrets) in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ toJSON(secrets) }}.example.com:443\n"
+case_hardening "an env built from a secret in an audit job" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: ${{ secrets.X }}\n'
+case_hardening "an env without a secret in an audit job" ok "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: plain\n'
+# A job that calls a reusable workflow has no steps: it must target a local reusable-*.yml and name its secrets.
+printf 'name: x\non: push\njobs:\n  c:\n    uses: ./.github/workflows/reusable-x.yml\n    permissions:\n      id-token: write\n    secrets:\n      A: ${{ secrets.B }}\n' >"$tmp/h.yml"
+case_check guard/harden-runner.sh "a reusable call with named secrets" ok "$tmp/h.yml"
+printf 'name: x\non: push\njobs:\n  c:\n    uses: ./.github/workflows/reusable-x.yml\n    secrets: inherit\n' >"$tmp/h.yml"
+case_check guard/harden-runner.sh "a reusable call with secrets: inherit" "never \`secrets: inherit\`" "$tmp/h.yml"
+printf 'name: x\non: push\njobs:\n  c:\n    uses: ./.github/workflows/other.yml\n' >"$tmp/h.yml"
+case_check guard/harden-runner.sh "a call of a workflow that is not reusable-*.yml" "must target ./.github/workflows/reusable" "$tmp/h.yml"
+printf 'name: x\non: push\njobs:\n  c:\n    uses: octo/repo/.github/workflows/reusable-x.yml@main\n' >"$tmp/h.yml"
+case_check guard/harden-runner.sh "a call of a remote workflow" "must target ./.github/workflows/reusable" "$tmp/h.yml"
+for wild in '*:443''*' '*.amazonaws.com:443' '*.githubusercontent.com:443' '*.github.com:443' '*.s3.ap-southeast-1.amazonaws.com:443' '*.data.mcr.microsoft.com:443' 'sis-*.example.com:443'; do
   case_hardening "wildcard $wild" "holds a wildcard" "$cred" "${block_with}${hosts_head}            ${wild}\n"
 done
 case_hardening "wildcard in an audit job passes" ok "contents: read" "${audit_with}${hosts_head}            *.data.mcr.microsoft.com:443\n"

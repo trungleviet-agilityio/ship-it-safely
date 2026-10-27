@@ -13,8 +13,8 @@ variable "env" {
   description = "Environment name."
 
   validation {
-    condition     = contains(["dev", "prod"], var.env)
-    error_message = "env must be dev or prod."
+    condition     = can(regex("^[a-z][a-z0-9]{1,7}$", var.env))
+    error_message = "env must be 2 to 8 lowercase letters and digits, starting with a letter (ADR 0008, P4)."
   }
 }
 

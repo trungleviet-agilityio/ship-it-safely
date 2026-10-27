@@ -11,7 +11,7 @@ FULL_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo local)
 IMAGE := $(shell scripts/names.sh image $(FULL_SHA))
 
 .DEFAULT_GOAL := help
-.PHONY: help up down test image smoke scan verify venv lint tf-check docs check
+.PHONY: help up down test image smoke scan verify venv lint tf-check docs new-env check
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,10 +48,11 @@ verify: ## Build, smoke test and scan in one go (what app-ci runs)
 
 venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
 
-lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
+lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint, the env parity guard and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
 	shellcheck -x $$(find scripts -name '*.sh' | sort)
+	scripts/guard/env-parity.sh
 	scripts/ci/selftest.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
 
@@ -61,5 +62,10 @@ tf-check: ## Offline Terraform policy rules (tf/policy.sh), README check, fmt, v
 
 docs: ## Regenerate terraform-docs tables in every Terraform README
 	pre-commit run terraform_docs --all-files
+
+# ENV must come from the command line: make imports the shell environment, and an exported ENV must not pick the name.
+new-env: ## Clone an environment: make new-env ENV=qa [FROM=dev] [CIDR=10.N.0.0/16] [STRATEGY=ROLLING|BLUE_GREEN] [DRY_RUN=1]
+	@$(if $(filter command line,$(origin ENV)),:,echo "usage: make new-env ENV=<name> [FROM=dev] [CIDR=...] [STRATEGY=...] [DRY_RUN=1]" >&2; exit 2)
+	scripts/tf/new-env.sh "$(ENV)" $(if $(FROM),--from "$(FROM)") $(if $(CIDR),--cidr "$(CIDR)") $(if $(STRATEGY),--strategy "$(STRATEGY)") $(if $(DRY_RUN),--dry-run)
 
 check: lint test tf-check ## Everything a PR must pass

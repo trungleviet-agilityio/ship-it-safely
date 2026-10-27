@@ -6,6 +6,8 @@ YAML (PyYAML, from the hash-locked CI venv), so flow lists split across lines, e
 quoted keys and anchors cannot hide a trigger the way they could from a line scanner.
 
 Usage: python -I scripts/guard/workflow_triggers.py <workflow file>...
+A reusable workflow (`workflow_call`) is allowed only in a file named reusable-*.yml, and such a
+file carries no other trigger (ADR 0008, P8).
 Prints one violation per line on stdout, with paths relative to the working directory.
 Exit codes: 0 all files pass, 1 violations, 2 usage error.
 Run through scripts/guard/workflow-triggers.sh, which picks the interpreter and lists the files.
@@ -20,6 +22,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from workflow_yaml import run  # noqa: E402  (import after the path setup above)
 
 ALLOWED = ("pull_request", "push", "workflow_dispatch")
+REUSABLE_TRIGGER = "workflow_call"
+
+
+def _is_reusable_file(shown: str) -> bool:
+    name = os.path.basename(shown)
+    return name.startswith("reusable-") and name.endswith((".yml", ".yaml"))
 
 
 def _triggers(document: Any) -> list[str]:
@@ -50,11 +58,24 @@ def check(shown: str, document: Any) -> list[str]:
         names = _triggers(document)
     except ValueError as e:
         return [f"{shown}: {e}"]
-    return [
-        f"{shown}: trigger '{n}' is not allowed (allowed: {' '.join(ALLOWED)})"
-        for n in names
-        if n not in ALLOWED
-    ]
+    if _is_reusable_file(shown):
+        problems = [
+            f"{shown}: a reusable-*.yml file must use `{REUSABLE_TRIGGER}` only, found '{n}'"
+            for n in names
+            if n != REUSABLE_TRIGGER
+        ]
+        if REUSABLE_TRIGGER not in names:
+            problems.append(f"{shown}: a reusable-*.yml file must use `{REUSABLE_TRIGGER}`")
+        return problems
+    problems = []
+    for n in names:
+        if n == REUSABLE_TRIGGER:
+            problems.append(
+                f"{shown}: trigger '{n}' is only allowed in a file named reusable-*.yml"
+            )
+        elif n not in ALLOWED:
+            problems.append(f"{shown}: trigger '{n}' is not allowed (allowed: {' '.join(ALLOWED)})")
+    return problems
 
 
 if __name__ == "__main__":

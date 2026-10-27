@@ -28,11 +28,79 @@ run "rejects_short_account_id" {
   expect_failures = [var.aws_account_id]
 }
 
-run "rejects_unknown_env" {
+run "accepts_a_new_env_name" {
   command = plan
+
   variables {
     env = "qa"
   }
+}
+
+run "accepts_prod" {
+  command = plan
+
+  variables {
+    env = "prod"
+  }
+}
+
+run "rejects_env_uppercase" {
+  command = plan
+
+  variables {
+    env = "Dev"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "rejects_env_one_character" {
+  command = plan
+
+  variables {
+    env = "a"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "rejects_env_nine_characters" {
+  command = plan
+
+  variables {
+    env = "toolongnm"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "rejects_env_leading_digit" {
+  command = plan
+
+  variables {
+    env = "9qa"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "rejects_env_hyphen" {
+  command = plan
+
+  variables {
+    env = "qa-x"
+  }
+
+  expect_failures = [var.env]
+}
+
+run "rejects_env_path" {
+  command = plan
+
+  variables {
+    env = "../x"
+  }
+
   expect_failures = [var.env]
 }
 
