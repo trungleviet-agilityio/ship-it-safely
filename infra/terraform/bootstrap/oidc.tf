@@ -5,7 +5,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 # One trust policy per role (B13): StringEquals except the plan role's pull request merge ref, immutable IDs,
-# ref pinned on every role.
+# ref pinned on every role, and the workflow file path (job_workflow_ref) on apply and deploy.
 data "aws_iam_policy_document" "trust" {
   for_each = local.trust
 
@@ -54,7 +54,7 @@ data "aws_iam_policy_document" "trust" {
 
       content {
         test     = "StringEquals"
-        variable = "${local.oidc_host}:workflow"
+        variable = "${local.oidc_host}:job_workflow_ref"
         values   = condition.value
       }
     }

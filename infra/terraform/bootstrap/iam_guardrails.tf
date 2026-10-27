@@ -1,4 +1,4 @@
-# Explicit denies shared by plan, apply and deploy (B16). Action wildcards appear only in Deny statements.
+# Explicit denies shared by plan, apply and deploy (B16, ADR 0007 S28). Action wildcards appear only in Deny statements.
 data "aws_iam_policy_document" "guardrails" {
   statement {
     sid    = "G1DenySecretValues"
@@ -60,6 +60,37 @@ data "aws_iam_policy_document" "guardrails" {
       "s3:DeleteObject*",
     ]
     resources = [local.bootstrap_arn]
+  }
+
+  # G6 (ADR 0007 S28): the audit trail, its bucket, the alert rule and the alert topic. No CI role needs any of
+  # them; this is defense in depth against a future Allow. One statement per target, because a shared resource
+  # list would apply every action to every resource.
+  statement {
+    sid       = "G6DenyAuditTrail"
+    effect    = "Deny"
+    actions   = ["cloudtrail:*"] # Deny only: widens protection
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "G6DenyAlertRule"
+    effect    = "Deny"
+    actions   = ["events:*"] # Deny only: widens protection
+    resources = [local.rule_arn]
+  }
+
+  statement {
+    sid       = "G6DenyAlertTopic"
+    effect    = "Deny"
+    actions   = ["sns:*"] # Deny only: widens protection
+    resources = [local.topic_arn]
+  }
+
+  statement {
+    sid       = "G6DenyTrailBucket"
+    effect    = "Deny"
+    actions   = ["s3:*"] # Deny only: widens protection
+    resources = [local.trail_bucket_arn, "${local.trail_bucket_arn}/*"]
   }
 }
 
