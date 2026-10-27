@@ -41,13 +41,14 @@ verify: ## Build, smoke test and scan in one go (what app-ci runs)
 	scripts/image-verify.sh $(FULL_SHA) "$$(mktemp -d)"
 
 # Built once and reused; rebuilt when the hash-locked requirements change. lint needs it for the YAML trigger check.
-.venv-ci/bin/python: scripts/ci-requirements.txt
+# A stamp file, because the venv interpreter is a symlink that touch must not follow.
+.venv-ci/.installed: scripts/ci-requirements.txt
 	PYTHON=$(PYTHON) scripts/ci-venv.sh .venv-ci
 	@touch $@
 
-venv: .venv-ci/bin/python ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
+venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
 
-lint: .venv-ci/bin/python ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
+lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
 	shellcheck -x scripts/*.sh scripts/selftest/*.sh

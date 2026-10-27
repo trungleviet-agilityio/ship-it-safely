@@ -124,6 +124,25 @@ guardrails_ready
 stub aws-ec2-create-vpc rc 0
 expect_fail "guardrails when the VPC call succeeds" "N3 (plan role, CreateVpc dry run) failed: the call succeeded" guardrails
 
+# --- tf-resolved-sources.sh: what init resolved must be local modules and hashicorp providers
+resolved() { "$ROOT/scripts/tf-resolved-sources.sh" "$tmp/tf" "$tmp/tf/data"; }
+mkdir -p "$tmp/tf/data/modules"
+printf 'provider "registry.terraform.io/hashicorp/aws" {\n  version = "6.70.0"\n}\n' >"$tmp/tf/.terraform.lock.hcl"
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"../../modules/m","Dir":"../../modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+resolved >/dev/null 2>&1 || die "selftest: local modules and a hashicorp provider must pass"
+rm "$tmp/tf/data/modules/modules.json"
+resolved >/dev/null 2>&1 || die "selftest: a directory without modules must pass"
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"registry.terraform.io/example/m/aws","Dir":".terraform/modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+expect_fail "resolved remote module" "module source is not local: registry.terraform.io/example/m/aws" resolved
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"git::https://example.com/m.git","Dir":".terraform/modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+expect_fail "resolved git module" "module source is not local" resolved
+rm "$tmp/tf/data/modules/modules.json"
+printf 'provider "registry.terraform.io/example/aws" {\n  version = "1.0.0"\n}\n' >"$tmp/tf/.terraform.lock.hcl"
+expect_fail "resolved non-hashicorp provider" "provider is not hashicorp: registry.terraform.io/example/aws" resolved
+rm "$tmp/tf/.terraform.lock.hcl"
+expect_fail "resolved sources without a lock file" "no .terraform.lock.hcl" resolved
+ok "resolved sources: local modules and hashicorp providers only"
+
 # --- tf-destroy-report.sh: the heading states the real outcome (ADR 0007 S12)
 # report <deletes> <apply outcome> [deregistered]: without the third argument DEREGISTERED stays unset.
 report() {

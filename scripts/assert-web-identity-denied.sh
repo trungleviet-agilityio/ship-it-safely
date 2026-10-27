@@ -13,6 +13,7 @@ source "$(dirname "$0")/lib.sh"
 
 [ $# -ge 1 ] || die "usage: scripts/assert-web-identity-denied.sh <plan|apply|deploy>..."
 
+mask "${ACCOUNT:?ACCOUNT is not set}"
 token="$(oidc_token)"
 printf 'Token sub: %s\n' "$(jwt_claim "$token" sub)" >&2
 printf 'Token job_workflow_ref: %s\n' "$(jwt_claim "$token" job_workflow_ref)" >&2

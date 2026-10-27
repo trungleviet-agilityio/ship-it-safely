@@ -92,7 +92,7 @@ ok "redact filter replaces 12-digit runs"
 # scan`, which need Docker and the trivy database; their argument contracts are checked here, with the rest.
 # A script that takes arguments prints its usage when called with none.
 for s in build-image app-smoke render-task-def image-verify image-export image-import image-name ecr-push check-aws-config \
-  assert-web-identity-denied assert-session-cap ci-venv; do
+  assert-web-identity-denied assert-session-cap ci-venv tf-resolved-sources; do
   expect_fail "$s without arguments" "usage:" "$ROOT/scripts/$s.sh"
 done
 # A script that takes none refuses a stray argument.

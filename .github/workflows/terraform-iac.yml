@@ -12,6 +12,7 @@ on:
       - .github/workflows/terraform-iac.yml
       - scripts/tf-check.sh
       - scripts/tf-policy.sh
+      - scripts/tf-resolved-sources.sh
       - scripts/install-ci-tools.sh
       - scripts/ci-tools.sha256
       - scripts/ci-requirements.txt

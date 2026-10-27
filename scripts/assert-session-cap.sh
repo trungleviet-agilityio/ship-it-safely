@@ -14,6 +14,7 @@ source "$(dirname "$0")/lib.sh"
 [ $# -eq 1 ] || die "usage: scripts/assert-session-cap.sh <plan|apply|deploy>"
 role="$1"
 
+mask "${ACCOUNT:?ACCOUNT is not set}"
 token="$(oidc_token)"
 
 # One second over the cap must be refused for the duration, not for the trust. The message names both the requested
