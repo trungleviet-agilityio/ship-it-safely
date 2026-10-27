@@ -36,7 +36,8 @@ repos:
         exclude: (^|/)\.terraform\.lock\.hcl$
 
   # Workflow security audits (offline): dangerous-triggers (ADR 0002 L3), template-injection,
-  # excessive-permissions, unpinned-uses. No ignores.
+  # excessive-permissions, unpinned-uses. No global disables; inline ignores only where
+  # docs/reference/CODING_STANDARDS.md allows them (self-repository, one github-env).
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
     rev: c92afdf2c6ca336aaa8f39e2bd8d48f62dbd8e1f # frozen: v1.31.1
     hooks:

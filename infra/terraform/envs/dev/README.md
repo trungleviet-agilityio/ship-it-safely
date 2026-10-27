@@ -34,9 +34,10 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
   conditions depend on them, and standalone security group rules need them to be changeable.
 - **Env name.** 2 to 8 lowercase letters and digits, starting with a letter (ADR 0008, P4), so every AWS name
   built from it stays within its limit.
-- **ALB ingress.** Open to `0.0.0.0/0` unless the optional secret `ALB_INGRESS_CIDRS` is set (a JSON list such as
-  `["<your IP>/32"]`; environment level for apply and destroy, repository level `ALB_INGRESS_CIDRS_<ENV>` for the
-  PR plan). CI passes it as `TF_VAR_alb_ingress_cidrs_json` and masks each element in the log
+- **ALB ingress.** The environment secret `ALB_INGRESS_CIDRS` is required for apply, which refuses an empty value:
+  a JSON list such as `["<your IP>/32"]`, or `["0.0.0.0/0"]` to be open on purpose. The PR plan reads the
+  repository secret `ALB_INGRESS_CIDRS_<ENV>` and the teardown reads the environment one; for those two, unset
+  means `0.0.0.0/0`. CI passes it as `TF_VAR_alb_ingress_cidrs_json` and masks each element in the log
   (`scripts/tf/mask-cidrs.sh`). Only IPv4 CIDRs are accepted. A wrong value locks you out of the ALB, never out of
   CI (ADR 0007 S10).
 - **Placeholder image.** `container_image` in `terraform.tfvars` is a digest-pinned image with no command, so

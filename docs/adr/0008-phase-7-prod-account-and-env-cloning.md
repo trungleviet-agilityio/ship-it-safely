@@ -408,6 +408,19 @@ No Critical or High. Fixed in one round (`fix(ci)` commit):
 Accepted residual risk (unchanged from ADR 0007): a same-repo PR author controls the steps of the read-only
 plan job; the comment job's base-SHA checkout protects `scripts/` only.
 
+## PR A verify, round 2 (2026-10-27)
+
+Reviewer and security reviewer: every round 1 item closed, no regression in the composite action, no Critical,
+High or Medium. Open Low items, not fixed after the two-round limit:
+
+| Source | Finding | Decision |
+|---|---|---|
+| reviewer | `envs/dev/README.md` still called the ALB secret optional | Fixed as docs drift |
+| security N3 | `.pre-commit-config.yaml` comment said "No ignores" | Fixed as docs drift |
+| security N2 | A missing environment secret falls back to a repository secret with the same name, so a repo-level `ALB_INGRESS_CIDRS` would defeat the fail-closed apply | Checkpoint A1 now lists repo secrets and expects none of the env-level names. A guard for it needs `gh` access in CI; open item |
+| reviewer | No self-test pins the step order in the composite (mask and select before the role) | Open item, with PR B (which edits the composite) |
+| security N1 | The audit-endpoint taint check follows `env` one level and matches `secrets` case-sensitively | Open item (defense in depth; nothing in the repo does this) |
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_A>`, `<PR_B>`, `<SHA>`, `<PROD_ALB>`, `<BROKEN_REV>`. Each command is one line for zsh; there are no packed arguments (lessons 5, 37). Dispatches use the web UI (Actions > workflow > Run workflow), because the PAT has Actions read-only (lesson 31).
@@ -425,7 +438,13 @@ same JSON list as the repo secret `ALB_INGRESS_CIDRS_DEV`, or `["0.0.0.0/0"]` if
 gh secret set ALB_INGRESS_CIDRS --env dev --repo trungleviet-agilityio/ship-it-safely
 ```
 Expect `gh secret list --env dev` to show `AWS_ACCOUNT_ID`, `ALB_INGRESS_CIDRS`, `AWS_APPLY_ROLE_ARN` and
-`AWS_DEPLOY_ROLE_ARN`.
+`AWS_DEPLOY_ROLE_ARN`. Then check the repository level:
+```bash
+gh secret list --repo trungleviet-agilityio/ship-it-safely
+```
+Expect only suffixed names (`AWS_ACCOUNT_ID_DEV`, `AWS_PLAN_ROLE_ARN_DEV`, optional `ALB_INGRESS_CIDRS_DEV`).
+A repo-level `AWS_ACCOUNT_ID`, `ALB_INGRESS_CIDRS`, `AWS_APPLY_ROLE_ARN` or `AWS_DEPLOY_ROLE_ARN` would be
+used whenever the environment copy is missing (round 2, N2): delete it in Settings > Secrets.
 
 **A2. Checks**
 ```bash
