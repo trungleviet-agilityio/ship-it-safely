@@ -24,19 +24,25 @@ locals {
   )
   oidc_host = "token.actions.githubusercontent.com"
 
-  # Workflow names (E2): the `name:` of the workflow file. Phase 3 (terraform-iac), Phase 4 (app-deploy) and
-  # Phase 5 (terraform-destroy) must use exactly these.
-  workflow_names = {
-    apply  = ["terraform-iac", "terraform-destroy"]
-    deploy = ["app-deploy"]
+  # Workflow files (ADR 0007 S2, S29): the apply and deploy roles trust the job_workflow_ref claim, which holds
+  # the file path and the ref. A `name:` can be copied into any merged file; a path cannot. Phases 3 to 5 must
+  # use exactly these files, and repo-guard checks that each exists (selftest/workflows.sh).
+  workflow_files = {
+    apply  = ["terraform-iac.yml", "terraform-destroy.yml"]
+    deploy = ["app-deploy.yml"]
+  }
+  job_workflow_refs = {
+    for k, files in local.workflow_files : k => [
+      for f in files : "${var.github_owner}/${var.github_repo}/.github/workflows/${f}@refs/heads/main"
+    ]
   }
 
   trust = {
     # Plan: a pull_request run has ref refs/pull/<N>/merge; a pull_request_target run has the base ref, so the
     # StringLike (the only one in any trust policy, wildcard = PR number only) refuses it even though sub matches.
     plan   = { sub = "${local.gh_sub_prefix}:pull_request", ref = "refs/pull/*/merge", ref_test = "StringLike", workflows = null }
-    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.apply }
-    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.workflow_names.deploy }
+    apply  = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.job_workflow_refs.apply }
+    deploy = { sub = "${local.gh_sub_prefix}:environment:${var.env}", ref = "refs/heads/main", ref_test = "StringEquals", workflows = local.job_workflow_refs.deploy }
   }
 
   # Name contract that Phase 3 must follow (ADR 0002).

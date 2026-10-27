@@ -182,52 +182,94 @@ run "name_based_subject_fallback" {
   }
 }
 
-run "workflow_names_pinned" {
+run "job_workflow_ref_pinned" {
   command = plan
 
   assert {
     condition = toset(flatten([
       for c in data.aws_iam_policy_document.trust["apply"].statement[0].condition : c.values
-      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
-    ])) == toset(["terraform-iac", "terraform-destroy"])
-    error_message = "apply workflow must be exactly terraform-iac and terraform-destroy"
+      if c.variable == "token.actions.githubusercontent.com:job_workflow_ref" && c.test == "StringEquals"
+      ])) == toset([
+      "trungleviet-agilityio/ship-it-safely/.github/workflows/terraform-iac.yml@refs/heads/main",
+      "trungleviet-agilityio/ship-it-safely/.github/workflows/terraform-destroy.yml@refs/heads/main",
+    ])
+    error_message = "apply job_workflow_ref must be exactly the terraform-iac and terraform-destroy files at main"
   }
 
   assert {
     condition = toset(flatten([
       for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
-      if c.variable == "token.actions.githubusercontent.com:workflow" && c.test == "StringEquals"
-    ])) == toset(["app-deploy"])
-    error_message = "deploy workflow must be exactly app-deploy"
+      if c.variable == "token.actions.githubusercontent.com:job_workflow_ref" && c.test == "StringEquals"
+    ])) == toset(["trungleviet-agilityio/ship-it-safely/.github/workflows/app-deploy.yml@refs/heads/main"])
+    error_message = "deploy job_workflow_ref must be exactly the app-deploy file at main"
   }
 
   assert {
     condition = length([
       for c in data.aws_iam_policy_document.trust["plan"].statement[0].condition : c
-      if c.variable == "token.actions.githubusercontent.com:workflow"
+      if c.variable == "token.actions.githubusercontent.com:job_workflow_ref"
     ]) == 0
-    error_message = "plan must not pin workflow (a PR controls its own workflow file)"
+    error_message = "plan must not pin job_workflow_ref (a PR controls its own workflow file)"
   }
 
   assert {
-    condition     = local.workflow_names == { apply = ["terraform-iac", "terraform-destroy"], deploy = ["app-deploy"] }
-    error_message = "workflow name contract"
+    condition = length(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : c
+        if c.variable == "token.actions.githubusercontent.com:workflow"
+      ]
+    ])) == 0
+    error_message = "no role may keep the name based workflow condition"
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : [for v in c.values : !strcontains(v, "*")]
+        if c.variable == "token.actions.githubusercontent.com:job_workflow_ref"
+      ]
+    ]))
+    error_message = "job_workflow_ref values must not contain a wildcard"
+  }
+
+  assert {
+    condition = local.workflow_files == {
+      apply  = ["terraform-iac.yml", "terraform-destroy.yml"]
+      deploy = ["app-deploy.yml"]
+    }
+    error_message = "workflow file contract"
   }
 }
 
 run "only_documented_condition_keys" {
   command = plan
 
-  # Documented GitHub keys in the IAM condition keys reference. event_name is not one of them.
+  # Documented GitHub keys in the IAM condition keys reference, plus the global aws:RequestedRegion.
+  # event_name and workflow_ref are not on the list.
   assert {
     condition = alltrue(flatten([
       for k, d in data.aws_iam_policy_document.trust : [
         for c in d.statement[0].condition : contains(
-          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "workflow"],
+          ["aud", "sub", "repository_id", "repository_owner_id", "ref", "job_workflow_ref", "aws:RequestedRegion"],
           trimprefix(c.variable, "token.actions.githubusercontent.com:")
         )
       ]
     ]))
-    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, workflow"
+    error_message = "trust conditions may only use aud, sub, repository_id, repository_owner_id, ref, job_workflow_ref, aws:RequestedRegion"
+  }
+}
+
+run "requested_region_pinned_on_every_role" {
+  command = plan
+
+  # The alert rule sees one region only; a call through the global endpoint carries us-east-1 and is refused.
+  assert {
+    condition = alltrue([
+      for k, d in data.aws_iam_policy_document.trust : [
+        for c in d.statement[0].condition : c.test == "StringEquals" && c.values == ["ap-southeast-1"]
+        if c.variable == "aws:RequestedRegion"
+      ] != [] && length([for c in d.statement[0].condition : c if c.variable == "aws:RequestedRegion"]) == 1
+    ])
+    error_message = "every role must require aws:RequestedRegion = the bootstrap region, exactly once"
   }
 }

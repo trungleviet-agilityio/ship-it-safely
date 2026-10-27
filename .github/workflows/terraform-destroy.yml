@@ -3,7 +3,8 @@
 # approval prompt exists. The `destroy` job then needs the `dev` environment approval, plans the destroy, refuses
 # anything but deletes under module.app_ecs., applies that same saved plan and deregisters the task definition
 # revisions. Bootstrap is never destroyed here (ADR 0006, G17).
-# The `name:` below is part of the apply role trust (ADR 0004, E2): the bootstrap `workflow_names.apply` must list it.
+# The file path is part of the apply role trust (ADR 0007 S2): the bootstrap `workflow_files.apply` must list
+# terraform-destroy.yml.
 name: terraform-destroy
 
 on:
@@ -38,7 +39,8 @@ jobs:
         with:
           egress-policy: audit
 
-      # Inputs reach the script through env only. The typed phrase is never echoed. The input is a choice, and the
+      # Inputs reach the script through env only. The script never echoes the phrase. GitHub prints the step `env:`
+      # block in the log, so the phrase shows there; it is not a secret. The input is a choice, and the
       # case below checks it again (defense in depth for a dispatch through the API): allowed_envs is the one list
       # here and must equal the input options (ci-selftest checks it).
       - name: Check the branch, the environment and the typed confirmation
@@ -128,6 +130,13 @@ jobs:
           REGION: ${{ vars.AWS_REGION }}
         run: scripts/tf-init.sh
 
+      # A destroy plan deletes what is in state, so the optional ALB ingress secret is not passed as a variable.
+      # Masking its elements keeps any CIDR that Terraform prints out of the log.
+      - name: Mask the ALB ingress CIDRs
+        env:
+          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
+        run: scripts/mask-cidrs.sh
+
       - name: Terraform destroy plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
@@ -177,21 +186,9 @@ jobs:
           DEREGISTERED: ${{ steps.revisions.outputs.DEREGISTERED }}
         run: |
           set -euo pipefail
-          role="$(scripts/assumed-role-name.sh 2>/dev/null)" || role="not assumed"
-          {
-            echo "### Destroyed"
-            if [[ -z "$DELETES" ]]; then
-              echo "Resources: not known (the plan check did not finish)"
-            elif [[ "$DELETES" == "0" ]]; then
-              echo "Nothing to destroy."
-            elif [[ "$APPLY_OUTCOME" == "success" ]]; then
-              echo "Resources: ${DELETES} deleted"
-            else
-              echo "Resources: ${DELETES} planned; apply failed"
-            fi
-            echo "Task definition revisions deregistered: ${DEREGISTERED:-not known (the cleanup did not start)}"
-            echo "Role: \`${role}\`"
-          } | scripts/assert-no-account-id.sh >> "$GITHUB_STEP_SUMMARY"
+          ROLE="$(scripts/assumed-role-name.sh 2>/dev/null)" || ROLE="not assumed"
+          export ROLE
+          scripts/tf-destroy-report.sh | scripts/assert-no-account-id.sh >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove the plan file
         if: always()

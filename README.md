@@ -54,6 +54,13 @@ Add `eval "$(mise activate zsh)"` to `~/.zshrc` so the pinned versions come firs
 (`which terraform` should point into `~/.local/share/mise`). Another version manager that also ships
 `terraform` (for example asdf) must not come before mise on `PATH`.
 
+Create the hash-locked CI venv once (PyYAML for the workflow trigger check, ADR 0007 S34; `make check`
+needs it):
+
+```bash
+make venv
+```
+
 Install the git hooks once:
 
 ```bash
@@ -74,6 +81,7 @@ Day to day, run everything through `make` (`make help` lists the targets):
 
 | Target | Does |
 |---|---|
+| `make venv` | Hash-locked CI venv in `.venv-ci` (PyYAML for the workflow trigger check); created once, then reused |
 | `make up` / `make down` | Run or stop the app on http://localhost:8080 (creates `app/.env` from the example) |
 | `make test` | App unit tests |
 | `make lint` | pre-commit hooks (including gitleaks, zizmor and the account-ID guard), hadolint, shellcheck, actionlint, CI helper self-tests |
@@ -112,7 +120,8 @@ one role. The role's trust policy decides which tokens it accepts (ADR 0002 B13,
 | `repository_id`, `repository_owner_id` | numeric IDs | The same, as a second check |
 | `ref` on the plan role | `StringLike refs/pull/*/merge` | `pull_request_target` runs and dispatched runs, which carry `refs/heads/main` |
 | `ref` on apply and deploy | `refs/heads/main` | A branch run that adds `environment: dev` to a job |
-| `workflow` | `terraform-iac`, `terraform-destroy` (apply); `app-deploy` (deploy) | An approved job in one workflow using the other workflow's role |
+| `aws:RequestedRegion` on every role | `ap-southeast-1` | An assumption through another region's STS or the global endpoint, where the security alert does not look (ADR 0007 verify M1) |
+| `job_workflow_ref` on apply and deploy | `OWNER/REPO/.github/workflows/terraform-iac.yml@refs/heads/main` and `.../terraform-destroy.yml@refs/heads/main` (apply); `.../app-deploy.yml@refs/heads/main` (deploy) | Any other workflow file, even one that copies a trusted `name:`; a renamed file needs a bootstrap re-apply (ADR 0007 S2) |
 
 Gates outside the trust policy:
 
@@ -121,7 +130,13 @@ Gates outside the trust policy:
   GitHub roles, guardrails, boundary or OIDC provider, no access to the bootstrap state.
 - **ECS role boundary:** any role the apply role creates is capped by `sis-dev-ecs-boundary`.
 - **Exact `iam:PassRole`:** only the two ECS roles, only to `ecs-tasks.amazonaws.com`.
-- **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch`.
+- **`repo-guard`:** every workflow may only use `pull_request`, `push` or `workflow_dispatch` (checked with a
+  real YAML parser).
+- **Security alert:** a CloudTrail trail plus an EventBridge rule email you (SNS) about every refused
+  `AssumeRoleWithWebIdentity` in ap-southeast-1 and any assumption with a `sub` other than the two trusted ones
+  (ADR 0007 S8). The region pin means a success can only happen there; refused probes in other regions are not
+  alerted (accepted: they grant nothing). Diagram:
+  [bootstrap security alert](docs/diagrams/bootstrap-security-alert.drawio.png).
 
 ## Pipelines (`.github/workflows/`)
 
@@ -131,13 +146,28 @@ Gates outside the trust policy:
 | | push to `main` touching `envs/dev`, `modules/` or the workflow file, or `workflow_dispatch` | `apply` in environment `dev` (your approval required) with the apply role: plan, then apply that saved plan |
 | [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev`) and `confirm`, which must be typed as `destroy-dev` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
 | [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
-| [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). `name:` must stay `app-deploy` (deploy role trust) |
-| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist and the CI helper self-tests. Its name must never be added to the bootstrap `workflow_names` |
-| [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file; `workflow_dispatch` | Diagnostic: assumes the plan role on a PR; the dispatch job (N1) passes only when the plan role refuses the non-PR token |
+| [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). The file path is in the deploy role trust: renaming the file needs a bootstrap re-apply |
+| [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist and the CI helper self-tests. It must never be listed in the bootstrap `workflow_files` |
+| [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file or its scripts; `workflow_dispatch` | Diagnostic and negative tests. On a PR: the token is refused by the apply and deploy roles (N8), a 3601 s session on the plan role is refused and a 900 s one shows its expiry (N9), then the plan role is assumed. On dispatch: every role refuses the non-PR token (N1). Each refusal also sends a security alert email, by design |
 
 Every job starts with `step-security/harden-runner` in `audit` mode, every action is pinned to a commit SHA, and
 tools (Terraform, tflint, Trivy, hadolint) are checksum-verified binaries. Fork and Dependabot PRs get no OIDC
 token, so the jobs that assume a role skip them.
+
+### Dependabot
+
+[`.github/dependabot.yml`](.github/dependabot.yml) opens one grouped PR a month per ecosystem (GitHub Actions,
+the Docker base image, Terraform providers, pre-commit hooks), each after a 7-day cooldown; security updates come
+at once. Two rules when you handle them:
+
+- **Terraform PRs get no plan** (Dependabot has no secrets). Before merging one, re-open it from your own
+  branch: `gh pr checkout <N>`, `git switch -c deps/terraform-<date>`, `git push -u origin HEAD`, open a PR,
+  read its plan comment, merge it, and close the Dependabot PR.
+- **Merging an actions PR touches every workflow**, so the `terraform-iac` apply and `app-deploy` start. If the
+  stack is down, **reject** the pending apply: approving it re-creates the stack.
+
+Not covered by Dependabot, so check them monthly by hand: the tool versions in `mise.toml` with
+`scripts/ci-tools.sha256`, and `scripts/ci-requirements.txt`.
 
 ### Repo configuration the pipelines read
 
@@ -145,9 +175,11 @@ token, so the jobs that assume a role skip them.
 |---|---|---|
 | Repo | `AWS_PLAN_ROLE_ARN_DEV`, `AWS_ACCOUNT_ID_DEV` | secrets (they hold the account ID; variables would print unmasked in public logs) |
 | Repo | `AWS_REGION` | variable |
+| Repo | `ALB_INGRESS_CIDRS_DEV` (optional) | secret: a JSON list such as `["<your IP>/32"]`. Unset means `0.0.0.0/0`. The plan masks each CIDR and the rules hold no CIDR in their names (ADR 0007 S10) |
 | Environment `dev` | `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` | secrets, only readable by jobs you approved |
 | Environment `dev` | required reviewer (you), deployment branches: `main` only | protection rules |
-| Repo | ruleset on the default branch: PR required, no force push, no deletion | ruleset |
+| Repo | ruleset on the default branch: PR required, no force push, no deletion, status check `guard (no AWS)` required | ruleset |
+| Repo | [`.github/CODEOWNERS`](.github/CODEOWNERS) (`* @trungleviet-agilityio`); "require review from code owners" stays off while there is one maintainer | file |
 
 The state bucket name is derived from the account ID and region, so it is not stored anywhere (ADR 0004 E22).
 
@@ -257,7 +289,7 @@ control inside your VPC. Trade-offs:
 - They cost build minutes, while hosted minutes are free here.
 - GitHub advises against self-hosted runners on public repos, and this repo is public.
 - The CodeBuild project's service role gives credentials to any job that targets its label, which bypasses the
-  `sub`, `ref` and `workflow` trust. If you move, give that role nothing beyond logs and keep assuming the OIDC
+  `sub`, `ref` and `job_workflow_ref` trust. If you move, give that role nothing beyond logs and keep assuming the OIDC
   roles from the job.
 - A GitHub connection credential then lives in AWS.
 
@@ -280,3 +312,4 @@ Status per phase: [`PROGRESS.md`](PROGRESS.md).
 | 3 Infra pipeline + ECS | Yes | Re-apply bootstrap, environment `dev` and secrets, approve apply, `put-secret-value`, negative tests, teardown |
 | 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
 | 5 Hardening and teardown | Yes | Re-apply bootstrap (deploy role reads secret metadata), re-create, negative tests N5 and N6, destroy through `terraform-destroy`, N7 |
+| 6 Supply-chain hardening | Yes | Read the `job_workflow_ref` claim, re-apply bootstrap (file-pinned trust, region pin, trail and alert), confirm the alert email, read harden-runner insights, merge and prove the new trust with a re-create, deploy and destroy round, require `guard (no AWS)`. Then PR B: block mode from the collected egress list |

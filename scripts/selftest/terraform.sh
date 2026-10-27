@@ -123,3 +123,55 @@ expect_fail "guardrails when the plan role could create a VPC" "N3 (plan role, C
 guardrails_ready
 stub aws-ec2-create-vpc rc 0
 expect_fail "guardrails when the VPC call succeeds" "N3 (plan role, CreateVpc dry run) failed: the call succeeded" guardrails
+
+# --- tf-resolved-sources.sh: what init resolved must be local modules and hashicorp providers
+resolved() { "$ROOT/scripts/tf-resolved-sources.sh" "$tmp/tf" "$tmp/tf/data"; }
+mkdir -p "$tmp/tf/data/modules"
+printf 'provider "registry.terraform.io/hashicorp/aws" {\n  version = "6.70.0"\n}\n' >"$tmp/tf/.terraform.lock.hcl"
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"../../modules/m","Dir":"../../modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+resolved >/dev/null 2>&1 || die "selftest: local modules and a hashicorp provider must pass"
+rm "$tmp/tf/data/modules/modules.json"
+resolved >/dev/null 2>&1 || die "selftest: a directory without modules must pass"
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"registry.terraform.io/example/m/aws","Dir":".terraform/modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+expect_fail "resolved remote module" "module source is not local: registry.terraform.io/example/m/aws" resolved
+printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"m","Source":"git::https://example.com/m.git","Dir":".terraform/modules/m"}]}' >"$tmp/tf/data/modules/modules.json"
+expect_fail "resolved git module" "module source is not local" resolved
+rm "$tmp/tf/data/modules/modules.json"
+printf 'provider "registry.terraform.io/example/aws" {\n  version = "1.0.0"\n}\n' >"$tmp/tf/.terraform.lock.hcl"
+expect_fail "resolved non-hashicorp provider" "provider is not hashicorp: registry.terraform.io/example/aws" resolved
+rm "$tmp/tf/.terraform.lock.hcl"
+expect_fail "resolved sources without a lock file" "no .terraform.lock.hcl" resolved
+ok "resolved sources: local modules and hashicorp providers only"
+
+# --- tf-destroy-report.sh: the heading states the real outcome (ADR 0007 S12)
+# report <deletes> <apply outcome> [deregistered]: without the third argument DEREGISTERED stays unset.
+report() {
+  local dereg=()
+  if [ $# -ge 3 ]; then dereg=("DEREGISTERED=$3"); fi
+  env -u DEREGISTERED ENV=dev DELETES="$1" APPLY_OUTCOME="$2" ROLE=sis-dev-gha-apply ${dereg[@]+"${dereg[@]}"} "$ROOT/scripts/tf-destroy-report.sh"
+}
+# The whole report is captured first: piping into `head` closes the pipe early and the report dies of SIGPIPE.
+report_head() {
+  local out
+  out="$(report "$@")"
+  printf '%s\n' "${out%%$'\n'*}"
+}
+[ "$(report_head 5 success 4)" = "### Destroyed (dev)" ] || die "selftest: a successful destroy must be headed Destroyed"
+[ "$(report_head 5 failure 0)" = "### Destroy failed (dev)" ] || die "selftest: a failed apply must be headed Destroy failed"
+[ "$(report_head 5 skipped 0)" = "### Destroy failed (dev)" ] || die "selftest: an apply that did not succeed must not read as Destroyed"
+[ "$(report_head 0 skipped 0)" = "### Nothing to destroy (dev)" ] || die "selftest: an empty plan must be headed Nothing to destroy"
+[ "$(report_head "" skipped 0)" = "### Destroy did not finish (dev)" ] || die "selftest: a missing plan check must be headed Destroy did not finish"
+# shellcheck disable=SC2016  # the backticks are Markdown, not a command
+case "$(report 5 success 4)" in
+  *"Resources: 5 deleted"*"deregistered: 4"*'Role: `sis-dev-gha-apply`'*) ;;
+  *) die "selftest: unexpected destroy report body" ;;
+esac
+case "$(report 5 failure)" in
+  *"deregistered: not known (the cleanup did not start)"*) ;;
+  *) die "selftest: an unset DEREGISTERED must read as not known" ;;
+esac
+case "$(report 5 failure 0)" in
+  *"5 planned; the apply did not succeed (failure)"*) ;;
+  *) die "selftest: a failed apply must say so" ;;
+esac
+ok "destroy report headings follow the real outcome"

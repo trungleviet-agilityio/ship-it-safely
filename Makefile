@@ -11,7 +11,7 @@ FULL_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo local)
 IMAGE := $(shell scripts/image-name.sh $(FULL_SHA))
 
 .DEFAULT_GOAL := help
-.PHONY: help up down test image smoke scan verify lint tf-check docs check
+.PHONY: help up down test image smoke scan verify venv lint tf-check docs check
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -20,10 +20,10 @@ app/.env: ## Create app/.env from the example (fake key, local only)
 	cp app/.env.example $@
 
 up: app/.env ## Run the app locally on http://localhost:8080
-	GIT_SHA=$(GIT_SHA) docker compose -f app/docker-compose.yml up --build
+	GIT_SHA=$(GIT_SHA) docker compose -f app/compose.yaml up --build
 
 down: ## Stop the local app
-	docker compose -f app/docker-compose.yml down
+	docker compose -f app/compose.yaml down
 
 test: ## App unit tests
 	cd app && $(PYTHON) -m unittest discover -s tests
@@ -40,7 +40,15 @@ scan: ## Scan the built image with trivy; fixable HIGH or CRITICAL fails (run ma
 verify: ## Build, smoke test and scan in one go (what app-ci runs)
 	scripts/image-verify.sh $(FULL_SHA) "$$(mktemp -d)"
 
-lint: ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
+# Built once and reused; rebuilt when the hash-locked requirements change. lint needs it for the YAML trigger check.
+# A stamp file, because the venv interpreter is a symlink that touch must not follow.
+.venv-ci/.installed: scripts/ci-requirements.txt
+	PYTHON=$(PYTHON) scripts/ci-venv.sh .venv-ci
+	@touch $@
+
+venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
+
+lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
 	shellcheck -x scripts/*.sh scripts/selftest/*.sh

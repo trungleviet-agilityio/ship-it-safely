@@ -13,6 +13,7 @@ on:
       - scripts/app-smoke.sh
       - scripts/build-image.sh
       - scripts/ci-requirements.txt
+      - scripts/ci-venv.sh
       - scripts/ci-tools.sha256
       - scripts/image-name.sh
       - scripts/image-verify.sh
@@ -56,8 +57,7 @@ jobs:
 
       - name: Install pre-commit (hash locked)
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet --require-hashes -r scripts/ci-requirements.txt
+          scripts/ci-venv.sh "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Python checks (ruff and mypy)

@@ -14,6 +14,12 @@ mock_provider "aws" {
   mock_resource "aws_iam_policy" {
     defaults = { arn = "arn:aws:iam::123456789012:policy/mock" }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:ap-southeast-1:123456789012:sis-dev-security-alerts" }
+  }
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = { arn = "arn:aws:events:ap-southeast-1:123456789012:rule/sis-dev-oidc-unexpected" }
+  }
 }
 
 variables {
@@ -93,6 +99,34 @@ run "guardrails_deny_and_attach" {
       && alltrue([for k, a in aws_iam_role_policy_attachment.guardrails : a.policy_arn == aws_iam_policy.guardrails.arn])
     )
     error_message = "guardrails must be attached to all three roles"
+  }
+}
+
+run "guardrails_protect_audit_resources" {
+  command = plan
+
+  # ADR 0007 S28: one Deny per target. A shared resource list would apply every action to every resource.
+  assert {
+    condition = {
+      for s in data.aws_iam_policy_document.guardrails.statement : s.sid => {
+        effect    = s.effect
+        actions   = toset(s.actions)
+        resources = toset(s.resources)
+      } if startswith(s.sid, "G6")
+      } == {
+      G6DenyAuditTrail = { effect = "Deny", actions = toset(["cloudtrail:*"]), resources = toset(["*"]) }
+      G6DenyAlertRule  = { effect = "Deny", actions = toset(["events:*"]), resources = toset(["arn:aws:events:ap-southeast-1:123456789012:rule/sis-dev-oidc-unexpected"]) }
+      G6DenyAlertTopic = { effect = "Deny", actions = toset(["sns:*"]), resources = toset(["arn:aws:sns:ap-southeast-1:123456789012:sis-dev-security-alerts"]) }
+      G6DenyTrailBucket = {
+        effect  = "Deny"
+        actions = toset(["s3:*"])
+        resources = toset([
+          "arn:aws:s3:::sis-dev-cloudtrail-123456789012-ap-southeast-1-an",
+          "arn:aws:s3:::sis-dev-cloudtrail-123456789012-ap-southeast-1-an/*",
+        ])
+      }
+    }
+    error_message = "G6 must deny cloudtrail, the alert rule, the alert topic and the trail bucket, each on its own resources"
   }
 }
 

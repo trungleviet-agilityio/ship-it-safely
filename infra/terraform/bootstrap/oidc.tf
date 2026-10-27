@@ -5,7 +5,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 # One trust policy per role (B13): StringEquals except the plan role's pull request merge ref, immutable IDs,
-# ref pinned on every role.
+# ref pinned on every role, and the workflow file path (job_workflow_ref) on apply and deploy.
 data "aws_iam_policy_document" "trust" {
   for_each = local.trust
 
@@ -49,12 +49,21 @@ data "aws_iam_policy_document" "trust" {
       values   = [each.value.ref]
     }
 
+    # The alert rule only sees this region's events. aws:RequestedRegion is always in the request context, and calls
+    # to the global STS endpoint carry us-east-1, so those are refused too. An unexpected success can then only
+    # happen in the alerted region (ADR 0007 fix round 1).
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+
     dynamic "condition" {
       for_each = each.value.workflows == null ? [] : [each.value.workflows]
 
       content {
         test     = "StringEquals"
-        variable = "${local.oidc_host}:workflow"
+        variable = "${local.oidc_host}:job_workflow_ref"
         values   = condition.value
       }
     }

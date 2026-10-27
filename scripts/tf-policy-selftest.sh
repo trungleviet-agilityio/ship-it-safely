@@ -13,12 +13,12 @@ trap 'rm -rf "$tmp_root"' EXIT
 policy="$ROOT/scripts/tf-policy.sh"
 n=0
 
-# fixture <name>: create an empty tree with a clean module and env, print its path.
+# fixture <name>: create a tree with a clean module and env, print its path.
 fixture() {
   local d="$tmp_root/$1"
   mkdir -p "$d/modules/m" "$d/envs/dev"
   cat >"$d/modules/m/main.tf" <<'EOF'
-# comments may mention aws_secretsmanager_secret_version, AmazonECSTaskExecutionRolePolicy and provisioner "x"
+# comments may mention aws_secretsmanager_secret_version, AmazonECSTaskExecutionRolePolicy and provisioner "x" {
 resource "aws_iam_role" "ok" {
   name                 = "x"
   permissions_boundary = "arn"
@@ -36,8 +36,8 @@ EOF
   printf '%s' "$d"
 }
 
-# expect_fail <fixture dir> <rule id> : the run must fail and name policy[<id>].
-expect_fail() {
+# violates <fixture dir> <rule id>: the policy must fail and name policy[<id>].
+violates() {
   local out rc=0
   n=$((n + 1))
   # The subshell inherits the ERR trap from lib.sh; clear it so the expected failure stays quiet.
@@ -47,6 +47,26 @@ expect_fail() {
     *"policy[$2]"*) ok "rule $2 fails on its bad fixture" ;;
     *) die "rule $2: failed without naming policy[$2]: $out" ;;
   esac
+}
+
+# bad <name> <rule id> <path in the fixture> <content>: write the content (printf %b escapes) over a clean fixture
+# and require the rule to fire.
+bad() {
+  local d
+  d="$(fixture "$1")"
+  mkdir -p "$(dirname "$d/$3")"
+  printf '%b\n' "$4" >"$d/$3"
+  violates "$d" "$2"
+}
+
+# good <name> <path in the fixture> <content>: the policy must pass.
+good() {
+  local d
+  d="$(fixture "$1")"
+  mkdir -p "$(dirname "$d/$2")"
+  printf '%b\n' "$3" >"$d/$2"
+  "$policy" "$d" >/dev/null 2>&1 || die "fixture $1 must pass"
+  ok "fixture $1 passes"
 }
 
 d="$(fixture good)"
@@ -60,117 +80,78 @@ mkdir -p "$tmp_root/empty"
 "$policy" "$tmp_root/empty" >/dev/null 2>&1 || die "root without modules/ or envs/ must pass"
 ok "absent modules/ and envs/ are no-ops"
 
-d="$(fixture r1)"
-printf 'resource "aws_secretsmanager_secret_version" "v" {}\n' >"$d/envs/dev/s.tf"
-expect_fail "$d" 1
+# Rule 1 to 4: secrets, security groups, managed policies, permissions boundary.
+bad r1 1 envs/dev/s.tf 'resource "aws_secretsmanager_secret_version" "v" {}'
+bad r2a 2 modules/m/sg.tf 'resource "aws_security_group_rule" "r" {}'
+bad r2b 2 modules/m/sg.tf 'resource "aws_security_group" "s" {\n  ingress {\n  }\n}'
+bad r2c 2 modules/m/sg.tf 'resource "aws_security_group" "s" {\n  dynamic "ingress" {\n  }\n}'
+bad r2d 2 modules/m/sg.tf 'resource "aws_security_group" "s" {\n  egress = [\n  ]\n}'
+bad r3a 3 modules/m/p.tf 'locals { p = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" }'
+bad r3b 3 modules/m/p.tf 'resource "aws_iam_role_policy_attachment" "a" {}'
+bad r4 4 modules/m/role.tf 'resource "aws_iam_role" "bad" {\n  name = "y"\n}'
 
-d="$(fixture r2a)"
-printf 'resource "aws_security_group_rule" "r" {}\n' >"$d/modules/m/sg.tf"
-expect_fail "$d" 2
-
-d="$(fixture r2b)"
-printf 'resource "aws_security_group" "s" {\n  ingress {\n  }\n}\n' >"$d/modules/m/sg.tf"
-expect_fail "$d" 2
-
-d="$(fixture r2c)"
-printf 'resource "aws_security_group" "s" {\n  dynamic "ingress" {\n  }\n}\n' >"$d/modules/m/sg.tf"
-expect_fail "$d" 2
-
-d="$(fixture r2d)"
-printf 'resource "aws_security_group" "s" {\n  egress = [\n  ]\n}\n' >"$d/modules/m/sg.tf"
-expect_fail "$d" 2
-
-d="$(fixture r3a)"
-printf 'locals { p = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" }\n' >"$d/modules/m/p.tf"
-expect_fail "$d" 3
-
-d="$(fixture r3b)"
-printf 'resource "aws_iam_role_policy_attachment" "a" {}\n' >"$d/modules/m/p.tf"
-expect_fail "$d" 3
-
-d="$(fixture r4)"
-printf 'resource "aws_iam_role" "bad" {\n  name = "y"\n}\n' >"$d/modules/m/role.tf"
-expect_fail "$d" 4
-
-d="$(fixture r5a)"
-printf 'terraform {\n  backend "s3" {\n    bucket = "b"\n    key = "envs/dev/terraform.tfstate"\n    use_lockfile = true\n  }\n}\n' >"$d/envs/dev/backend.tf"
-expect_fail "$d" 5
-
-d="$(fixture r5b)"
-printf 'terraform {\n  backend "s3" {\n    key = "envs/dev/terraform.tfstate"\n  }\n}\n' >"$d/envs/dev/backend.tf"
-expect_fail "$d" 5
-
-d="$(fixture r5c)"
-printf 'terraform {\n  backend "s3" {\n    key = "envs/prod/terraform.tfstate"\n    use_lockfile = true\n  }\n}\n' >"$d/envs/dev/backend.tf"
-expect_fail "$d" 5
-
+# Rule 5: backends.
+bad r5a 5 envs/dev/backend.tf 'terraform {\n  backend "s3" {\n    bucket = "b"\n    key = "envs/dev/terraform.tfstate"\n    use_lockfile = true\n  }\n}'
+bad r5b 5 envs/dev/backend.tf 'terraform {\n  backend "s3" {\n    key = "envs/dev/terraform.tfstate"\n  }\n}'
+bad r5c 5 envs/dev/backend.tf 'terraform {\n  backend "s3" {\n    key = "envs/prod/terraform.tfstate"\n    use_lockfile = true\n  }\n}'
 d="$(fixture r5d)"
 rm "$d/envs/dev/backend.tf"
 printf 'terraform {}\n' >"$d/envs/dev/main.tf"
-expect_fail "$d" 5
+violates "$d" 5
 
-d="$(fixture r7a)"
-printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "AWS"\n      identifiers = ["x"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+# Rule 6: providers and backends come from the root.
+bad r6a 6 modules/m/prov.tf 'provider "aws" {}'
+bad r6b 6 modules/m/be.tf 'terraform {\n  backend "s3" {}\n}'
 
-d="$(fixture r7b)"
-printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["arn:aws:iam::1:root"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+# Rule 7: module role trust.
+bad r7a 7 modules/m/trust.tf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "AWS"\n      identifiers = ["x"]\n    }\n  }\n}'
+bad r7b 7 modules/m/trust.tf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type        = "Service"\n      identifiers = ["arn:aws:iam::1:root"]\n    }\n  }\n}'
+bad r7c 7 modules/m/trust.tf 'locals {\n  trust = { Principal = { AWS = "x" } }\n}'
+bad r7d 7 modules/m/trust.tf 'locals {\n  trust = { Principal = "*" }\n}'
+bad r7e 7 modules/m/trust.tf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type = "*"\n      identifiers = ["*"]\n    }\n  }\n}'
+bad r7f 7 modules/m/trust.tf 'locals {\n  trust = { Federated = "x" }\n}'
 
-d="$(fixture r7c)"
-printf 'locals {\n  trust = { Principal = { AWS = "x" } }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+# Rule 8: public root outputs.
+bad r8a 8 envs/dev/outputs.tf 'output "a" {\n  value = module.m.role.arn\n}'
+bad r8b 8 envs/dev/outputs.tf 'output "a" {\n  value = module.m.ecr_repository_url\n}'
+bad r8c 8 envs/dev/outputs.tf 'output "a" {\n  value = module.m.role_arn\n}'
+bad r8d 8 envs/dev/outputs.tf 'output "a" {\n  value = data.aws_caller_identity.current.account_id\n}'
 
-d="$(fixture r7d)"
-printf 'locals {\n  trust = { Principal = "*" }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+# Rule 9: no code execution. Quoted or bare labels, a block opened mid-line.
+bad r9a 9 modules/m/prov.tf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}'
+bad r9b 9 envs/dev/prov.tf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}'
+bad r9c 9 modules/m/ext.tf 'data "external" "x" {\n  program = ["true"]\n}'
+bad r9d 9 envs/dev/ext.tf 'data "external" "x" {\n  program = ["true"]\n}'
+bad r9e 9 modules/m/prov.tf 'resource "terraform_data" "x" {\n  provisioner local-exec {\n    command = "true"\n  }\n}'
+bad r9f 9 envs/dev/ext.tf 'data external x {\n  program = ["true"]\n}'
+bad r9g 9 modules/m/prov.tf 'resource "terraform_data" "x" { provisioner "local-exec" { command = "true" } }'
+bad r9h 9 envs/dev/ext.tf 'locals { a = 1 } data "external" "x" { program = ["true"] }'
 
-d="$(fixture r7e)"
-printf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type = "*"\n      identifiers = ["*"]\n    }\n  }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+bad r9i 9 modules/m/prov.tf 'resource "terraform_data" "x" {\n  provisioner"local-exec" {\n    command = "true"\n  }\n}'
+bad r9j 9 envs/dev/ext.tf 'data"external" "x" {\n  program = ["true"]\n}'
 
-d="$(fixture r7f)"
-printf 'locals {\n  trust = { Federated = "x" }\n}\n' >"$d/modules/m/trust.tf"
-expect_fail "$d" 7
+# Rule 10: a JSON twin of a configuration file escapes every line based rule.
+bad r10 10 envs/dev/main.tf.json '{"resource": {}}'
 
-d="$(fixture r8a)"
-printf 'output "a" {\n  value = module.m.role.arn\n}\n' >"$d/envs/dev/outputs.tf"
-expect_fail "$d" 8
+# Rule 11: module sources are local paths. A "}" in a string or a comment must not end the block early.
+bad r11a 11 envs/dev/mod.tf 'module "x" { source = "git::https://example.com/m.git" }'
+bad r11b 11 modules/m/mod.tf 'module "x" {\n  source  = "terraform-aws-modules/vpc/aws"\n  version = "1.0.0"\n}'
+bad r11c 11 envs/dev/mod.tf 'module "x" {\n  name = "n"\n  source = "github.com/example/m"\n}'
+bad r11d 11 envs/dev/mod.tf 'module "x" {\n  name = "}"\n  source = "github.com/example/m"\n}'
+bad r11e 11 envs/dev/mod.tf 'module "x" {\n  name = "n" # }\n  source = "github.com/example/m"\n}'
 
-d="$(fixture r8b)"
-printf 'output "a" {\n  value = module.m.ecr_repository_url\n}\n' >"$d/envs/dev/outputs.tf"
-expect_fail "$d" 8
+# Registry-looking sources that a regex without its backslashes would let through ("ab/mod/aws", "a/b").
+bad r11f 11 envs/dev/mod.tf 'module "x" {\n  source = "ab/mod/aws"\n}'
+bad r11g 11 envs/dev/mod.tf 'module "x" {\n  source = "a/b"\n}'
 
-d="$(fixture r8c)"
-printf 'output "a" {\n  value = module.m.role_arn\n}\n' >"$d/envs/dev/outputs.tf"
-expect_fail "$d" 8
+# Rule 12: provider sources are hashicorp/*, in bootstrap too.
+bad r12a 12 envs/dev/versions.tf 'terraform {\n  required_providers {\n    aws = {\n      source = "example/aws"\n    }\n  }\n}'
+bad r12b 12 bootstrap/versions.tf 'terraform {\n  required_providers {\n    aws = { source = "registry.example.com/x/aws", version = "1" }\n  }\n}'
+bad r12c 12 modules/m/versions.tf 'terraform {\n  required_providers {\n    note = "}"\n    aws = {\n      source = "example/aws"\n    }\n  }\n}'
 
-d="$(fixture r8d)"
-printf 'output "a" {\n  value = data.aws_caller_identity.current.account_id\n}\n' >"$d/envs/dev/outputs.tf"
-expect_fail "$d" 8
-
-d="$(fixture r6a)"
-printf 'provider "aws" {}\n' >"$d/modules/m/prov.tf"
-expect_fail "$d" 6
-
-d="$(fixture r6b)"
-printf 'terraform {\n  backend "s3" {}\n}\n' >"$d/modules/m/be.tf"
-expect_fail "$d" 6
-
-d="$(fixture r9a)"
-printf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}\n' >"$d/modules/m/prov.tf"
-expect_fail "$d" 9
-
-d="$(fixture r9b)"
-printf 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "true"\n  }\n}\n' >"$d/envs/dev/prov.tf"
-expect_fail "$d" 9
-
-d="$(fixture r9c)"
-printf 'data "external" "x" {\n  program = ["true"]\n}\n' >"$d/modules/m/ext.tf"
-expect_fail "$d" 9
-
-d="$(fixture r9d)"
-printf 'data "external" "x" {\n  program = ["true"]\n}\n' >"$d/envs/dev/ext.tf"
-expect_fail "$d" 9
+# These must pass: local sources, hashicorp providers, and a source outside a module or provider block.
+good g11 envs/dev/mod.tf 'module "x" { source = "../../modules/app-ecs" }\nmodule "y" {\n  source = "./y"\n}'
+good g12 bootstrap/versions.tf 'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/aws"\n    }\n  }\n}'
+good gsrc modules/m/other.tf 'resource "x" "y" {\n  source = "anything"\n}'
 
 ok "all $n bad fixtures fail with their rule id"

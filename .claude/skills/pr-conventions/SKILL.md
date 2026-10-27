@@ -57,7 +57,7 @@ type(scope): subject
 | `perf` | a change whose point is speed or cost |
 | `test` | tests only (unittest, `terraform test`) |
 | `docs` | `README.md`, `PLAN.md`, `docs/`, `CLAUDE.md`, skills |
-| `build` | `Dockerfile`, `docker-compose.yml`, `pyproject.toml` |
+| `build` | `Dockerfile`, `compose.yaml`, `pyproject.toml` |
 | `ci` | `.github/workflows/`, Dependabot |
 | `infra` | `infra/terraform/**` |
 | `chore` | repo tooling and maintenance (`.pre-commit-config.yaml`, `.tflint.hcl`, `.gitignore`, `Makefile`, `scripts/`) |

@@ -1,6 +1,7 @@
 # ADR 0006: Phase 5 hardening and teardown
 
 - Status: accepted
+- The deferred rule 9 gaps and the destroy heading are resolved by ADR 0007 S11 and S12; `DeleteTaskDefinitions` is dropped (S14).
 - Date: 2026-10-26 (accepted the same day)
 
 ## Context

@@ -13,7 +13,7 @@ fails, report it with the output; do not fix it.
 
 App (`app/**`):
 1. `cp -n app/.env.example /tmp/sis-e2e.env` and start with
-   `docker compose -f app/docker-compose.yml --env-file /tmp/sis-e2e.env up -d --build`.
+   `docker compose -f app/compose.yaml --env-file /tmp/sis-e2e.env up -d --build`.
 2. Wait for health, then check with curl: `/health` is 200; `/` shows the env and `secret_loaded: yes`;
    `/version` is JSON; `/admin` without a key is 401 and with the fake key is 200.
 3. Restart with `BREAK=true` and confirm `/health` is 500.

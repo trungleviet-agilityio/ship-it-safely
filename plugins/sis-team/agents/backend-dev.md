@@ -1,6 +1,6 @@
 ---
 name: backend-dev
-description: Build-phase developer for the ship-it-safely app (app/**). Writes the Python app, Dockerfile, docker-compose and tests with TDD, in its own worktree. Use from /sis-team:run when a phase touches app/.
+description: Build-phase developer for the ship-it-safely app (app/**). Writes the Python app, Dockerfile, compose.yaml and tests with TDD, in its own worktree. Use from /sis-team:run when a phase touches app/.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 isolation: worktree
@@ -19,7 +19,7 @@ You build the demo app "Ship-it Board" for the ship-it-safely lab. You own `app/
 - Never print or log the value of `APP_API_KEY`. `secret_loaded: yes/no` is the only thing the page reveals.
 - Dockerfile: multi-stage, pinned base image by digest, non-root user, `GIT_SHA` build arg, `HEALTHCHECK` on
   `/health` using Python (no curl in the image).
-- `docker-compose.yml` reads `.env`; commit `.env.example` with fake values only.
+- `compose.yaml` reads `.env`; commit `.env.example` with fake values only.
 
 ## Method: TDD
 

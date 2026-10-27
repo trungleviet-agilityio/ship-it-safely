@@ -123,9 +123,9 @@ run "security_group_rules_are_standalone_and_narrow" {
   assert {
     condition = (
       length(aws_vpc_security_group_ingress_rule.alb_http) == 1
-      && aws_vpc_security_group_ingress_rule.alb_http["0.0.0.0/0"].from_port == 80
-      && aws_vpc_security_group_ingress_rule.alb_http["0.0.0.0/0"].to_port == 80
-      && aws_vpc_security_group_ingress_rule.alb_http["0.0.0.0/0"].ip_protocol == "tcp"
+      && aws_vpc_security_group_ingress_rule.alb_http[0].from_port == 80
+      && aws_vpc_security_group_ingress_rule.alb_http[0].to_port == 80
+      && aws_vpc_security_group_ingress_rule.alb_http[0].ip_protocol == "tcp"
     )
     error_message = "ALB ingress is TCP 80 only, one rule per allowed CIDR"
   }
@@ -167,9 +167,41 @@ run "alb_ingress_follows_the_input" {
   }
 
   assert {
-    condition     = toset(keys(aws_vpc_security_group_ingress_rule.alb_http)) == toset(["198.51.100.0/24", "203.0.113.0/24"])
-    error_message = "one ALB ingress rule per allowed CIDR"
+    condition = (
+      length(aws_vpc_security_group_ingress_rule.alb_http) == 2
+      && aws_vpc_security_group_ingress_rule.alb_http[0].cidr_ipv4 == "198.51.100.0/24"
+      && aws_vpc_security_group_ingress_rule.alb_http[1].cidr_ipv4 == "203.0.113.0/24"
+    )
+    error_message = "one ALB ingress rule per allowed CIDR, indexed in input order"
   }
+
+  # The CIDR may be a maintainer's address (a repository secret): it must not reach a description.
+  assert {
+    condition = alltrue([
+      for r in aws_vpc_security_group_ingress_rule.alb_http : !strcontains(r.description, "198.51") && !strcontains(r.description, "203.0")
+    ])
+    error_message = "rule descriptions must not hold a CIDR"
+  }
+}
+
+run "validation_rejects_an_ipv6_alb_cidr" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs = ["::/0"]
+  }
+
+  expect_failures = [var.alb_ingress_cidrs]
+}
+
+run "validation_rejects_an_invalid_alb_cidr" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs = ["not-a-cidr"]
+  }
+
+  expect_failures = [var.alb_ingress_cidrs]
 }
 
 run "alb_is_public_and_strict" {

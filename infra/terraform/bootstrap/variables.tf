@@ -121,3 +121,9 @@ variable "budget_alert_threshold_percent" {
     error_message = "budget_alert_threshold_percent must be between 1 and 100."
   }
 }
+
+variable "create_trail" {
+  type        = bool
+  description = "Create the CloudTrail trail and its bucket. Set false when the account already has a trail, so management events are not paid for twice. The alert rule is created either way."
+  default     = true
+}

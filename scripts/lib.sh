@@ -75,6 +75,52 @@ assert_denied() {
   esac
 }
 
+# mask <value>: ask the runner to hide a value in every later log line. It prints nothing outside GitHub Actions, so a
+# local run or a self-test never carries the value in its output.
+mask() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then printf '::add-mask::%s\n' "$1" >&2; fi
+}
+
+# oidc_token [audience]: (default sts.amazonaws.com) print the job's GitHub OIDC token (needs id-token: write) and mask it. Logs nothing else.
+oidc_token() {
+  local audience="${1:-sts.amazonaws.com}" response token
+  require_cmd jq "install jq"
+  [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
+    || die "no OIDC token request variables (the job needs id-token: write)"
+  # The audience is a query parameter (GitHub OIDC reference).
+  response="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience")" \
+    || die "OIDC token request failed (not a role refusal)"
+  token="$(jq -r '.value // empty' <<<"$response")"
+  [ -n "$token" ] || die "OIDC token response has no value"
+  mask "$token"
+  printf '%s' "$token"
+}
+
+# jwt_claim <token> <claim>: print one claim of a JWT payload (empty when absent). Reads base64url with or without
+# padding. Never prints the token.
+jwt_claim() {
+  local payload
+  payload="$(cut -d. -f2 <<<"$1" | tr '_-' '/+')"
+  while [ $((${#payload} % 4)) -ne 0 ]; do payload="${payload}="; done
+  base64 -d <<<"$payload" | jq -r --arg claim "$2" '.[$claim] // empty'
+}
+
+# web_identity_call <role: plan|apply|deploy> <token> [aws args...]: run an unsigned sts assume-role-with-web-identity for
+# role sis-<ENV>-gha-<role> in ACCOUNT and REGION. Callers mask ACCOUNT first (a mask printed inside a captured call never reaches the log). It only builds and runs the command, so
+# pass it to assert_denied or run_capture. A success holds credentials: never print its stdout.
+web_identity_call() {
+  local role="$1" token="$2"
+  shift 2
+  : "${ACCOUNT:?ACCOUNT is not set}" "${REGION:?REGION is not set}"
+  require_env
+  case "$role" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$role'" ;; esac
+  # No credentials are needed or sent: --no-sign-request.
+  aws sts assume-role-with-web-identity \
+    --role-arn "arn:aws:iam::${ACCOUNT}:role/sis-${ENV}-gha-${role}" \
+    --role-session-name "gha-oidc-negative-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${role}" \
+    --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
+}
+
 # sha256_of <file>: hex digest on Linux and macOS.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -91,10 +137,15 @@ valid_env() {
   [[ "$1" =~ $re ]]
 }
 
-# app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
-app_names() {
+# require_env: ENV defaults to dev and must be a valid environment name.
+require_env() {
   ENV="${ENV:-dev}"
   valid_env "$ENV" || die "ENV must be lowercase letters and digits, got '$ENV'"
+}
+
+# app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
+app_names() {
+  require_env
   CLUSTER="sis-${ENV}-cluster" SERVICE="sis-${ENV}-app" FAMILY="sis-${ENV}-app" REPOSITORY="sis-${ENV}-app"
   EXEC_ROLE="sis-${ENV}-ecs-exec" TASK_ROLE="sis-${ENV}-ecs-task"
   SECRET_ID="sis/${ENV}/app-api-key" LOG_GROUP="/ecs/sis-${ENV}-app"

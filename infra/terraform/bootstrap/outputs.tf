@@ -44,7 +44,12 @@ output "resource_names" {
   value       = local.resource_names
 }
 
-output "workflow_names" {
-  description = "Workflow names the apply and deploy roles trust (the name: of the workflow file). Phases 3 to 5 must match."
-  value       = local.workflow_names
+output "workflow_files" {
+  description = "Workflow files the apply and deploy roles trust through job_workflow_ref. Each must exist under .github/workflows/."
+  value       = local.workflow_files
+}
+
+output "security_alerts_topic_name" {
+  description = "SNS topic that receives unexpected GitHub OIDC assumption alerts. Confirm the email subscription once."
+  value       = aws_sns_topic.security_alerts.name
 }

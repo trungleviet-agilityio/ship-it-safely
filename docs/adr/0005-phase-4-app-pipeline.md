@@ -1,6 +1,7 @@
 # ADR 0005: Phase 4 app pipeline
 
 - Status: accepted
+- L2 (pin the workflow file, not its name) is resolved by ADR 0007 S2; Q1 (harden-runner insights) is checked at its checkpoint.
 - F23 (deploy-registered revisions left at teardown) is resolved by ADR 0006 G12.
 - Date: 2026-10-26 (accepted the same day)
 

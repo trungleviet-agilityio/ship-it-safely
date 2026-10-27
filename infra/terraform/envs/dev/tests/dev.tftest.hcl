@@ -81,3 +81,49 @@ run "short_account_id_is_rejected" {
 
   expect_failures = [var.aws_account_id]
 }
+
+run "alb_ingress_defaults_to_open" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs_json = ""
+  }
+
+  assert {
+    condition     = nonsensitive(local.alb_ingress_cidrs) == ["0.0.0.0/0"]
+    error_message = "an empty secret must keep the ALB open"
+  }
+}
+
+run "alb_ingress_reads_the_json_secret" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs_json = "[\"198.51.100.7/32\"]"
+  }
+
+  assert {
+    condition     = nonsensitive(local.alb_ingress_cidrs) == ["198.51.100.7/32"]
+    error_message = "a JSON list must decode to the CIDR list"
+  }
+}
+
+run "alb_ingress_rejects_non_json" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs_json = "not json"
+  }
+
+  expect_failures = [var.alb_ingress_cidrs_json]
+}
+
+run "alb_ingress_rejects_ipv6" {
+  command = plan
+
+  variables {
+    alb_ingress_cidrs_json = "[\"::/0\"]"
+  }
+
+  expect_failures = [var.alb_ingress_cidrs_json]
+}

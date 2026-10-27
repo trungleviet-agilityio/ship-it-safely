@@ -64,8 +64,19 @@ variable "secret_recovery_window_days" {
   default     = 0
 }
 
-variable "alb_ingress_cidrs" {
-  type        = list(string)
-  description = "CIDR blocks allowed to reach the ALB on port 80. CI can restrict it with TF_VAR_alb_ingress_cidrs (ADR 0004, Q1)."
-  default     = ["0.0.0.0/0"]
+variable "alb_ingress_cidrs_json" {
+  type        = string
+  description = "JSON list of IPv4 CIDRs allowed to reach the ALB on port 80, e.g. [\"198.51.100.7/32\"]. CI passes the repository secret ALB_INGRESS_CIDRS_DEV. Empty means 0.0.0.0/0 (ADR 0007 S10)."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition = var.alb_ingress_cidrs_json == "" || (
+      can(jsondecode(var.alb_ingress_cidrs_json))
+      && can(tolist(jsondecode(var.alb_ingress_cidrs_json)))
+      && length(jsondecode(var.alb_ingress_cidrs_json)) >= 1
+      && alltrue([for c in jsondecode(var.alb_ingress_cidrs_json) : can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$", c)) && can(cidrhost(c, 0))])
+    )
+    error_message = "alb_ingress_cidrs_json must be empty or a JSON list of at least one IPv4 CIDR."
+  }
 }

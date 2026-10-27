@@ -1,7 +1,7 @@
 # Terraform pipeline for envs/dev (PLAN Phase 3, ADR 0004, FR-9).
 # A pull request plans with the read-only plan role and posts an account-free comment. A push to main (or a manual
 # run) applies with the apply role after approval of the `dev` environment.
-# The `name:` below is part of the apply role trust (ADR 0004, E2): the bootstrap `workflow_names` output must match.
+# The file path is part of the apply role trust (ADR 0007 S2): the bootstrap `workflow_files` must list terraform-iac.yml.
 name: terraform-iac
 
 on:
@@ -12,6 +12,7 @@ on:
       - .github/workflows/terraform-iac.yml
       - scripts/tf-check.sh
       - scripts/tf-policy.sh
+      - scripts/tf-resolved-sources.sh
       - scripts/install-ci-tools.sh
       - scripts/ci-tools.sha256
       - scripts/ci-requirements.txt
@@ -22,6 +23,7 @@ on:
       - scripts/assert-no-account-id.sh
       - scripts/assumed-role-name.sh
       - scripts/plan-role-guardrails.sh
+      - scripts/mask-cidrs.sh
       - scripts/redact-account-ids.sh
       - scripts/lib.sh
       - mise.toml
@@ -138,9 +140,17 @@ jobs:
           REGION: ${{ vars.AWS_REGION }}
         run: scripts/tf-init.sh
 
+      # Optional repository secret: a JSON list of CIDRs allowed to reach the ALB. Unset means 0.0.0.0/0 (ADR 0007 S10).
+      # Each element is masked before Terraform can print it.
+      - name: Mask the ALB ingress CIDRs
+        env:
+          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
+        run: scripts/mask-cidrs.sh
+
       - name: Terraform plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          TF_VAR_alb_ingress_cidrs_json: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
         run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
 
       # Counts and one row per changed address; fails if a 12-digit run shows up (the repo is public).
@@ -328,9 +338,17 @@ jobs:
         run: scripts/tf-init.sh
 
       # A fresh plan of main inside the approved job, not a saved PR plan (ADR 0004, E24, R5).
+      # Optional repository secret: a JSON list of CIDRs allowed to reach the ALB. Unset means 0.0.0.0/0 (ADR 0007 S10).
+      # Each element is masked before Terraform can print it.
+      - name: Mask the ALB ingress CIDRs
+        env:
+          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
+        run: scripts/mask-cidrs.sh
+
       - name: Terraform plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          TF_VAR_alb_ingress_cidrs_json: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
         run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
 
       - name: Summarize the plan

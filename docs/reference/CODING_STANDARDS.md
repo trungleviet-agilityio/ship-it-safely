@@ -60,6 +60,10 @@ disagree, the ADR wins; update this file.
 ## Dockerfile (`app/Dockerfile`)
 
 - Base images pinned by digest (`python:3.13-slim@sha256:...`), tag kept for readability (NFR-3).
+- The base is one literal `FROM <registry>/python:<tag>@sha256:<digest> AS base`, and every other
+  stage starts `FROM base`. No `ARG` in `FROM`: Dependabot cannot read it. The registry fallback
+  swaps the `base` stage with `--build-context` (ADR 0007 S21).
+- The Compose file is `app/compose.yaml` (the Docker default name).
 - Multi-stage: tests run in a build stage; the runtime stage copies only `src/`.
 - Run as a numeric non-root user (`USER 10001:10001`).
 - `HEALTHCHECK` hits `/health` with Python, no extra packages.
@@ -128,9 +132,10 @@ disagree, the ADR wins; update this file.
   immutable format `repo:OWNER@OWNER_ID/REPO@REPO_ID:...`. Apply and deploy roles also pin
   `ref = refs/heads/main`. The plan role pins `StringLike ref = refs/pull/*/merge`, the only
   `StringLike` allowed in a trust policy, so a `pull_request_target` run (base ref) is refused.
-  IAM has no `event_name` key for GitHub. Apply and deploy roles also pin the `workflow` name
-  (`terraform-iac`, `terraform-destroy`; `app-deploy`), so a workflow's `name:` must match the
-  bootstrap `workflow_names` output (ADR 0004 E2). Role `max_session_duration = 3600` (NFR-7).
+  IAM has no `event_name` key for GitHub. Apply and deploy roles also pin `job_workflow_ref` to
+  the workflow file at `main` (`terraform-iac.yml`, `terraform-destroy.yml`; `app-deploy.yml`);
+  the bootstrap `workflow_files` local is the contract, and renaming a file needs a re-apply
+  (ADR 0007 S2). Role `max_session_duration = 3600` (NFR-7).
 
 ### Secrets and state
 
@@ -218,3 +223,15 @@ disagree, the ADR wins; update this file.
 - When looping over many directories, collect failures, finish the loop, then print a summary and
   exit non-zero.
 - `shellcheck -x scripts/*.sh` passes (run by `make lint`).
+- Libraries (`scripts/lib.sh`, `scripts/selftest/common.sh`) are sourced and mode 100644; every other
+  script is 100755 (a self-test checks both).
+- When a check needs a real parser, write a small Python helper in `scripts/` (stdlib plus packages
+  from the hash-locked `scripts/ci-requirements.txt`), run it with `python -I`, and keep the `.sh`
+  file as the entry point (ADR 0007 S34). `make venv` creates `.venv-ci`.
+- Terraform policy (`scripts/tf-policy.sh`): no `provisioner` and no `data "external"` in any
+  quoting (rule 9), no `*.tf.json` (rule 10), and module sources under `envs/` and `modules/` are
+  local paths only (rule 11), and providers are `hashicorp/*` only (rule 12). After `init`,
+  `scripts/tf-resolved-sources.sh` checks what Terraform actually resolved (module sources in
+  `modules.json`, providers in the lock file), so the text rules are fast feedback and the resolved
+  check fails closed.
+- Editors follow [`.editorconfig`](../../.editorconfig).

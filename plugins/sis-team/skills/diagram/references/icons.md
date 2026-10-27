@@ -20,6 +20,8 @@ Style: `sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=<fill>;strokeColor
 | CloudTrail | `mxgraph.aws4.cloudtrail` | `#E7157B` |
 | Organizations | `mxgraph.aws4.organizations` | `#E7157B` |
 | Budgets | `mxgraph.aws4.budgets` | `#7AA116` |
+| EventBridge | `mxgraph.aws4.eventbridge` | `#E7157B` |
+| SNS | `mxgraph.aws4.sns` | `#E7157B` |
 
 ## Resource icons (78x78 or 48x48, `strokeColor=none`)
 
@@ -39,6 +41,8 @@ Style: `sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=<fill>;strokeColor
 | CloudWatch alarm | `mxgraph.aws4.alarm` | `#E7157B` |
 | Users | `mxgraph.aws4.users` | `#232F3D` |
 | Client / browser | `mxgraph.aws4.client` | `#232F3D` |
+| EventBridge rule | `mxgraph.aws4.rule_3` | `#E7157B` |
+| Email notification | `mxgraph.aws4.email_notification` | `#E7157B` |
 
 Do not mix the two patterns: a service icon without `strokeColor=#ffffff` loses its glyph, and a resource
 icon with it renders wrong.

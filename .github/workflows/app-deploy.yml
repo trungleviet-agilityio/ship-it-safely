@@ -1,8 +1,8 @@
 # App deploy to dev (PLAN Phase 4, ADR 0005, FR-11, FR-14, FR-15).
 # A push to main (or a manual run on main) builds the image once, smoke tests and scans it, pushes it to the dev ECR
 # by an immutable tag, registers a task definition revision that references the image digest, updates the ECS
-# service and waits for the rollout. The `name:` below is part of the deploy role trust (ADR 0002, B13): the
-# bootstrap `workflow_names` output must match.
+# service and waits for the rollout. The file path is part of the deploy role trust (ADR 0007 S2): the bootstrap
+# `workflow_files` must list app-deploy.yml.
 # Two jobs, because `id-token` and `environment` apply to every step of a job: `build-scan` runs the build, the
 # smoke test and the scan with no token, no environment and no secret (F9); `deploy` loads exactly the bytes that
 # job produced (sha256 checked) and is the only job that can assume the deploy role.

@@ -5,18 +5,43 @@
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
 
-# --- build-image.sh mirror policy: a registry refusal moves to the next mirror (same digest); other failures are final.
-build() { stubbed env BUILD_RETRY_DELAYS="0" PYTHON_IMAGE_MIRRORS="mirror-a mirror-b" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
+# --- build-image.sh mirror policy: a registry refusal moves to the next mirror through a named build context (same
+# digest); other failures are final. The fixture Dockerfile has the one literal base line (ADR 0007 S21), so the test
+# does not depend on the live app/Dockerfile.
+mkdir -p "$tmp/app-fixture"
+printf 'FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:%s AS base\nFROM base AS test\nFROM base AS runtime\n' "$digest" >"$tmp/app-fixture/Dockerfile"
+build() { stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" PYTHON_IMAGE_MIRRORS="dockerfile mirror-b" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test; }
 data_limit="429 Too Many Requests - Server message: toomanyrequests: Data limit exceeded"
 stub_reset
 stub docker-buildx rc 1 0
 stub docker-buildx err "$data_limit" 0
 build >/dev/null 2>&1 || die "selftest: build should succeed from the second mirror"
 [ "$(cat "$sd/docker-buildx.n")" = 2 ] || die "selftest: build should have run twice"
-for m in mirror-a mirror-b; do
-  grep -q "PYTHON_IMAGE=$m" "$sd/calls" || die "selftest: build should have tried $m"
+[ "$(grep -c -- '--build-context' "$sd/calls")" = 1 ] || die "selftest: only the mirror attempt may pass a build context"
+grep -q -- "--build-context base=docker-image://mirror-b:3.13-slim@sha256:${digest} " "$sd/calls" \
+  || die "selftest: the mirror attempt must replace base with the Dockerfile tag and digest"
+! head -n1 "$sd/calls" | grep -q -- '--build-context' || die "selftest: the first attempt must build the Dockerfile as written"
+ok "build falls back to the next mirror through a named build context on a registry refusal"
+# The default round is the Dockerfile as written, then Docker Hub.
+stub_reset
+stub docker-buildx rc 1 0
+stub docker-buildx err "$data_limit" 0
+stubbed env APP_DIR="$tmp/app-fixture" BUILD_RETRY_DELAYS="0" "$ROOT/scripts/build-image.sh" "$commit" sis-app:test >/dev/null 2>&1 \
+  || die "selftest: the default mirrors should succeed on the second attempt"
+grep -q -- "base=docker-image://docker.io/library/python:3.13-slim@sha256:${digest} " "$sd/calls" \
+  || die "selftest: the default fallback must be Docker Hub with the Dockerfile digest"
+# A bad base line never reaches docker: none, an ARG in FROM, two of them, or a digest without a tag.
+# shellcheck disable=SC2016  # the fixtures hold a literal ${PYTHON_IMAGE}
+for bad in 'FROM python:3.13-slim AS base' 'FROM ${PYTHON_IMAGE}:3.13-slim@sha256:%s AS base' 'FROM x:1@sha256:%s AS base\nFROM y:2@sha256:%s AS base'; do
+  # shellcheck disable=SC2059  # the fixtures are printf formats
+  printf "${bad}\n" "$digest" "$digest" >"$tmp/app-fixture/Dockerfile"
+  stub_reset
+  expect_fail "build with a bad base line" "exactly one 'FROM" build
+  [ ! -e "$sd/calls" ] || die "selftest: a bad Dockerfile must not reach docker"
 done
-ok "build falls back to the next mirror on a registry refusal"
+printf 'FROM python@sha256:%s AS base\n' "$digest" >"$tmp/app-fixture/Dockerfile"
+expect_fail "build with a base image without a tag" "exactly one 'FROM" build
+printf 'FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:%s AS base\nFROM base AS test\nFROM base AS runtime\n' "$digest" >"$tmp/app-fixture/Dockerfile"
 stub_reset
 stub docker-buildx rc 1
 stub docker-buildx err "FAIL: test_health_ok (test_app.BoardTest)"

@@ -75,7 +75,7 @@ Notes from official docs:
 ├── PLAN.md  README.md  .gitignore  .tflint.hcl  .pre-commit-config.yaml (gitleaks)
 ├── app/
 │   ├── Dockerfile               # multi-stage, non-root user, HEALTHCHECK
-│   ├── docker-compose.yml       # local env
+│   ├── compose.yaml             # local env
 │   ├── .env.example             # fake values, committed; real .env is gitignored
 │   └── src/...                  # sample: tiny HTTP API with GET /health and GET /
 ├── infra/terraform/
@@ -139,7 +139,7 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 | NFR-4 | `step-security/harden-runner` is the first step of every job (start in `audit` mode). |
 | NFR-5 | `.terraform.lock.hcl` committed, with hashes for `linux_amd64` and the dev machine platform. Dependabot enabled for actions, Docker and Terraform. |
 | NFR-6 | gitleaks pre-commit + GitHub secret scanning / push protection. |
-| NFR-7 | Role `max_session_duration` = 3600 s. CloudTrail (management events) on, plus a metric filter/alarm on `AssumeRoleWithWebIdentity` with an unexpected `sub` (stretch). |
+| NFR-7 | Role `max_session_duration` = 3600 s. CloudTrail (management events) on, plus a metric filter/alarm on `AssumeRoleWithWebIdentity` with an unexpected `sub` (stretch). Built in Phase 6 as an EventBridge rule with an SNS email instead of a metric filter and alarm: about 0 USD a month, no log ingestion (ADR 0007 S8). |
 | NFR-8 | Default tags: `Project`, `Env`, `ManagedBy=terraform`. |
 | NFR-9 | Claude Code never runs `terraform apply`/`destroy` or `aws secretsmanager put-secret-value` against AWS. It prepares the commands and the user runs them. |
 
@@ -147,8 +147,8 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 
 ### Phase 0 — Scaffold + local env (~30 min)
 1. Create the layout, `.gitignore`, `.tflint.hcl`, `.pre-commit-config.yaml` (gitleaks).
-2. App: generate the Ship-it Board (§6). Write a Dockerfile (multi-stage, non-root, `GIT_SHA` build arg), `docker-compose.yml` and `.env.example` (`APP_ENV=local`, a fake `APP_API_KEY`, `BREAK=false`). Timebox the app to about 30 minutes.
-3. **Checkpoint (user):** `cp app/.env.example app/.env && docker compose -f app/docker-compose.yml up`. Open `/` and check that it shows `local`, the SHA and `secret_loaded: yes`. `/admin` without the key must return 401. With `BREAK=true`, `/health` must return 500.
+2. App: generate the Ship-it Board (§6). Write a Dockerfile (multi-stage, non-root, `GIT_SHA` build arg), `compose.yaml` and `.env.example` (`APP_ENV=local`, a fake `APP_API_KEY`, `BREAK=false`). Timebox the app to about 30 minutes.
+3. **Checkpoint (user):** `cp app/.env.example app/.env && docker compose -f app/compose.yaml up`. Open `/` and check that it shows `local`, the SHA and `secret_loaded: yes`. `/admin` without the key must return 401. With `BREAK=true`, `/health` must return 500.
 
 ### Phase 1 — Bootstrap dev account (~45 min)
 1. Write `bootstrap/` per FR-2 to FR-5, parameterized by `accounts/<env>.tfvars`. Output the role ARNs and bucket name.
@@ -180,6 +180,13 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 2. Add harden-runner (NFR-4). Review the egress log from one run, then consider `block` mode with an allowlist.
 3. Dependabot config, `.terraform.lock.hcl` multi-platform hashes (NFR-5).
 4. gitleaks pre-commit + push protection (NFR-6).
+5. As designed in ADR 0007, in two PRs. **PR A:** Dependabot (monthly, 7-day cooldown), apply and deploy trust
+   pinned by `job_workflow_ref` plus `aws:RequestedRegion` on every role, a CloudTrail trail with an EventBridge
+   rule and SNS email for unexpected GitHub assumptions (NFR-7), negative tests N8 (a PR token is refused by apply
+   and deploy) and N9 (the 1-hour cap), the YAML-parser trigger allowlist, an optional ALB CIDR secret, stricter
+   Terraform policy rules, `.editorconfig`, `CODEOWNERS`, non-executable libraries and `app/compose.yaml`.
+   **PR B:** harden-runner `block` with an explicit allowlist on the jobs that hold AWS credentials.
+6. **Checkpoint (user):** ADR 0007 "Checkpoint A commands", then PR B and "Checkpoint B".
 
 ### Phase 7 — Stretch: prod account (~90 min)
 1. **User:** create AWS Organizations (from a management account with no workloads), create the prod account, and set up IAM Identity Center access.
