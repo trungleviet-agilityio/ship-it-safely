@@ -12,21 +12,11 @@
 source "$(dirname "$0")/lib.sh"
 
 [ $# -ge 1 ] || die "usage: scripts/assert-web-identity-denied.sh <plan|apply|deploy>..."
-require_cmd jq "install jq"
 
-token="$(oidc_token sts.amazonaws.com)"
+token="$(oidc_token)"
 printf 'Token sub: %s\n' "$(jwt_claim "$token" sub)" >&2
 printf 'Token job_workflow_ref: %s\n' "$(jwt_claim "$token" job_workflow_ref)" >&2
 
 for role in "$@"; do
-  web_identity_call "$role" "$token"
-  if [ "$RUN_RC" -eq 0 ]; then
-    die "the ${role} role was assumed with a token it must refuse: trust too broad"
-  fi
-  case "$RUN_ERR" in
-    *AccessDenied* | *"Not authorized to perform sts:AssumeRoleWithWebIdentity"*)
-      ok "the ${role} role refused the token as designed (AccessDenied)"
-      ;;
-    *) die "the ${role} call failed, but not as a role refusal (exit code ${RUN_RC}): ${RUN_ERR}" ;;
-  esac
+  assert_denied "the ${role} role" AccessDenied web_identity_call "$role" "$token"
 done
