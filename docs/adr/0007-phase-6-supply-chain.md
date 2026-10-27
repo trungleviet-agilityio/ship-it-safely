@@ -198,6 +198,22 @@ Build hand-back questions, decided by the orchestrator:
 | `api.github.com` only on the jobs where A6 saw it | **Keep** | Lists follow evidence | Unknown caller; a blocked call shows in the log |
 | The YAML loader moved to `scripts/workflow_yaml.py`, shared by the trigger and harden-runner helpers through `run_workflow_helper` | **Keep** | One loader and one wrapper path (no duplication) | Small refactor of a PR A file |
 
+PR B verify findings (round 1), decided by the orchestrator:
+
+| Finding | Decision | Pro | Con |
+|---|---|---|---|
+| Security H1: code in a credentialed job can undo block mode with passwordless sudo or Docker | **Fix**: `disable-sudo-and-containers: true` on six jobs, required by the policy check; `deploy` is the one named exception (it needs `docker load` and `push`) | Block mode holds against third-party code on the jobs that never need root | `deploy` stays exposed (docker group means root): **residual risk, accepted** for the lab |
+| Security M1: a PR author with push access can change the plan job's policy, and it runs with the plan role before review | **Accept, recorded as a residual risk** | Gating the plan behind an environment changes the plan `sub` and slows every PR | Anyone with push access reads the account through the plan role for one session (read-only, `GetSecretValue` denied by the guardrails policy) |
+| Security M2: exact AWS hosts do not stop uploads to another account | **Correct the claim** (Alternatives, region-wide wildcards); keep exact hosts | The ADR says what block mode really buys | None |
+| Security M3: `api.github.com` has no known caller | **Remove** from `plan`, `apply`, `destroy`; this PR's plan run proves it | One upload API fewer on three credentialed jobs | If blocked, re-add it with the caller named |
+| Security M4, reviewer L2: wildcard denylist too short; expressions unchecked | **Fix**: no `*` at all in a credentialed job's endpoints; only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID_DEV`, `env.ENV` expressions | A green check means no wildcard and no variable-widened list | A future wildcard needs a policy change in review |
+| Security L1, L2, L4: `if:`/`continue-on-error` on the harden-runner step; `container:`/`services:` on a credentialed job; `secrets.` in a non-credentialed job's endpoints | **Fix** in the policy check, with fixtures | Closes the shapes that look compliant but are not | A few more rules |
+| Reviewer M1, security L3: artifact download and runner endpoints are implicit | **Prove at checkpoint B** and record the implicit names from the `deploy` log | No guessed blob host | Deploy may block once |
+| Reviewer M2: harden-runner's job summary may list account-bearing hosts | **Check at checkpoint B** on the PR plan run's summary | Evidence first | Account IDs are not secrets (D2) |
+| Reviewer L1, L3: "switch to audit" rollback fails the required guard | **Fixed** in README and S47: the rollback is a PR that adds the host | Docs match the check | None |
+| Simplifier 1 to 5, 7 | **Fix now** (one `run()` entry point, one self-test dispatcher, no duplicate test, short wrappers, simpler duplicate-key loader, short Dependabot comment) | No duplication | None |
+| Simplifier 6: share the plan and apply host lists with a YAML anchor | **Keep separate** | Different roles; a future divergence shows in the diff | 15 repeated lines |
+
 ### Least privilege summary
 
 | Item | Value | Wildcards |
@@ -245,7 +261,7 @@ app/Dockerfile, app/compose.yaml (renamed), app/.dockerignore     backend-dev (S
 - **A CloudWatch Logs metric filter plus an alarm** (NFR-7 literal). It needs trail delivery to CloudWatch Logs, an IAM role that CloudTrail assumes (a `PassRole` by the admin), a log group, ingestion fees, a metric and an alarm. Rejected for EventBridge (S8). It stays the fallback if the user wants an alarm history graph for the talk.
 - **No trail; read event history by hand.** Free, but there is no alert. Rejected for the stretch.
 - **Block mode on every job in PR A with a guessed allowlist.** It breaks jobs mid-apply on the first missed host. Rejected (PLAN Phase 6.2 says review a log first).
-- **Region-wide wildcards (`*.s3.<region>.amazonaws.com`) for account hosts.** They allow exfiltration to any bucket in the region. Rejected for exact hosts built from secrets (S39). Kept only as the fallback.
+- **Region-wide wildcards (`*.s3.<region>.amazonaws.com`) for account hosts.** They allow exfiltration to any bucket in the region. Rejected for exact hosts built from secrets (S39). Kept only as the fallback. Amended after the PR B security review: block mode filters at DNS and at layers 3 and 4, not by SNI or `Host`, and regional S3 and AWS API front ends are shared, so an exact host does not stop code that brings its own AWS keys from writing to another account. The exact host still stops DNS-level exfiltration and keeps the list honest; the session credentials are the real prize, guarded by least privilege and `disable-sudo-and-containers`.
 - **StepSecurity policy store.** Needs an API key or `id-token: write` for a third party. Rejected.
 - **A stricter line parser instead of PyYAML.** No new dependency, but the hand grammar stays the weak point. Rejected: PyYAML is already in the hash-locked venv.
 - **A `language: python` pre-commit hook with `additional_dependencies: [pyyaml==6.0.3]`.** That installs by version, not by hash. Rejected for `ci-venv.sh`.

@@ -152,7 +152,8 @@ Gates outside the trust policy:
 
 Every job starts with `step-security/harden-runner`. The seven jobs that assume an AWS role run it in `block` mode
 with telemetry off and an exact `allowed-endpoints` list (hosts that hold the account ID are built from
-`secrets.AWS_ACCOUNT_ID_DEV`, never written out); every other job runs `audit`. The repo-guard check
+`secrets.AWS_ACCOUNT_ID_DEV`, never written out), and all of them except `deploy` (which needs Docker) also
+disable sudo and containers, so code in the job cannot switch the firewall off; every other job runs `audit`. The repo-guard check
 `scripts/check-harden-runner.sh` fails a PR that breaks this shape. If a block-mode job fails on a blocked host,
 the job log names it: add it to that job's list in a short PR (the guard check refuses `audit` on these jobs, so
 there is no audit fallback on `main`). Terraform runs with
