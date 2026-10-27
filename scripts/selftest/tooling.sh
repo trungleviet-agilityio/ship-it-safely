@@ -239,6 +239,19 @@ expect_fail "mask-cidrs with a JSON object" "must be a JSON list" env CIDRS='{"a
 out="$(quiet_run env CIDRS="bad 198.51.100.7" "$ROOT/scripts/tf/mask-cidrs.sh")"
 case "$out" in *198.51.100.7*) die "selftest: mask-cidrs echoed a bad value" ;; esac
 ok "mask-cidrs masks each element and refuses anything but a JSON list"
+# The apply passes --require: an empty secret fails closed and the message names the secret that is read, not the
+# repository copy of the PR plan. A set value (also ["0.0.0.0/0"], open on purpose) passes and is masked.
+expect_fail "mask-cidrs --require with an empty value" "ALB_INGRESS_CIDRS is empty" env CIDRS="" ENV=qa "$ROOT/scripts/tf/mask-cidrs.sh" --require
+expect_fail "mask-cidrs --require with an unset value" "ALB_INGRESS_CIDRS is empty" env -u CIDRS ENV=qa "$ROOT/scripts/tf/mask-cidrs.sh" --require
+expect_fail "mask-cidrs --require names the environment" "of the qa environment" env CIDRS="" ENV=qa "$ROOT/scripts/tf/mask-cidrs.sh" --require
+expect_fail "mask-cidrs with a bad value names the secret" "ALB_INGRESS_CIDRS must be a JSON list" env CIDRS="x" "$ROOT/scripts/tf/mask-cidrs.sh"
+out="$(quiet_run env CIDRS="" "$ROOT/scripts/tf/mask-cidrs.sh" --require)"
+case "$out" in *ALB_INGRESS_CIDRS_DEV*) die "selftest: mask-cidrs still names the repository secret ALB_INGRESS_CIDRS_DEV" ;; esac
+[ "$(CIDRS='["0.0.0.0/0"]' "$ROOT/scripts/tf/mask-cidrs.sh" --require 2>/dev/null)" = "::add-mask::0.0.0.0/0" ] || die "selftest: --require must accept the explicit open list"
+[ "$(CIDRS='["198.51.100.7/32"]' "$ROOT/scripts/tf/mask-cidrs.sh" --require 2>/dev/null)" = "::add-mask::198.51.100.7/32" ] || die "selftest: --require must accept and mask a list"
+expect_fail "mask-cidrs with an unknown option" "usage:" env CIDRS="" "$ROOT/scripts/tf/mask-cidrs.sh" --other
+[ "$(CIDRS="" "$ROOT/scripts/tf/mask-cidrs.sh" 2>/dev/null)" = "::notice::ALB ingress: default 0.0.0.0/0" ] || die "selftest: without --require an empty value stays open (PR plan and destroy)"
+ok "mask-cidrs --require fails closed on an empty value; without it an empty value stays open"
 
 # --- Script modes (ADR 0007 S19): libraries are only sourced, so they are not executable; everything else is.
 modes="$(git -C "$ROOT" ls-files -s 'scripts/*.sh' 2>/dev/null || true)"

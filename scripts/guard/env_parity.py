@@ -15,7 +15,9 @@ envs/ (dot-directories ignored):
   5. bootstrap/accounts/<env>.tfvars.example exists;
   6. the environment lists in the workflows hold exactly E: the choice of the terraform-iac
      dispatch input `env`, one `plan-<env>` caller job of reusable-terraform-plan.yml per env, the
-     terraform-destroy choice, and the `allowed_envs` of its confirm job.
+     terraform-destroy choice, and the `allowed_envs` of its confirm job;
+  7. a `plan-<env>` caller maps only secrets named `*_<ENV>` (upper case), so a copied caller
+     cannot plan one account with the credentials of another.
 
 Usage: python -I scripts/guard/env_parity.py [repo root]   (default: the current directory)
 Prints one violation per line on stdout. Exit codes: 0 holds, 1 violations, 2 usage error.
@@ -28,11 +30,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 # `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_yaml import load_workflow  # noqa: E402  (import after the path setup above)
+from workflow_yaml import dispatch_options, read_workflow  # noqa: E402  (import after the path setup above)
 
 REFERENCE = "dev"
 MAY_DIFFER = ("terraform.tfvars", "versions.tf", ".terraform.lock.hcl")
@@ -44,6 +44,7 @@ DOCS_BLOCK = re.compile(r"<!-- BEGIN_TF_DOCS -->.*<!-- END_TF_DOCS -->", re.DOTA
 ENV_LINE = re.compile(r'^env\s*=\s*"([^"]*)"\s*(#.*)?$', re.MULTILINE)
 CIDR_LINE = re.compile(r'^vpc_cidr\s*=\s*"([^"]*)"\s*(#.*)?$', re.MULTILINE)
 ALLOWED_ENVS = re.compile(r'^\s*allowed_envs="([^"]*)"\s*$', re.MULTILINE)
+SECRET_REF = re.compile(r"^\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}$")
 REUSABLE_PLAN = "./.github/workflows/reusable-terraform-plan.yml"
 IAC = "terraform-iac.yml"
 DESTROY = "terraform-destroy.yml"
@@ -71,6 +72,23 @@ def _normalize(rel: str, text: str) -> str:
 def _single(pattern: re.Pattern[str], text: str) -> str | None:
     found = pattern.findall(text)
     return found[0][0] if len(found) == 1 else None
+
+
+def _env_line_problem(name: str, root: Path) -> str | None:
+    """The problem with the `env = "<name>"` line of root/terraform.tfvars, or None.
+
+    A missing file is not a problem here: the missing file is reported on its own.
+    """
+    tfvars = root / "terraform.tfvars"
+    if not tfvars.is_file():
+        return None
+    found = _single(ENV_LINE, tfvars.read_text(encoding="utf-8"))
+    if found == name:
+        return None
+    return (
+        f"env '{name}': terraform.tfvars must have exactly one line "
+        f'env = "{name}" (found {found!r})'
+    )
 
 
 def _root_problems(name: str, root: Path, reference: dict[str, Path]) -> list[str]:
@@ -104,14 +122,9 @@ def _root_problems(name: str, root: Path, reference: dict[str, Path]) -> list[st
                 f"env '{name}': backend.tf key must be envs/{name}/terraform.tfstate, "
                 f"found {keys[0]}"
             )
-    tfvars = files.get("terraform.tfvars")
-    if tfvars is not None:
-        env_value = _single(ENV_LINE, tfvars.read_text(encoding="utf-8"))
-        if env_value != name:
-            problems.append(
-                f"env '{name}': terraform.tfvars must have exactly one line "
-                f'env = "{name}" (found {env_value!r})'
-            )
+    problem = _env_line_problem(name, root)
+    if problem:
+        problems.append(problem)
     return problems
 
 
@@ -130,20 +143,33 @@ def _list_problems(label: str, found: list[str], envs: list[str]) -> list[str]:
 
 def _load(path: Path) -> Any:
     try:
-        return load_workflow(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as e:
-        raise ValueError(
-            f"{path.name}: cannot read workflow ({getattr(e, 'problem', None) or e})"
-        ) from e
+        return read_workflow(path)
+    except ValueError as e:
+        raise ValueError(f"{path.name}: {e}") from e
 
 
 def _choice(document: Any, label: str) -> list[str]:
-    on = document.get("on", document.get(True)) if isinstance(document, dict) else None
     try:
-        options = on["workflow_dispatch"]["inputs"]["env"]["options"]
-    except (KeyError, TypeError) as e:
-        raise ValueError(f"{label}: no workflow_dispatch input env with options") from e
-    return [str(o) for o in options]
+        return dispatch_options(document, "env")
+    except ValueError as e:
+        raise ValueError(f"{label}: {e}") from e
+
+
+def _secret_problems(job_id: str, env: str, job: dict[str, Any]) -> list[str]:
+    """Every secret a plan caller maps is the repository secret of its own environment."""
+    suffix = f"_{env.upper()}"
+    mapped = job.get("secrets")
+    if not isinstance(mapped, dict) or not mapped:
+        return [f"{IAC}: job '{job_id}' must map its secrets by name"]
+    problems = []
+    for key, value in mapped.items():
+        ref = SECRET_REF.match(str(value))
+        if not ref or not ref.group(1).endswith(suffix):
+            problems.append(
+                f"{IAC}: job '{job_id}' maps {key} from {value!r}; "
+                f"it must be a secrets.<NAME> ending in {suffix}"
+            )
+    return problems
 
 
 def _workflow_problems(workflows: Path, envs: list[str]) -> list[str]:
@@ -175,6 +201,7 @@ def _workflow_problems(workflows: Path, envs: list[str]) -> list[str]:
             )
         if env not in envs:
             problems.append(f"{IAC}: job '{job_id}' plans '{env}', which has no envs/{env}/ root")
+        problems += _secret_problems(job_id, env, jobs[job_id])
     confirm = (destroy.get("jobs") or {}).get("confirm") or {}
     script = "\n".join(
         str(s.get("run", "")) for s in confirm.get("steps") or [] if isinstance(s, dict)
@@ -212,14 +239,9 @@ def check(repo: Path) -> list[str]:
             problems.append(
                 f"env '{env}': missing infra/terraform/bootstrap/accounts/{env}.tfvars.example"
             )
-    reference_tfvars = envs_dir / REFERENCE / "terraform.tfvars"
-    if reference_tfvars.is_file():
-        found = _single(ENV_LINE, reference_tfvars.read_text(encoding="utf-8"))
-        if found != REFERENCE:
-            problems.append(
-                f"env '{REFERENCE}': terraform.tfvars must have exactly one line "
-                f'env = "{REFERENCE}" (found {found!r})'
-            )
+    problem = _env_line_problem(REFERENCE, envs_dir / REFERENCE)
+    if problem:
+        problems.append(problem)
     problems += [
         f"vpc_cidr {c} is used by more than one env: {', '.join(sorted(e))}"
         for c, e in cidrs.items()

@@ -15,12 +15,19 @@ Rules, per job:
   4. every allowed endpoint is `host:port` and holds no 12-digit literal (an account ID);
   5. in a credentialed job an endpoint holds no `*`, and the only expressions are the ones in
      ALLOWED_EXPRESSIONS (account hosts come from the secret, never from a literal);
-  6. in any other job (audit) an endpoint may not use `secrets` in any form (`secrets.`,
-     `secrets[`, `toJSON(secrets)`), nor an `env.X` whose value is built from a secret
-     (ADR 0007 N1 Low, ADR 0008 P8);
-  7. a job with `uses:` calls a reusable workflow. It has no steps, so it is checked through its
+  6. `env.ENV` in a credentialed job names the environment, so ENV must be a literal, or exactly
+     `inputs.env` (optionally `|| '<literal>'`) where `env` is a `choice` input of
+     workflow_dispatch (a workflow_call input in a reusable-*.yml file). A branch name, free text
+     or any other expression could steer the allowlist or the state bucket host;
+  7. in any other job (audit) an endpoint may use `vars.X` and `env.X` only: no `secrets` in any
+     form (`secrets.`, `secrets[`, `toJSON(secrets)`), no `env[...]`, `format(...)` or other
+     function, and no `env.X` whose value is built from a secret (ADR 0007 N1 Low, ADR 0008 P8);
+  8. a job with `uses:` calls a reusable workflow. It has no steps, so it is checked through its
      callee (the reusable-*.yml file is checked like any workflow). It must call
-     ./.github/workflows/reusable-*.yml and must not pass `secrets: inherit`.
+     ./.github/workflows/reusable-*.yml and must not pass `secrets: inherit`;
+  9. a reusable-*.yml file sets a top-level `permissions: {}` and every job sets its own
+     `permissions:`, so what a job can do is read in the job; a job is credentialed when its own
+     permissions grant `id-token`.
 
 Usage: python -I scripts/guard/harden_runner_policy.py <workflow file>...
 Prints one violation per line on stdout, with paths relative to the working directory.
@@ -35,7 +42,7 @@ from typing import Any
 
 # `python -I` leaves the script directory off sys.path; the helper module sits next to this file.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_yaml import run  # noqa: E402  (import after the path setup above)
+from workflow_yaml import dispatch_options, run, trigger_input  # noqa: E402  (import after the path setup above)
 
 ACTION = "step-security/harden-runner@"
 # One endpoint is a run of non-space characters; `${{ ... }}` may hold spaces and stays whole.
@@ -47,6 +54,11 @@ ACCOUNT_ID = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 ALLOWED_EXPRESSIONS = ("vars.AWS_REGION", "secrets.AWS_ACCOUNT_ID", "env.ENV")
 SECRETS_REF = re.compile(r"\bsecrets\b")
 ENV_REF = re.compile(r"^env\.([A-Za-z_][A-Za-z0-9_]*)$")
+VARS_REF = re.compile(r"^vars\.[A-Za-z_][A-Za-z0-9_]*$")
+# The only forms of the ENV value that follow an input: `${{ inputs.env }}`, or with a literal
+# fallback.
+ENV_FROM_INPUT = re.compile(r"^\$\{\{\s*inputs\.env(?:\s*\|\|\s*'([^']*)')?\s*\}\}$")
+ENV_NAME = re.compile(r"^[a-z][a-z0-9]{1,7}$")  # lib.sh ENV_NAME_RE
 REUSABLE_CALL = re.compile(r"^\./\.github/workflows/reusable-[A-Za-z0-9._-]+\.ya?ml$")
 # The one credentialed job that needs Docker (docker load and docker push), so it cannot disable
 # containers. The residual risk is recorded in ADR 0007. Keyed by (workflow file name, job id).
@@ -88,11 +100,45 @@ def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -
                     f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret, "
                     "in a job without credentials"
                 )
+            elif not ref and not VARS_REF.match(e):
+                problems.append(
+                    f"endpoint '{endpoint}' uses the expression '{e}' "
+                    "(a job without credentials may use vars.X and env.X only)"
+                )
     return problems
 
 
+def _env_value_problem(value: Any, document: Any, reusable: bool) -> str | None:
+    """Why `env.ENV` may not name the environment in an allowlist, or None when it may."""
+    text = str(value) if value is not None else ""
+    if not text:
+        return "ENV is not set at the workflow, job or harden-runner step level"
+    if "${{" not in text:
+        return None if ENV_NAME.match(text) else f"ENV '{text}' is not a valid environment name"
+    match = ENV_FROM_INPUT.match(text)
+    if not match:
+        return f"ENV is '{text}'; it must be a literal or inputs.env (optionally || 'literal')"
+    fallback = match.group(1)
+    if fallback is not None and not ENV_NAME.match(fallback):
+        return f"the ENV fallback '{fallback}' is not a valid environment name"
+    if reusable:
+        if trigger_input(document, "workflow_call", "env") is None:
+            return "ENV follows inputs.env, but the workflow has no workflow_call input env"
+        return None
+    definition = trigger_input(document, "workflow_dispatch", "env")
+    if not definition or definition.get("type") != "choice":
+        return "ENV follows inputs.env, so the workflow_dispatch input env must be type: choice"
+    if fallback is not None and fallback not in dispatch_options(document, "env"):
+        return f"the ENV fallback '{fallback}' is not one of the options of the env input"
+    return None
+
+
 def _step_problems(
-    step: Any, credentialed: bool, needs_containers: bool, env: dict[str, Any]
+    step: Any,
+    credentialed: bool,
+    needs_containers: bool,
+    env: dict[str, Any],
+    env_problem: str | None,
 ) -> list[str]:
     uses = step.get("uses") if isinstance(step, dict) else None
     if not isinstance(uses, str) or not uses.startswith(ACTION):
@@ -117,8 +163,12 @@ def _step_problems(
     elif policy != "audit":
         problems.append("has no id-token: write, so egress-policy must be audit (written out)")
     endpoints = with_.get("allowed-endpoints")
-    for endpoint in ENDPOINT.findall(endpoints if isinstance(endpoints, str) else ""):
+    found = ENDPOINT.findall(endpoints if isinstance(endpoints, str) else "")
+    for endpoint in found:
         problems.extend(_endpoint_problems(endpoint, credentialed, env))
+    uses_env = any("env.ENV" in EXPRESSION.findall(e) for e in found)
+    if credentialed and uses_env and env_problem:
+        problems.append(f"an endpoint uses env.ENV, but {env_problem}")
     return problems
 
 
@@ -146,21 +196,30 @@ def check(shown: str, document: Any) -> list[str]:
     jobs = document.get("jobs") if isinstance(document, dict) else None
     if not isinstance(jobs, dict):
         return [f"{shown}: no jobs mapping"]
+    reusable = os.path.basename(shown).startswith("reusable-")
     workflow_permissions = document.get("permissions")
     problems: list[str] = []
+    if reusable and workflow_permissions != {}:
+        problems.append(
+            f"{shown}: a reusable workflow must set top-level `permissions: {{}}` "
+            "(each job then states its own)"
+        )
     for job_id, job in jobs.items():
         job = job if isinstance(job, dict) else {}
         if "uses" in job:
             problems.extend(f"{shown}: job '{job_id}': {m}" for m in _call_problems(job))
             continue
+        messages: list[str] = []
+        if reusable and "permissions" not in job:
+            messages.append("a job of a reusable workflow must set its own `permissions:`")
         # A job without its own `permissions:` inherits the workflow's.
         credentialed = _has_id_token(job.get("permissions", workflow_permissions))
         steps = job.get("steps")
         first = steps[0] if isinstance(steps, list) and steps else None
         needs_containers = (os.path.basename(shown), job_id) in NEEDS_CONTAINERS
-        messages = _step_problems(
-            first, credentialed, needs_containers, _merged_env(document, job, first)
-        )
+        merged = _merged_env(document, job, first)
+        env_problem = _env_value_problem(merged.get("ENV"), document, reusable)
+        messages += _step_problems(first, credentialed, needs_containers, merged, env_problem)
         if credentialed:
             messages += [
                 f"has id-token: write, so `{k}:` is not allowed"

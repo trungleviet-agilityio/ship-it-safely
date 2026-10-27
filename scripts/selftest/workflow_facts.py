@@ -12,6 +12,8 @@ Usage: python -I scripts/selftest/workflow_facts.py <command> <workflow file> [a
   options <input>           the options of a workflow_dispatch choice input, one per line
   step-run <id> <fragment>  the `run:` text of the steps of a job named with the fragment
   group <id>                the concurrency group of a job
+  composite-run <fragment>  the `run:` text of the steps, named with the fragment, of a composite
+                            action (the file is its action.yml)
   merge <id> <json>         the job with the JSON fragment merged in (mappings merge, lists
                             extend), as JSON
 Exit codes: 0 ok, 1 not found, 2 usage error.
@@ -25,7 +27,7 @@ from typing import Any
 
 # `python -I` leaves the script directory off sys.path; the loader sits in scripts/guard.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard"))
-from workflow_yaml import load_workflow  # noqa: E402  (import after the path setup above)
+from workflow_yaml import dispatch_options, read_workflow, workflow_on  # noqa: E402  (import after the path setup above)
 
 
 def _merge(base: Any, extra: Any) -> Any:
@@ -51,7 +53,11 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     command, path, args = argv[0], Path(argv[1]), argv[2:]
-    document = load_workflow(path.read_text(encoding="utf-8"))
+    try:
+        document = read_workflow(path)
+    except ValueError as e:
+        print(f"{path.name}: {e}", file=sys.stderr)
+        return 1
     try:
         if command == "jobs" and not args:
             print("\n".join(document["jobs"]))
@@ -60,15 +66,19 @@ def main(argv: list[str]) -> int:
         elif command == "top" and not args:
             print(json.dumps({k: v for k, v in document.items() if k != "jobs"}))
         elif command == "on" and not args:
-            on = document.get("on", document.get(True))
+            on = workflow_on(document)
             print("\n".join([on] if isinstance(on, str) else list(on)))
         elif command == "options" and len(args) == 1:
-            on = document.get("on", document.get(True))
-            print("\n".join(str(o) for o in on["workflow_dispatch"]["inputs"][args[0]]["options"]))
+            print("\n".join(dispatch_options(document, args[0])))
         elif command == "step-run" and len(args) == 2:
             steps = _job(document, args[0]).get("steps", [])
             print(
                 "\n".join(str(s.get("run", "")) for s in steps if args[1] in str(s.get("name", "")))
+            )
+        elif command == "composite-run" and len(args) == 1:
+            steps = document["runs"]["steps"]
+            print(
+                "\n".join(str(s.get("run", "")) for s in steps if args[0] in str(s.get("name", "")))
             )
         elif command == "group" and len(args) == 1:
             concurrency = _job(document, args[0]).get("concurrency")
@@ -78,7 +88,7 @@ def main(argv: list[str]) -> int:
         else:
             print(__doc__, file=sys.stderr)
             return 2
-    except (KeyError, TypeError) as e:
+    except (KeyError, TypeError, ValueError) as e:
         print(f"not found: {e}", file=sys.stderr)
         return 1
     return 0
