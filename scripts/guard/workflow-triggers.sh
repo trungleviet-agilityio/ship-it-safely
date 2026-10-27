@@ -8,4 +8,4 @@
 source "$(dirname "$0")/../lib.sh"
 
 run_workflow_helper workflow_triggers.py "workflow trigger" "$@"
-ok "workflow triggers are within the allowlist: pull_request push workflow_dispatch"
+ok "workflow triggers are within the allowlist: pull_request push workflow_dispatch (workflow_call only in reusable-*.yml)"

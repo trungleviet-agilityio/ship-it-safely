@@ -1,5 +1,6 @@
-# envs/dev stays thin and consistent with bootstrap (ADR 0004, E16 to E18). Offline: nothing talks to AWS.
-# The committed terraform.tfvars is loaded by terraform test; only the account ID (never committed) is set here.
+# Every env root stays thin and consistent with bootstrap (ADR 0004, E16 to E18). Offline: nothing talks to AWS.
+# The same file runs in every envs/<env>/ (the parity guard keeps the copies identical, ADR 0008, P3): each expected
+# name is built from var.env, which the committed terraform.tfvars sets. Only the account ID (never committed) is set here.
 mock_provider "aws" {
   override_during = plan
 
@@ -24,23 +25,32 @@ run "default_tags_match_bootstrap" {
   assert {
     condition = local.default_tags == {
       Project   = "ship-it-safely"
-      Env       = "dev"
+      Env       = var.env
       ManagedBy = "terraform"
     }
     error_message = "default_tags must be identical to bootstrap (NFR-8)"
   }
 }
 
-run "committed_tfvars_plan_the_dev_stack" {
+run "env_equals_the_directory_name" {
   command = plan
 
   assert {
-    condition     = module.app_ecs.cluster_name == "sis-dev-cluster" && module.app_ecs.service_name == "sis-dev-app"
-    error_message = "the committed tfvars must produce the bootstrap name contract"
+    condition     = var.env == basename(abspath(path.root))
+    error_message = "terraform.tfvars env must equal the name of this directory, so the state key and the names cannot point at another environment"
+  }
+}
+
+run "committed_tfvars_plan_this_envs_stack" {
+  command = plan
+
+  assert {
+    condition     = module.app_ecs.cluster_name == "sis-${var.env}-cluster" && module.app_ecs.service_name == "sis-${var.env}-app"
+    error_message = "the committed tfvars must produce the bootstrap name contract for var.env"
   }
 
   assert {
-    condition     = module.app_ecs.secret_name == "sis/dev/app-api-key"
+    condition     = module.app_ecs.secret_name == "sis/${var.env}/app-api-key"
     error_message = "secret shell name follows the contract"
   }
 }
@@ -61,12 +71,12 @@ run "root_outputs_are_exactly_the_account_free_set" {
 
   assert {
     condition = (
-      output.cluster_name == "sis-dev-cluster"
-      && output.service_name == "sis-dev-app"
-      && output.task_family == "sis-dev-app"
-      && output.ecr_repository_name == "sis-dev-app"
-      && output.log_group_name == "/ecs/sis-dev-app"
-      && output.secret_name == "sis/dev/app-api-key"
+      output.cluster_name == "sis-${var.env}-cluster"
+      && output.service_name == "sis-${var.env}-app"
+      && output.task_family == "sis-${var.env}-app"
+      && output.ecr_repository_name == "sis-${var.env}-app"
+      && output.log_group_name == "/ecs/sis-${var.env}-app"
+      && output.secret_name == "sis/${var.env}/app-api-key"
     )
     error_message = "output values must be the plain names from the bootstrap contract"
   }

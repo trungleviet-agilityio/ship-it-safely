@@ -8,6 +8,8 @@ __pycache__/
 
 # Terraform
 .terraform/
+# Per-account data dir of the bootstrap runs (TF_DATA_DIR=.terraform-<env>, ADR 0008)
+.terraform-*/
 *.tfstate
 *.tfstate.*
 *.tfplan

@@ -1,6 +1,6 @@
-# Approval-gated teardown of envs/dev (PLAN Phase 5, ADR 0006, FR-12).
+# Approval-gated teardown of one environment (PLAN Phase 5, ADR 0006, FR-12, ADR 0008).
 # Dispatch only. The `confirm` job checks the typed phrase without any credential, so a typo fails before an
-# approval prompt exists. The `destroy` job then needs the `dev` environment approval, plans the destroy, refuses
+# approval prompt exists. The `destroy` job then needs the approval of the chosen environment, plans the destroy, refuses
 # anything but deletes under module.app_ecs., applies that same saved plan and deregisters the task definition
 # revisions. Bootstrap is never destroyed here (ADR 0006, G17).
 # The file path is part of the apply role trust (ADR 0007 S2): the bootstrap `workflow_files.apply` must list
@@ -73,7 +73,7 @@ jobs:
           fi
 
   destroy:
-    name: destroy (dev, approval required)
+    name: destroy (${{ inputs.env }}, approval required)
     needs: confirm
     # Evaluated before the environment gate: a run from another branch never raises an approval request. The confirm
     # job checks the ref too, for the readable error; this `if` is what keeps the prompt from appearing at all.
@@ -81,20 +81,19 @@ jobs:
     runs-on: ubuntu-24.04
     # Below the 60-minute role session (NFR-7): a stuck destroy fails while it still has credentials.
     timeout-minutes: 45
-    # The environment adds the required reviewer and sets the OIDC subject the apply role trusts. It is not
-    # taken from the input: the secrets and the trust are dev-only today.
-    environment: dev
+    # The environment adds the required reviewer and sets the OIDC subject the apply role trusts. The confirm job
+    # checked the input against the list of environments first. Its secrets belong to that environment.
+    environment: ${{ inputs.env }}
     # The group the terraform-iac apply job uses, so a destroy and an apply never hold the state lock together.
-    # The concurrency key cannot read the env context, so the group name stays literal (the CI self-tests check both).
     concurrency:
-      group: terraform-envs-dev
+      group: terraform-envs-${{ inputs.env }}
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write # OIDC token for the role assumed by configure-aws-credentials
     env:
       # The single key: the scripts and the steps derive the environment root, the role name and the titles from it.
-      ENV: dev
+      ENV: ${{ inputs.env }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -108,7 +107,7 @@ jobs:
             releases.hashicorp.com:443
             registry.terraform.io:443
             sts.${{ vars.AWS_REGION }}.amazonaws.com:443
-            sis-${{ env.ENV }}-tfstate-${{ secrets.AWS_ACCOUNT_ID_DEV }}-${{ vars.AWS_REGION }}-an.s3.${{ vars.AWS_REGION }}.amazonaws.com:443
+            sis-${{ env.ENV }}-tfstate-${{ secrets.AWS_ACCOUNT_ID }}-${{ vars.AWS_REGION }}-an.s3.${{ vars.AWS_REGION }}.amazonaws.com:443
             ec2.${{ vars.AWS_REGION }}.amazonaws.com:443
             elasticloadbalancing.${{ vars.AWS_REGION }}.amazonaws.com:443
             ecs.${{ vars.AWS_REGION }}.amazonaws.com:443
@@ -122,51 +121,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select the environment root
-        run: echo "TF_DIR=infra/terraform/envs/${ENV}" >> "$GITHUB_ENV"
-
-      - name: Install Terraform and tflint (checksum verified)
-        run: scripts/ci/install-tools.sh "$RUNNER_TEMP/tools"
-
-      - name: Check configuration
-        env:
-          ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh "sis-${ENV}-gha-apply"
-
-      - name: Assume the apply role
-        id: aws
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      # A destroy plan deletes what is in state, so the optional ALB ingress secret is not passed as a variable and may
+      # be empty (a destroy must always work). Masking its elements keeps any CIDR Terraform prints out of the log.
+      # A local action: it needs the checkout above.
+      - name: Set up Terraform with the apply role
+        id: setup
+        uses: ./.github/actions/terraform-setup # zizmor: ignore[self-repository]
         with:
-          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: gha-destroy-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-          retry-max-attempts: 3
-
-      - name: Terraform init
-        env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
-          REGION: ${{ vars.AWS_REGION }}
-        run: scripts/tf/init.sh
-
-      # A destroy plan deletes what is in state, so the optional ALB ingress secret is not passed as a variable.
-      # Masking its elements keeps any CIDR that Terraform prints out of the log.
-      - name: Mask the ALB ingress CIDRs
-        env:
-          CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
-        run: scripts/tf/mask-cidrs.sh
+          env: ${{ env.ENV }}
+          role-kind: apply
+          role-arn: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          region: ${{ vars.AWS_REGION }}
+          session-prefix: destroy
+          alb-ingress-cidrs: ${{ secrets.ALB_INGRESS_CIDRS }}
 
       - name: Terraform destroy plan
         env:
-          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
         run: terraform -chdir="$TF_DIR" plan -destroy -lock-timeout=5m -no-color -out=tfplan
 
       # Before the guard, so a refused plan still shows its table in the summary.
       - name: Summarize the plan
         env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           terraform -chdir="$TF_DIR" show -json tfplan \
@@ -199,9 +177,9 @@ jobs:
       # The result says what happened, not what was planned: "deleted" only when the apply step succeeded. The
       # role name comes from a helper, because configure-aws-credentials masks the whole ARN in logs.
       - name: Report the result
-        if: always() && steps.aws.outcome == 'success'
+        if: always() && steps.setup.outcome == 'success'
         env:
-          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           DELETES: ${{ steps.guard.outputs.deletes }}
           APPLY_OUTCOME: ${{ steps.destroy.outcome }}
           DEREGISTERED: ${{ steps.revisions.outputs.DEREGISTERED }}

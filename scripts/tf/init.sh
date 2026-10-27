@@ -11,7 +11,7 @@ source "$(dirname "$0")/../lib.sh"
 
 [ $# -eq 0 ] || die "usage: ENV=dev ACCOUNT=... REGION=... scripts/tf/init.sh"
 env_name="${ENV:-}" account="${ACCOUNT:-}" region="${REGION:-}"
-valid_env "$env_name" || die "ENV must be lowercase letters and digits, got '${env_name}'"
+valid_env "$env_name" || die "ENV must be lowercase letters and digits (${ENV_NAME_HINT}), got '${env_name}'"
 [ -n "$account" ] && [ -n "$region" ] || die "ACCOUNT and REGION must be set"
 require_cmd terraform "run scripts/ci/install-tools.sh"
 

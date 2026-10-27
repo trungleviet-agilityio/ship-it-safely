@@ -56,5 +56,8 @@ jobs:
       - name: Harden-runner policy (block where credentials live, audit elsewhere)
         run: scripts/guard/harden-runner.sh
 
+      - name: Environment parity (every root is a copy of envs/dev, every workflow lists every env)
+        run: scripts/guard/env-parity.sh
+
       - name: CI helper self-tests
         run: scripts/ci/selftest.sh

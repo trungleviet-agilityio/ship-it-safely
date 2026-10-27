@@ -85,10 +85,17 @@ email and the two GitHub IDs. No account ID is committed (ADR 0001, D2); a pre-c
 2. First apply on local state, using a gitignored `backend_override.tf` with `backend "local" {}`.
 3. Delete the override and move state into the bucket:
    `terraform init -migrate-state -backend-config="bucket=<state_bucket_name>"`. A second plan shows no changes.
-4. Create GitHub environment `dev` (you as required reviewer, `main` only) and the variables from the
-   outputs. Environment `dev`: `AWS_REGION`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`,
-   `AWS_ACCOUNT_ID`. Repo: `AWS_REGION`, `AWS_PLAN_ROLE_ARN_DEV`, `TF_STATE_BUCKET_DEV`, `AWS_ACCOUNT_ID_DEV`.
-   `AWS_PLAN_ROLE_ARN_DEV` is a repo secret (ADR 0003, C10); everything else is a variable. Set it with
+4. Create GitHub environment `dev` (you as required reviewer, `main` only) and configure the pipelines from the
+   outputs. There is no state bucket setting: the workflows derive the bucket name from the environment, the account
+   ID and the region (`scripts/tf/init.sh`).
+   - Repo variable: `AWS_REGION`.
+   - Environment secrets, the same names in every environment: `AWS_ACCOUNT_ID`, `AWS_APPLY_ROLE_ARN`,
+     `AWS_DEPLOY_ROLE_ARN` and `ALB_INGRESS_CIDRS`. The apply fails while `ALB_INGRESS_CIDRS` is empty: set a JSON
+     list of CIDRs, or `["0.0.0.0/0"]` to open the ALB on purpose.
+   - Repo secrets for the PR plan, one set per environment: `AWS_ACCOUNT_ID_<ENV>`, `AWS_PLAN_ROLE_ARN_<ENV>` and
+     `ALB_INGRESS_CIDRS_<ENV>` (optional there; unset means open) (ADR 0003, C10).
+
+   Set a role ARN from the outputs with, for example,
    `terraform output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_DEV`. There are no access keys (NFR-1).
 
 The exact commands are in [ADR 0002](../../../docs/adr/0002-phase-1-bootstrap-dev.md#checkpoint-commands-user-runs-claude-never-does-nfr-9).
