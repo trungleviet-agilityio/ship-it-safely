@@ -311,11 +311,11 @@ Troubleshooting:
 | Env | Strategy | Why |
 |---|---|---|
 | dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `scripts/ecs/wait-deployment.sh` fails the run on a rollback |
-| prod (Phase 7) | ECS built-in `BLUE_GREEN`: two target groups, bake time, CloudWatch alarm rollback | All traffic moves once green is healthy; fast rollback during the bake time; needs up to twice the tasks during a deploy |
-| Later | ECS built-in `CANARY` or `LINEAR` | Needs real traffic and alarms that mean something: 10% of almost no requests gives no signal |
+| prod (Phase 7) | `ROLLING` with the circuit breaker, like dev. Promote copies the dev digest; **rollback promotes an earlier green SHA**, whose image is already in prod | The goal is the deployment path (PLAN v3): one digest from PR to prod, and a rollback with no rebuild |
+| Later | ECS built-in `BLUE_GREEN`, `CANARY` or `LINEAR` | Need real traffic and alarms that mean something: 10% of almost no requests gives no signal. `BLUE_GREEN` was designed in ADR 0008 and left out by amendment S |
 
-Branching is trunk-based (FR-14): merge to `main` deploys dev; a release tag or `workflow_dispatch` promotes the
-same image digest to prod. No `develop` or per-env branches.
+Branching is trunk-based (FR-14): a PR gets a preview (Phase 8), merge to `main` deploys dev, and
+`workflow_dispatch` promotes the same image digest to prod. No `develop` or per-env branches.
 
 ## When to move to CodeBuild runners or CodePipeline
 
@@ -353,3 +353,5 @@ Status per phase: [`PROGRESS.md`](PROGRESS.md).
 | 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
 | 5 Hardening and teardown | Yes | Re-apply bootstrap (deploy role reads secret metadata), re-create, negative tests N5 and N6, destroy through `terraform-destroy`, N7 |
 | 6 Supply-chain hardening | Yes | Read the `job_workflow_ref` claim, re-apply bootstrap (file-pinned trust, region pin, trail and alert), confirm the alert email, read harden-runner insights, merge and prove the new trust with a re-create, deploy and destroy round, require `guard (no AWS)`. Then PR B: block mode from the collected egress list |
+| 7 Prod account, promote and rollback | **Yes**: a prod account in AWS Organizations, SSO admin login | Create the prod account, bootstrap it, environment `prod` and secrets, promote, rollback demo, N10 |
+| 8 PR preview environments | Yes (dev account) | Bootstrap re-apply for the preview role, environment `preview` with a reviewer, open and close a demo PR |
