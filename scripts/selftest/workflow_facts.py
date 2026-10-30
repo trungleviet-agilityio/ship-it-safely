@@ -12,6 +12,7 @@ Usage: python -I scripts/selftest/workflow_facts.py <command> <workflow file> [a
   on                        the trigger names, one per line
   options <input>           the options of a workflow_dispatch choice input, one per line
   step-run <id> <fragment>  the `run:` text of the steps of a job named with the fragment
+  composite-steps           the step names of a composite action, in order, one per line
   group <id>                the concurrency group of a job
   composite-run <fragment>  the `run:` text of the steps, named with the fragment, of a composite
                             action (the file is its action.yml)
@@ -84,6 +85,10 @@ def main(argv: list[str]) -> int:
             steps = document["runs"]["steps"]
             print(
                 "\n".join(str(s.get("run", "")) for s in steps if args[0] in str(s.get("name", "")))
+            )
+        elif command == "composite-steps" and not args:
+            print(
+                "\n".join(str(s.get("name", s.get("uses", ""))) for s in document["runs"]["steps"])
             )
         elif command == "group" and len(args) == 1:
             concurrency = _job(document, args[0]).get("concurrency")

@@ -254,6 +254,34 @@ for j in $plan_callers; do
 done
 ok "reusable plan: no environment on any job, explicit secrets in the caller"
 
+# Order inside the composite action: the role is assumed only after the environment root is selected and the CIDRs are
+# masked, so a bad environment or an empty required CIDR list is refused before any AWS call (ADR 0008 PR A, round 2).
+# step_order_ok <step names, one per line>: the assume step comes after both of the others, and each exists once.
+step_order_ok() {
+  local names="$1" want pos assume=0 select=0 mask=0 n
+  n="$(grep -c '^' <<<"$names" || true)"
+  pos="$(grep -n '^Assume the ' <<<"$names" | cut -d: -f1 || true)"
+  [ "$(grep -c '^Assume the ' <<<"$names" || true)" = 1 ] || return 1
+  assume="$pos"
+  for want in "Select the environment root" "Mask the ALB ingress CIDRs"; do
+    [ "$(grep -cxF "$want" <<<"$names" || true)" = 1 ] || return 1
+    pos="$(grep -nxF "$want" <<<"$names" | cut -d: -f1 || true)"
+    [ "$assume" -gt "$pos" ] || return 1
+    case "$want" in Select*) select="$pos" ;; *) mask="$pos" ;; esac
+  done
+  [ "$select" -lt "$mask" ] && [ "$n" -gt 0 ]
+}
+steps_now="$(facts composite-steps "$setup_action")"
+step_order_ok "$steps_now" || die "selftest: terraform-setup must select the root and mask the CIDRs before it assumes the role"
+# Mutations: move the assume step to the front of the list, and just after the root selection.
+assume_line="$(grep '^Assume the ' <<<"$steps_now")"
+others="$(grep -v '^Assume the ' <<<"$steps_now")"
+step_order_ok "$(printf '%s\n%s' "$assume_line" "$others")" && die "selftest: the order check missed the assume step first"
+step_order_ok "$(printf '%s\n%s\n%s' "$(head -n1 <<<"$others")" "$assume_line" "$(tail -n +2 <<<"$others")")" \
+  && die "selftest: the order check missed the assume step before the CIDR mask"
+step_order_ok "$(grep -v '^Mask the ALB' <<<"$steps_now")" && die "selftest: the order check missed a removed CIDR mask step"
+ok "terraform-setup action: the role is assumed after the root selection and the CIDR mask"
+
 # The shared Terraform job start lives in one local action (ADR 0008, P6). Its "Select the environment root" step must fail
 # for a bad environment and leave GITHUB_ENV empty: the step text is run with the same shell flags the runner uses.
 select_step="$(facts composite-run "$setup_action" "Select the environment root")"
@@ -391,6 +419,12 @@ case_hardening "the old repo-level account secret in a credentialed job" "uses t
 case_hardening "secrets[ in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets['X'] }}.example.com:443\n"
 case_hardening "toJSON(secrets) in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ toJSON(secrets) }}.example.com:443\n"
 case_hardening "an env built from a secret in an audit job" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: ${{ secrets.X }}\n'
+case_hardening "an env built from another env built from a secret" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.OUTER }}.example.com:443\n" '    env:\n      INNER: ${{ secrets.X }}\n      MIDDLE: ${{ env.INNER }}-a\n      OUTER: x-${{ env.MIDDLE }}\n'
+case_hardening "a transitive env read with other letter case" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.outer }}.example.com:443\n" '    env:\n      INNER: ${{ secrets.X }}\n      OUTER: ${{ ENV.inner }}\n'
+case_hardening "SECRETS. in upper case in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ SECRETS.X }}.example.com:443\n"
+case_hardening "Secrets[ in mixed case in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ Secrets['X'] }}.example.com:443\n"
+case_hardening "an env built from a secret in upper case" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: ${{ SECRETS.X }}\n'
+case_hardening "a chain of envs that never reaches a secret" ok "contents: read" "${audit_with}${hosts_head}            \${{ env.OUTER }}.example.com:443\n" '    env:\n      INNER: plain\n      OUTER: ${{ env.INNER }}\n'
 case_hardening "an env without a secret in an audit job" ok "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: plain\n'
 # A job that calls a reusable workflow has no steps: it must target a local reusable-*.yml and name its secrets.
 printf 'name: x\non: push\njobs:\n  c:\n    uses: ./.github/workflows/reusable-x.yml\n    permissions:\n      id-token: write\n    secrets:\n      A: ${{ secrets.B }}\n' >"$tmp/h.yml"
