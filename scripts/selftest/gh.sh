@@ -7,7 +7,6 @@
 # shellcheck source=scripts/selftest/common.sh
 source "$(dirname "$0")/common.sh"
 
-cp "$tmp/stub/aws" "$tmp/stub/gh"
 marker='<!-- app-preview:pr -->'
 bot='github-actions[bot]'
 
@@ -51,8 +50,6 @@ ok "sticky comment matches on the leading marker only"
 # --- A 12-digit run or the exact account in the body is refused before any API call.
 stub_reset
 expect_fail "sticky comment with an account ID" "account ID" sticky "BODY=role ${leak_id} ready"
-[ ! -e "$sd/calls" ] || die "selftest: a refused body must not reach the API"
-stub_reset
 expect_fail "sticky comment with the exact account" "account ID" sticky ACCOUNT=acct-x "BODY=in acct-x now"
 [ ! -e "$sd/calls" ] || die "selftest: a refused body must not reach the API"
 ok "sticky comment refuses a body that holds an account ID"
@@ -60,9 +57,13 @@ ok "sticky comment refuses a body that holds an account ID"
 # --- Bad inputs fail before any API call.
 stub_reset
 expect_fail "sticky comment with a bad repo" "REPO must" sticky "REPO=owner;rm"
+expect_fail "sticky comment with a parent segment in the owner" "no . or .. segment" sticky "REPO=../repo"
+expect_fail "sticky comment with a parent segment in the name" "no . or .. segment" sticky "REPO=owner/.."
+expect_fail "sticky comment with a dot owner" "no . or .. segment" sticky "REPO=./repo"
 expect_fail "sticky comment with a bad PR number" "PR_NUMBER must" sticky PR_NUMBER=0
 expect_fail "sticky comment with a PR number that is text" "PR_NUMBER must" sticky "PR_NUMBER=7;x"
 expect_fail "sticky comment with a bare marker" "MARKER must" sticky "MARKER=app-preview"
+expect_fail "sticky comment with a marker with trailing text" "MARKER must" sticky 'MARKER=<!-- a --> x'
 expect_fail "sticky comment with a marker holding a quote" "MARKER must" sticky 'MARKER=<!-- a" -->'
 expect_fail "sticky comment with a bad bot name" "BOT_LOGIN must" sticky 'BOT_LOGIN=x" or true or "'
 expect_fail "sticky comment with an empty body" "BODY is empty" sticky BODY=

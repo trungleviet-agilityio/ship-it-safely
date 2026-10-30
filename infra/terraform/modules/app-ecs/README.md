@@ -77,8 +77,10 @@ module "app_ecs" {
   stack tags (`Env = <env>`), because the apply role changes EC2 resources only by tag. The listener, repository and
   log group carry `Env=preview`, which overrides the provider default.
 - **Preview port.** `preview_listener_port` is 1024 to 65535 and differs from `container_port`, so never 80.
-  Teardown must remove the per-PR rules, services and target groups before the listener and security groups can be
-  deleted (ADR 0009, V4; the sweep lands with PR B).
+  Deleting the listener removes its rules, so they do not block a teardown. Two things do: per-PR services still in
+  the cluster (the cluster cannot be deleted) and the network interfaces of running preview tasks, which keep the
+  preview task security group in use. Teardown must remove the per-PR services first (ADR 0009, V4; the sweep lands
+  with PR B).
 
 Offline checks: `make tf-check` runs `terraform test` with a mocked provider, plus the `tf/policy.sh` rules.
 

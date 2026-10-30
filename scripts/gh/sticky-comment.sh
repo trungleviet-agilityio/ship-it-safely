@@ -23,11 +23,17 @@ source "$(dirname "$0")/../lib.sh"
 [ $# -eq 0 ] || die "usage: GH_TOKEN=... REPO=<owner/name> PR_NUMBER=<n> MARKER='<!-- name -->' BODY=<text> scripts/gh/sticky-comment.sh"
 
 repo="${REPO:-}" pr="${PR_NUMBER:-}" marker="${MARKER:-}" text="${BODY:-}" bot="${BOT_LOGIN:-github-actions[bot]}"
-[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "REPO must look like owner/name"
-[[ "$pr" =~ ^[1-9][0-9]{0,8}$ ]] || die "PR_NUMBER must be a positive number"
-# The marker and the bot name are embedded in a jq program below, so only plain characters pass.
-[[ "$marker" =~ ^\<!--\ [A-Za-z0-9:_.-]+\ --\>$ ]] || die "MARKER must be one HTML comment such as <!-- app-preview:pr -->"
-[[ "$bot" =~ ^[A-Za-z0-9-]+(\[bot\])?$ ]] || die "BOT_LOGIN must be a GitHub login"
+# Patterns sit in variables so they do not depend on bash quoting rules (3.2 and 5 differ).
+re_repo='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+re_pr='^[1-9][0-9]{0,8}$'
+re_marker='^<!-- [A-Za-z0-9:_.-]+ -->$'
+re_bot='^[A-Za-z0-9-]+(\[bot\])?$'
+# REPO goes into an API path: no segment may be . or .. (path traversal).
+[[ "$repo" =~ $re_repo && "${repo%/*}" != "." && "${repo%/*}" != ".." && "${repo#*/}" != "." && "${repo#*/}" != ".." ]] \
+  || die "REPO must look like owner/name, with no . or .. segment"
+[[ "$pr" =~ $re_pr ]] || die "PR_NUMBER must be a positive number"
+[[ "$marker" =~ $re_marker ]] || die "MARKER must be one HTML comment such as <!-- app-preview:pr -->"
+[[ "$bot" =~ $re_bot ]] || die "BOT_LOGIN must be a GitHub login"
 [ -n "$text" ] || die "BODY is empty; nothing to post"
 require_cmd gh "https://cli.github.com (preinstalled on GitHub runners)"
 require_cmd jq "https://jqlang.github.io/jq (preinstalled on GitHub runners)"
@@ -39,7 +45,7 @@ printf '%s\n' "$body" | "$ROOT/scripts/aws/assert-no-account-id.sh" >/dev/null |
 # --paginate prints one JSON array per page; jq reads them as a stream. The whole list is read before one id is
 # taken, so no pipe is closed early (pipefail).
 comments="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate)"
-ids="$(jq -r ".[] | select(.user.login == \"${bot}\" and (.body | startswith(\"${marker}\"))) | .id" <<<"$comments")"
+ids="$(jq -r --arg bot "$bot" --arg marker "$marker" '.[] | select(.user.login == $bot and (.body | startswith($marker))) | .id' <<<"$comments")"
 existing="${ids%%$'\n'*}"
 
 if [ -n "$existing" ]; then

@@ -1,6 +1,6 @@
 # shellcheck shell=bash disable=SC2034  # the variables are read by the area files that source this one
 # Shared setup of the CI helper self-tests (scripts/selftest/*.sh): the scratch directory, expect_fail, the shared
-# fixture values and the stub aws, docker and terraform commands. Source it; do not run it.
+# fixture values and the stub aws, docker, gh and terraform commands. Source it; do not run it.
 # Written for bash 3.2, like lib.sh.
 
 # shellcheck source=scripts/lib.sh
@@ -33,9 +33,9 @@ digest="$(printf 'a%.0s' $(seq 1 64))"
 commit="$(printf 'b%.0s' $(seq 1 40))"
 image="${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app@sha256:${digest}"
 
-# --- Stub aws, docker and terraform: file-driven replies, so the scripts that call them run offline.
+# --- Stub aws, docker, gh and terraform: file-driven replies, so the scripts that call them run offline.
 # The stub answers a call from files in $sd: <key>.out (stdout), <key>.err (stderr) and <key>.rc (exit code, default
-# 0). A suffix .N applies to the N-th call only (0-based). The key is aws-<service>-<operation> or docker-<command>.
+# 0). A suffix .N applies to the N-th call only (0-based). The key is aws-<service>-<operation>, docker-<command> or gh-<command>.
 # Terraform is only logged (calls), never answered.
 mkdir -p "$tmp/stub"
 cat >"$tmp/stub/aws" <<'EOF'
@@ -57,6 +57,7 @@ exit 0
 EOF
 chmod +x "$tmp/stub/aws"
 cp "$tmp/stub/aws" "$tmp/stub/docker"
+cp "$tmp/stub/aws" "$tmp/stub/gh"
 cat >"$tmp/stub/terraform" <<'EOF'
 #!/usr/bin/env bash
 echo "terraform $*" >>"${STUB_DIR:?}/calls"
