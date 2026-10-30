@@ -1,6 +1,6 @@
 # ADR 0009: Phase 8 PR preview environments on the dev ALB
 
-- Status: proposed
+- Status: accepted (2026-10-30, the user approved Q1 to Q11 with the recommended answers)
 - Date: 2026-10-30
 
 ## Context
