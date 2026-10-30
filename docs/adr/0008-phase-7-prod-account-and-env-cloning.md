@@ -4,6 +4,8 @@
 - Date: 2026-10-27
 - Amended 2026-10-27 (user): P1 keeps the PLAN layout, one thin root per environment, instead of one shared
   root. The clone script copies a root; the parity guard keeps the copies identical (sections B and C).
+- Amended 2026-10-30 (user): amendment W (workflow display names) and amendment S (PR B scope: no `BLUE_GREEN`,
+  rollback by promote). Both are below the verify sections.
 
 ## Context
 
@@ -438,6 +440,23 @@ names. The rules now live in `docs/reference/standards/ci-cd.md` (Naming), and a
 PR B check names: `plan (dev) / terraform plan`, `plan (prod) / terraform plan`, and so on. The sticky comment
 marker `terraform-iac:plan:<env>` and every concurrency group key stay as they are, except groups built from
 `github.workflow`, which follow the new names (no state lock depends on them).
+
+## Amendment S: PR B scope for the deployment path (2026-10-30)
+
+PLAN v3 makes the goal the deployment path: PR preview, dev, promote, rollback (PLAN §1). `BLUE_GREEN` serves
+a different goal (safe traffic shifting under real load) and is the largest part of PR B, so it leaves the
+phase. Promote and isolation stay; rollback becomes a use of promote.
+
+| # | Decision | Effect on this ADR |
+|---|---|---|
+| S1 | Prod runs `ROLLING` with the circuit breaker, like dev. No `deployment_strategy` variable | **Dropped:** P11, P12, P21, section E (module `BLUE_GREEN`, alternate target group, listener rule, alarms, bake time), the `ecs-elb` role and alarm statements of F, the alarm guard P15(1), the `STRATEGY=` input of `make new-env` (built in PR A; PR B removes it), the bake-time demo and B13's listener-rule drift check |
+| S2 | **Rollback = promote an earlier green SHA** (PLAN FR-16). The prod tag `<sha>` already exists with the same digest, so P9 step 5 skips the copy and deploys that digest. Both registries keep only the last `ecr_keep_images` images, so when the prod tag exists PR B reads the digest from prod and needs no dev image; an older SHA that prod no longer holds cannot be rolled back to | No new workflow, role, trust or permission. **Replaces** P16: the demo promotes A, then B, then A again and reads `/version` each time |
+| S3 | Keep the current waiter (`scripts/ecs/wait-deployment.sh` on `describe-services`) | **Dropped:** P14 and the service-deployment read statements of F. Dev needs no bootstrap re-apply for PR B |
+| S4 | Keep P15(2), the render rule that refuses a revision whose `environment` is not `[{APP_ENV: <env>}]` | Unchanged; it keeps hand-made revisions out of promotion |
+| S5 | **Kept as designed:** P5, P7, P9 (crane copy by digest, pull-only dev repo policy), P10 (dispatch on `main`, green-in-dev check), P13 limited to the promotion statements, P17 (N10), P18, P19, P20, P22 | PR B is now: `envs/prod`, the prod bootstrap with the promotion statements, `app-promote.yml`, crane, prod legs of every workflow, N10, N1 for prod, and the composite step-order self-test |
+
+The checkpoint commands below still show the `BLUE_GREEN` steps as written on 2026-10-27; the PR B build rewrites
+them to S1 to S5 before it is merged.
 
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 

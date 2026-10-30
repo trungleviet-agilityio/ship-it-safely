@@ -3,6 +3,7 @@
 > Hand-off file for Claude Code. Read this whole file first, then work **one phase at a time** and stop at each checkpoint.
 > Pattern source: [Configuring Terraform IaC pipelines… (DevOps.dev, Oct 2026)](https://blog.devops.dev/configuring-terraform-iac-pipelines-to-provision-cloud-resources-in-cloud-and-kubernetes-3ff863fe983e)
 > v2 changes: ECS Fargate instead of EKS · local/dev/prod environments · multi-account-ready · Secrets Manager per env · supply-chain hardening.
+> v3 changes (2026-10-30): the goal is the **deployment path** (PR preview, dev, promote, rollback); prod drops `BLUE_GREEN`; Phase 8 adds PR previews.
 > Status per phase: [`PROGRESS.md`](PROGRESS.md). Locked decisions: [`docs/adr/`](docs/adr/). When this file and an ADR disagree, the ADR wins.
 
 ---
@@ -17,6 +18,30 @@
 - App secrets live in **Secrets Manager**. The pipeline never reads secret values.
 - Supply-chain hardening: actions pinned by SHA, runner egress monitoring, secret scanning.
 
+### The deployment path (v3)
+
+Phases 0 to 6 built a safe road from `main` to dev. v3 finishes the road from a development build to production:
+**every build reaches production through one path, measurably, and can be taken back.** One image (one digest)
+travels the whole path; nothing is rebuilt on the way.
+
+```
+PR ──► preview (own URL, removed on close) ──► merge ──► dev ──► promote (approval) ──► prod
+                                                                 ◄── rollback: promote an earlier green SHA
+```
+
+Done means this demo passes, each step checked by `/version` (SHA and digest):
+
+| # | Action | Proof |
+|---|---|---|
+| 1 | Open a PR that changes the app | A bot comment holds the preview URL; `/version` shows the PR's SHA |
+| 2 | Close or merge the PR | The preview and its resources are gone |
+| 3 | Merge | Dev serves that SHA (built in Phase 4) |
+| 4 | Run App Promote with that SHA and approve | Prod serves the **same digest** as dev |
+| 5 | Promote an earlier green SHA (rollback) | Prod is back on the earlier digest within minutes, with no rebuild |
+
+Value: reviewers see the change running before merge; prod only ever runs what ran in dev; a bad release is
+undone without a code change.
+
 ## 2. Scope
 
 | In scope | Out of scope |
@@ -25,8 +50,9 @@
 | Bootstrap stack per account (state bucket, OIDC, roles, budget) | CodePipeline / CodeBuild (mentioned in README only) |
 | Infra pipeline (Terraform plan/apply) + app pipeline (build → ECR → ECS) | Custom domain + TLS certificate (optional extra) |
 | Secrets Manager wired into ECS task definition | Production-grade networking (private subnets + NAT) |
-| Destroy workflow, supply-chain hardening | |
-| **Stretch:** `prod` env in a second AWS account via AWS Organizations | |
+| Destroy workflow, supply-chain hardening | ECS `BLUE_GREEN` and `CANARY` (README only, v3) |
+| `prod` env in a second AWS account via AWS Organizations, promote by digest, rollback (Phase 7) | Third-party hosting or tunnels (Cloudflare and similar) |
+| PR preview environments in the dev account (Phase 8) | Previews for fork or Dependabot PRs |
 
 ## 3. Inputs to fill before starting
 
@@ -34,7 +60,7 @@
 |---|---|---|
 | AWS region | `ap-southeast-1` | `ap-southeast-1` |
 | Dev account ID | `111111111111` | set in `CLAUDE.local.md` (gitignored; ADR 0001 D2) |
-| Prod account ID (stretch) | `222222222222` | `TODO / later` |
+| Prod account ID (Phase 7) | `222222222222` | `TODO / later` |
 | GitHub owner / repo | `my-user/ship-it-safely` | `trungleviet-agilityio/ship-it-safely` (public) |
 | Name prefix | `sis` | `sis` |
 | Budget alert email / monthly USD | `me@example.com` / `20` | set in `CLAUDE.local.md` (gitignored) / `20` |
@@ -60,7 +86,8 @@ GitHub ──OIDC──► AWS STS (per account)
 
 dev account:  S3 state ─ ECR ─ ECS cluster ─ Fargate service ─ ALB (public)
               Secrets Manager: <prefix>/dev/app-api-key ──(execution role)──► container env APP_API_KEY
-prod account (stretch): same module, own state/secrets/roles; deploy = same image digest as dev
+              PR preview (Phase 8): the PR image as its own Fargate service behind the dev ALB, tagged Env=preview
+prod account: same module, own state/secrets/roles; promote = same image digest as dev; rollback = promote an earlier SHA
 ```
 
 Notes from official docs:
@@ -86,13 +113,15 @@ Notes from official docs:
 │   │                            # task exec/task roles, Secrets Manager secret shells, log group
 │   └── envs/
 │       ├── dev/                 # backend → dev account bucket; uses modules/app-ecs
-│       └── prod/                # stretch
+│       └── prod/                # Phase 7
 └── .github/workflows/
     ├── oidc-smoke-test.yml
     ├── repo-guard.yml           # every PR: zizmor, account-ID guard, gitleaks, trigger allowlist (no AWS)
     ├── terraform-iac.yml        # plan on PR, apply on main (per env)
     ├── app-ci.yml               # PR: build, test, scan image (no AWS)
-    ├── app-deploy.yml           # main: build once → push ECR dev → deploy dev; promote digest → prod (stretch)
+    ├── app-deploy.yml           # main: build once → push ECR dev → deploy dev
+    ├── app-promote.yml          # dispatch: promote a green SHA's digest → prod; rollback = an earlier SHA (Phase 7)
+    ├── app-preview.yml          # PR: the PR image as a preview in dev, removed on close (Phase 8)
     └── terraform-destroy.yml    # workflow_dispatch
 ```
 
@@ -126,8 +155,10 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 | FR-11 | `app-deploy.yml`: on push to `main` touching `app/**` → build once, tag with git SHA, push to dev ECR, register a task definition revision referencing the **image digest**, update the service, wait for stability. |
 | FR-12 | `terraform-destroy.yml`: `workflow_dispatch`, input `env`, environment-gated. |
 | FR-14 | Branching: trunk-based. Short-lived feature branches → PR → `main`. Merge to `main` deploys dev. A release tag `v*` (or `workflow_dispatch`) promotes the same image digest to prod. No `develop`/`release` branches, no branch-per-env. |
-| FR-15 | Release strategy: dev uses ECS `ROLLING` with deployment circuit breaker + auto rollback. Prod (stretch) uses ECS built-in `BLUE_GREEN` (ALB, two target groups, bake time, CloudWatch alarm rollback). `CANARY` is documented in README as the next step once there is real traffic to measure. |
-| FR-13 (stretch) | Prod account in AWS Organizations, bootstrapped with `accounts/prod.tfvars`. `envs/prod` added. The prod deploy job copies the **same digest** from dev ECR to prod ECR (or uses ECR cross-account replication), then deploys. Trigger: `workflow_dispatch` or release tag; GitHub environment `prod` requires a reviewer. |
+| FR-15 | Release strategy: dev and prod use ECS `ROLLING` with deployment circuit breaker + auto rollback. `BLUE_GREEN` and `CANARY` are documented in README as next steps once there is real traffic to measure (v3: dropped from Phase 7). |
+| FR-16 | Rollback: prod returns to an earlier green SHA by promoting it again (FR-13). The image is already in prod ECR by digest, so nothing is rebuilt or copied, and the trust and approval are the ones promote uses. Dev rolls back with `git revert` on `main` (trunk-based). |
+| FR-17 | PR preview: a PR from this repository that touches `app/**` gets the image it built running in the dev account, with its own URL posted as a sticky PR comment and `/version` showing the PR's SHA. Closing the PR removes everything the preview created. The build stays in a credential-free job; the preview job uses GitHub environment `preview` (required reviewer) and a preview role that can only touch resources tagged `Env=preview`. Fork and Dependabot PRs get no preview. Design (URL, routing, secret, cost cap, the trust for a PR-ref workflow file) in the Phase 8 ADR. |
+| FR-13 | Prod account in AWS Organizations, bootstrapped with `accounts/prod.tfvars`. `envs/prod` added. The prod deploy job copies the **same digest** from dev ECR to prod ECR (or uses ECR cross-account replication), then deploys. Trigger: `workflow_dispatch` or release tag; GitHub environment `prod` requires a reviewer. |
 
 ### Non-functional / security
 
@@ -188,16 +219,25 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
    **PR B:** harden-runner `block` with an explicit allowlist on the jobs that hold AWS credentials.
 6. **Checkpoint (user):** ADR 0007 "Checkpoint A commands", then PR B and "Checkpoint B".
 
-### Phase 7 — Stretch: prod account (~90 min)
+### Phase 7: Prod account, promote and rollback (~90 min)
 1. **User:** create AWS Organizations (from a management account with no workloads), create the prod account, and set up IAM Identity Center access.
 2. Bootstrap prod with `accounts/prod.tfvars`. Create GitHub environment `prod` (required reviewer) with the prod role ARNs.
 3. `envs/prod` (same module, own `tfvars`). Prod deploy job per FR-13.
-4. Prod ECS service uses built-in `BLUE_GREEN` (FR-15). Look up the current Terraform `aws_ecs_service` arguments for the deployment strategy; do not guess. Demo: deploy a broken image and watch the alarm trigger an automatic rollback.
+4. Rollback per FR-16. Demo: promote SHA A, then SHA B, then A again; `/version` shows each digest in turn.
 5. Negative test: a job in environment `dev` gets AccessDenied when assuming a prod role.
+
+### Phase 8: PR preview environments (~90 min)
+1. `/sis-team:plan 8` first: the ADR settles the URL and routing on the dev ALB, the preview role and its trust
+   (the workflow file comes from the PR ref, so the environment approval is the gate), the app secret for previews,
+   a cap on concurrent previews, and cleanup when a PR closes or the dev stack is down.
+2. `app-preview.yml` (display name App Preview) per FR-17, with harden-runner `block` on the credentialed job.
+3. **Checkpoint (user):** demo steps 1 and 2 of §1, plus: a second PR gets its own URL, a fork PR gets none, and
+   the preview role is refused on the dev service and its secret.
 
 ## 9. Cost & cleanup
 
 - ALB and Fargate are billed hourly, so destroy `envs/*` after each session (destroy workflow). No NAT gateway by design.
+- A preview adds one Fargate task (0.25 vCPU) while its PR is open, on the dev ALB that already exists; closing the PR stops it.
 - S3, Budgets, Organizations and the extra accounts cost close to $0.
 - Teardown order: destroy workflow per env → bootstrap per account (empty the bucket first, migrate state back to local).
 

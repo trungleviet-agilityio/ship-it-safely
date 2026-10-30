@@ -16,7 +16,8 @@ Legend: ✅ done · 🟡 partly done · ⏳ next · ⏸ not started
 | 4 App pipeline | ✅ | 0005 | #14, #15, #16, #17 | Deploy by digest (`sis-dev-app:5`, then `:6`); checkpoint PR changed the SHA, colour and page; deploy role negative tests pass; stack torn down |
 | 5 Hardening & teardown | ✅ | 0006 | #19 | Bootstrap re-applied (deploy role `DescribeSecret` allowed, `GetSecretValue` explicitDeny); stack re-created; N5 deploy refused at Preflight before the secret had a value, then green with `/version` on the `main` SHA by digest; `terraform-destroy` removed 27 resources and deregistered revisions 4, 5, 6, 8 with no account ID in logs; N6 wrong phrase failed with no approval prompt; N7 "nothing to destroy" |
 | 6 Supply-chain hardening | ✅ | 0007 | #21 (PR A), #24 (PR B, includes #23) | Checkpoint B passed: the seven credentialed jobs ran in `block` mode with telemetry off and no blocked host: PR plan, guardrails and smoke test; apply 27; deploy pushed to ECR (`/version` on `87cd3c0` by digest); destroy 27 and revision 12 deregistered; no account ID in any log. Dependabot applied the python `ignore` and closed #22. Checkpoint A passed: bootstrap re-applied (12 added, 4 changed); the region pin kept the PR plan assume working; N8 refused the PR token on apply and deploy (`AccessDenied`), N9 refused a 3601 s session; the refused assume reached the inbox as an SNS alert; apply (27), deploy (`/version` on the `main` SHA) and destroy (27, no account ID in the log) ran on the file-pinned trust; `guard (no AWS)` required; push protection on; Dependabot opened #22 (Python 3.15, not merged); `make up` serves all four routes. |
-| 7 Stretch: prod account | 🟡 | 0008 | #26 (scripts regroup), #27 (PR A) | Checkpoint A passed on dev: `make new-env` clones an env root, the parity guard keeps roots identical, workflows take the env as an input (reusable plan, composite setup, env-level secrets, fail-closed ALB ingress). On the live stack the #27 apply showed `No changes` (same 27 addresses as Phase 6); deploy green with `/version` on `cc9a4c0`; teardown with input `env=dev` destroyed 27; no account ID in any log. PR B (prod account, promotion, `BLUE_GREEN`) waits for Q1 (Organizations and the prod account) |
+| 7 Prod account, promote and rollback | 🟡 | 0008 | #26 (scripts regroup), #27 (PR A) | Checkpoint A passed on dev: `make new-env` clones an env root, the parity guard keeps roots identical, workflows take the env as an input (reusable plan, composite setup, env-level secrets, fail-closed ALB ingress). On the live stack the #27 apply showed `No changes` (same 27 addresses as Phase 6); deploy green with `/version` on `cc9a4c0`; teardown with input `env=dev` destroyed 27; no account ID in any log. #30 renamed the workflows (ADR 0008 amendment W). PR B (prod account, promote, rollback; `BLUE_GREEN` dropped by amendment S) waits for Q1 (Organizations and the prod account) |
+| 8 PR preview environments | ⏸ | | | New in PLAN v3 (deployment path). Needs `/sis-team:plan 8` |
 
 ## Live AWS state
 
@@ -40,8 +41,9 @@ in place. Deliberate differences: no throwaway S3-bucket step (Phase 3 went stra
 checksum-verified binaries instead of setup actions. Dependabot, the OIDC alert and harden-runner
 `block` on the credentialed jobs are in place since Phase 6; env cloning, the parity guard and env-parametrized
 workflows since Phase 7 PR A, with one deliberate difference: env roots may also differ in `versions.tf` and the
-lock file, so upgrades reach dev first (ADR 0008 P1). Still to do: the items below and the prod account with
-`BLUE_GREEN` (Phase 7 PR B).
+lock file, so upgrades reach dev first (ADR 0008 P1). PLAN v3 (2026-10-30) refocuses the remaining work on the
+deployment path: prod with promote and rollback, no `BLUE_GREEN` (Phase 7 PR B), then PR previews (Phase 8).
+Still to do: the items below and those two.
 
 ## Open items carried forward
 
