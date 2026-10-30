@@ -1,6 +1,9 @@
 # ADR 0009: Phase 8 PR preview environments on the dev ALB
 
 - Status: accepted (2026-10-30, the user approved Q1 to Q11 with the recommended answers)
+- Amended 2026-10-30 (user): Amendment H. Credentialed preview jobs run `main`'s code through `workflow_run`
+  (Q4 flipped) after the PR A security review found H1. Sections A (V6, V13 to V18), E, F, I, J, K, M, Risks,
+  the PR B brief and the PR B checkpoint are rewritten to match.
 - Date: 2026-10-30
 
 ## Context
@@ -98,19 +101,19 @@ Fixed by the user and not reopened here:
 | V3 | **Four garbage-collection layers:** (1) `closed` runs `down.sh <n>`; (2) every approved deploy sweeps previews of PRs that are no longer open before its cap check; (3) a `workflow_dispatch` sweep on `main`; (4) the dev teardown sweeps everything first (V4) | Only (1) | Covers a merge-conflict close (Finding 7, R38), a failed cleanup, an approval given after close (R39) and a dev teardown | More moving parts; each one is tested |
 | V4 | **`terraform-destroy` runs `scripts/preview/sweep.sh --all --no-images` with the apply role before the destroy plan**, waits for the deleted services to be `INACTIVE`, and afterwards deregisters the `sis-<env>-preview` family as well as `sis-<env>-app`. The apply role gains only `ecs:ListServices` (condition `ecs:cluster`) | Let Terraform fail and clean up by hand. A separate job with the cleanup role | Teardown never meets `ClusterContainsServicesException` or ENIs in the SGs (Finding 5). It fails closed: a sweep error stops the job before any delete. Prod is a no-op | One more apply-role action. The sweep runs before the destroy plan is reviewed by the guard; previews are disposable (accepted) |
 | V5 | **Preview role `sis-dev-gha-preview`**, trusted only from env `preview` on PR refs (E). It creates, updates and deletes only `Env=preview` resources with `sis-dev-preview-*` names | Reuse the deploy role. One role for deploy and cleanup | Smallest set of rights for PR code that runs after a human approval | A new role and environment |
-| V6 | **A separate cleanup role `sis-dev-gha-preview-cleanup` in env `preview-cleanup` with no reviewer.** Delete and describe only, on the same names and tags. No create, no update, no PassRole, no deregister | (a) Cleanup in env `preview` with approval. (b) Cleanup with the preview role and no environment | A close always cleans up, with no human in the loop, so cost stays bounded. An unreviewed token can at most delete previews | Unreviewed PR code (unmerged close) gets a delete-only token (R33). (a) leaves a running task whenever nobody approves. (b) changes `sub` to `pull_request`, which the plan role owns |
+| V6 | **Separate cleanup role `sis-dev-gha-preview-cleanup` in env `preview-cleanup` with no reviewer**, used by `main`'s code in `app-preview-deploy.yml` (jobs `cleanup`, `sweep`). Delete and describe only | One role trusting both subs; cleanup behind approval | Cleanup never waits for a human; least privilege per job; N16 differs from the preview trust in `sub` only | One more role and environment |
 | V7 | **A fence policy `sis-dev-gha-preview-fence`** (managed, attached to both preview roles) with explicit denies (F.4), plus the shared guardrails G1 to G6 | Rely on implicit deny | Survives a future Allow edit. Gives N11 to N15 an explicit reason | One more policy and its tests |
 | V8 | **Preview execution role `sis-dev-preview-exec`, created by bootstrap**, with the ECS boundary. It may pull from `sis-dev-preview` and write logs to `/ecs/sis-dev-preview` only, with an explicit deny on Secrets Manager and SSM. **No task role.** The preview role may pass only this role | Pass the dev exec role. Create it in the module | The dev secret is out of reach even with a hostile task definition. The role exists without the dev stack, and the apply role cannot edit it (G4 extended) | A bootstrap re-apply |
 | V9 | **No app secret in previews**: no `secrets` in the task definition, so `secret_loaded: no` and `/admin` always returns 401 | A preview secret shell. Reuse the dev secret | A preview runs PR code, so any value given to it is readable by the PR author, and a preview secret would be public in effect. Reusing dev's is ruled out (FR-8) | `/admin` cannot be demoed on a preview |
 | V10 | **Cap of 3 concurrent previews** (`PREVIEW_MAX=3` in `lib.sh`). The preflight counts `ACTIVE` `sis-dev-preview-*` services after the sweep. At the cap, the deploy job fails before creating anything, and the comment says so and lists the open preview PRs | 2 or 5. A hard cap in IAM | About 0.06 USD per hour at the cap. Clear failure | The PR-controlled script enforces the cap, so it is soft against a hostile approved PR (R34). IAM cannot count |
 | V11 | **Images go to a separate repo `sis-dev-preview`** (IMMUTABLE, scan on push, `force_delete`, keep the last 20), with tag `pr-<n>-<sha>` and a task definition by digest. `down.sh` deletes the PR's tags | The dev repo with a `pr-` tag prefix | A PR image can never be promoted (promote reads `sis-dev-app`), and preview pushes never evict `main` images | One more repository |
 | V12 | **The build runs in a credential-free job** that checks out `pull_request.head.sha`, builds, tests, smoke-tests and scans with `scripts/image/verify.sh`, and uploads `preview-image` (1 day) plus its sha256. `GIT_SHA` = head SHA | Build the merge commit | `/version` names the exact commit whose content is running | Rebuilds what `App CI` also built (runner minutes only) |
-| V13 | **Triggers: `pull_request`** on `main` with types `[opened, synchronize, reopened, closed]` and path filters, plus **`workflow_dispatch`** (sweep, `main` only). No trigger-policy change | `workflow_run` after `App CI` (Alternatives) | Uses only allowed triggers. No dangerous-trigger exception | The deploy job's steps come from the PR, so the approval is the gate (R32) |
-| V14 | **Concurrency group `app-preview-pr-<n>`, `cancel-in-progress: false`**, shared by `deploy` and `cleanup`. The build has its own group with cancel-in-progress. `deploy` re-checks with the GitHub API that the PR is still open before it assumes the role | Global group | One writer per PR. A pending deploy is replaced by a newer push or by a close | The interaction between approval waits and concurrency is not documented (R39); the open check and the sweep cover it |
-| V15 | **The sticky comment is posted by a separate job** (`pull-requests: write`, no AWS). It checks out `base.sha` scripts and calls a shared `scripts/gh/sticky-comment.sh` (marker, bot-only update, account-ID check). The script lands in PR A, so PR B's comment works on its own run | Post from the deploy job | Never mixes a write token with AWS credentials. Removes the duplicated plan-comment code | The comment job's `run:` text still comes from the PR (accepted residual, as for the plan comment) |
-| V16 | **Every job of `app-preview.yml` that runs on `pull_request`** carries `head.repo.full_name == github.repository && user.login != 'dependabot[bot]'` | Rely on missing secrets | Forks and Dependabot raise no approval prompt and no red runs | A self-test pins the condition |
-| V17 | **harden-runner:** block mode on `deploy`, `cleanup` and `sweep`. `deploy` is added to `NEEDS_CONTAINERS` (Docker load and push, like app-deploy). `cleanup` and `sweep` disable sudo and containers | crane push without Docker | Reuses the proven push path | PR code with Docker in a credentialed job (R42). Revisit when crane lands (ADR 0008 PR B) |
-| V18 | **Environment branch rules:** `preview` allows `refs/pull/*/merge` only. `preview-cleanup` allows `main` and `refs/pull/*/merge`. Prevent self-review is off (sole maintainer) | No branch rules | GitHub refuses the environment for any other ref, before IAM does | Set by hand in the web UI |
+| V13 | **Triggers:** `app-preview.yml` on `pull_request` (`main`, types `[opened, synchronize, reopened, closed]`, path filters), credential-free. `app-preview-deploy.yml` on `workflow_run` (`workflows: [App Preview]`, `types: [completed]`) plus `workflow_dispatch` (sweep). Amendment H | `pull_request` credentialed jobs (H1) | Credentialed code is always reviewed `main` code | Trigger exception and zizmor inline ignore (HD9) |
+| V14 | **Concurrency `app-preview-pr-${{ needs.resolve.outputs.pr }}`, `cancel-in-progress: false`**, shared by `deploy` and `cleanup` in `app-preview-deploy.yml` (Finding 17). App Preview builds use `app-preview-build-<n>` with cancel true | Global group | One writer per PR; a cleanup always runs after or instead of a pending deploy | Approval and concurrency interplay undocumented (R39) |
+| V15 | **Sticky comment from `main`'s code** (`comment` job in `app-preview-deploy.yml`, pull-requests: write, no AWS), using `scripts/gh/sticky-comment.sh` | Comment from App Preview | No PR code with a write token | None |
+| V16 | **Fork and Dependabot refusal is authoritative in `resolve`** (HD3, from the API and immutable IDs). App Preview jobs also carry the usual `if` to save runner minutes | `if` only | Cannot be bypassed by a PR | One API call |
+| V17 | **harden-runner:** block mode, telemetry off and `disable-sudo-and-containers: true` on `deploy`, `cleanup` and `sweep`; audit on `resolve`, `list-open` and `comment`, and on App Preview jobs. crane push (HD10) | Docker exception | No container runtime in credentialed jobs | Fallback recorded if crane fails |
+| V18 | **Environment branch rules:** `preview` and `preview-cleanup` allow **`main` only** (Finding 20). Prevent self-review off | PR refs | GitHub refuses either environment on any other ref, before IAM | Set by hand in the web UI |
 | V19 | **The preview roles never deregister task definitions.** Revisions of family `sis-dev-preview` stay `ACTIVE` (no cost) until the dev teardown deregisters them with the apply role | Grant `ecs:DeregisterTaskDefinition` on `*` | `DeregisterTaskDefinition` has no resource scope (Finding 4), so granting it would let an unreviewed cleanup token deregister dev revisions | After a close, one revision per deploy remains until teardown (R41) |
 | V20 | **Negative tests N11 to N17** (section K) | Fewer | Proves the fence live on every deploy, without alert emails (only `AssumeRoleWithWebIdentity` refusals send alerts) | More calls per deploy |
 | V21 | **Two PRs:** A = shared preview infrastructure in the module, plus `sticky-comment.sh`. B = bootstrap, workflow, scripts, teardown sweep and tests | One PR | A is small, needs no bootstrap re-apply and is provable on dev | B is large: the trust names the file it adds (`workflow_files`), so they ship together |
@@ -163,32 +166,27 @@ If dev is destroyed while PRs are open, the previews are gone. After dev is re-c
 
 ### E. Roles and trust
 
-All trusts keep `aud = sts.amazonaws.com`, `repository_id`, `repository_owner_id` and `aws:RequestedRegion` (StringEquals). `oidc.tf` gains one statement per **leg**. Plan, apply and deploy keep one leg each, and their JSON must stay byte-identical (a test checks it).
+All trusts keep `aud = sts.amazonaws.com`, `repository_id`, `repository_owner_id` and `aws:RequestedRegion` (StringEquals). The preview roles use the same single-statement shape as apply and deploy, so `oidc.tf` needs no legs.
 
-| Role | `sub` (StringEquals) | Leg | `ref` | `job_workflow_ref` |
-|---|---|---|---|---|
-| `sis-dev-gha-preview` | `<P>:environment:preview` | PR | StringLike `refs/pull/*/merge` | StringLike `O/R/.github/workflows/app-preview.yml@refs/pull/*/merge` |
-| `sis-dev-gha-preview-cleanup` | `<P>:environment:preview-cleanup` | PR (unmerged close) | StringLike `refs/pull/*/merge` | StringLike `.../app-preview.yml@refs/pull/*/merge` |
-| same | same | main (merged close, dispatch sweep) | StringEquals `refs/heads/main` | StringEquals `.../app-preview.yml@refs/heads/main` |
+| Role | `sub` (StringEquals) | `ref` (StringEquals) | `job_workflow_ref` (StringEquals) |
+|---|---|---|---|
+| `sis-dev-gha-preview` | `<P>:environment:preview` | `refs/heads/main` | `O/R/.github/workflows/app-preview-deploy.yml@refs/heads/main` |
+| `sis-dev-gha-preview-cleanup` | `<P>:environment:preview-cleanup` | `refs/heads/main` | same |
 
-`<P>` is the immutable prefix (`gh_sub_prefix`). The only wildcard is the PR number position.
-
-Key risk, stated plainly: on `pull_request` the workflow file and scripts come from the PR merge ref. `job_workflow_ref` therefore pins the file **path**, not its content. The human gate is the `preview` approval, and the approver must read the PR's `.github/**` and `scripts/**` changes before approving.
+- No PR-controlled code can obtain either token (Amendment H).
+- `app-preview.yml` is credential-free and must not be listed in `workflow_files`. A self-test enforces both.
 
 Bootstrap changes (PR B):
 - `variables.tf`: `preview_enabled` (bool, default false). `accounts/dev.tfvars.example` sets it to true.
 - `locals.tf`:
-  - `workflow_files.preview = ["app-preview.yml"]` (when enabled).
-  - `trust` entries become `{ sub, legs = [{ ref, ref_test, workflows, workflows_test }] }`.
-  - `resource_names` gains `preview_family`, `preview_repository`, `preview_log_group`, `preview_exec_role`, `preview_name_prefix = "sis-dev-preview-"`, `preview_task_sg` and `preview_listener_port`.
-  - `role_names` gains `preview` and `preview_cleanup`.
-- `iam_preview.tf` (new): the two roles (3600 s), their inline policies, the fence policy, and the exec role with boundary and inline policy.
+  - `workflow_files.preview = ["app-preview-deploy.yml"]` (when enabled), feeding `job_workflow_refs` as for deploy;
+  - `trust` gains `preview` and `preview_cleanup` entries in the existing shape (`ref_test = "StringEquals"`);
+  - `resource_names` and `role_names` additions as before.
+- `iam_preview.tf` (new): the two roles (3600 s), their inline policies, the fence, and the exec role with the boundary.
 - `iam_apply.tf`: `EcsListServicesInCluster`.
-- `iam_guardrails.tf`:
-  - The guardrails attachment map adds both preview roles.
-  - G4 resources add `role/sis-dev-preview-exec`. The fence name already matches `policy/sis-dev-gha-*`.
+- `iam_guardrails.tf`: attachments for both roles; G4 adds `role/sis-dev-preview-exec`.
 - `outputs.tf`: `preview_role_arn`, `preview_cleanup_role_arn`.
-- `monitoring.tf`: no edit. `expected_subs` picks up both new subs.
+- `monitoring.tf`: no edit (`expected_subs` follows `local.trust`).
 
 ### F. Least privilege
 
@@ -216,7 +214,9 @@ Region and account are omitted below. `<C>` = `sis-dev-cluster`, `<A>` = `sis-de
 | Ec2FindPreviewSg | `ec2:DescribeSecurityGroups` | `*` | none | No resource-level support (subset of the approved `ec2:Describe*`) |
 | PassPreviewExecRole | `iam:PassRole` | `role/sis-dev-preview-exec` | `iam:PassedToService = ecs-tasks.amazonaws.com` | |
 
-**`iam:PassRole` (highest risk)** reaches one role. That role cannot read any secret or SSM parameter, cannot pull from `sis-dev-app` and writes only to the preview log group. No task role is passed. **Tag escalation is closed:** `AddTags` and `ecs:TagResource` work only on create, so the role can never relabel a dev resource as `Env=preview`.
+**`iam:PassRole` (highest risk)** reaches one role. That role cannot read any secret or SSM parameter, cannot pull from `sis-dev-app` and writes only to the preview log group. No task role is passed. **Tag escalation is closed:** `AddTags` and `ecs:TagResource` work only on create.
+
+**Known IAM limit (H1):** ECS has no condition key for `loadBalancers[].targetGroupArn` or `networkConfiguration.securityGroups`, and target registration runs as the ECS service-linked role. So a holder of this role could attach a preview service to `sis-dev-tg` or any security group. After Amendment H only `main`'s reviewed code holds the role. `up.sh` refuses any target group but `sis-dev-preview-<n>` and any SG but `sis-dev-preview-task`, and a self-test pins this. The fence and tag scoping stay as defense in depth (R47).
 
 **F.2 `sis-dev-gha-preview-cleanup`**
 - `ElbRead`, `ListServicesInCluster`, `ReadPreviewServices`, `DeletePreviewService`, `ManagePreviewRule` (DeleteRule only), `ManagePreviewTargetGroup` (DeleteTargetGroup only).
@@ -257,82 +257,95 @@ None. The preview task definition has no `secrets`, and the preview exec role de
 | At the cap | The deploy fails before any create, and the comment lists the open previews. Close one, then "Re-run failed jobs" |
 | Backstops | Teardown after each session (V4); the 20 USD budget alert at 80% |
 
-### I. Image (V11, V12)
+### I. Image (V11, V12, HD2, HD4, HD10)
 
-- `build-scan` uploads `preview-image` and outputs `image-sha256`.
-- `deploy` downloads it and runs `scripts/image/import.sh` (sha256 from the job output), then `scripts/image/ecr-push.sh sis-dev-preview pr-<n>-<sha> <image>`. A re-run reuses the tag.
-- `scripts/preview/render-task-def.sh --env dev --pr <n> <image@digest> <sha>` builds the task definition **from a template**, offline:
-  - family `sis-dev-preview`, FARGATE, awsvpc, cpu 256, memory 512, LINUX/X86_64;
-  - exec role ARN built from `ACCOUNT` (never printed); no task role;
-  - volume `tmp`; container `app` with user `10001:10001`, read-only root, port 8080, `/tmp` mount, `environment [{APP_ENV: preview}]`, no `secrets`;
-  - awslogs `/ecs/sis-dev-preview`, prefix `pr-<n>`;
-  - tags `Project`, `Env=preview`, `ManagedBy=app-preview`, `PreviewPr`, `GitSha`.
-- The image must match `^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/sis-dev-preview@sha256:[0-9a-f]{64}$`.
+1. **App Preview `build-scan`** (credential-free):
+   - checks out `pull_request.head.sha`;
+   - runs `scripts/image/verify.sh` (build, unit tests, smoke, scan) with `GIT_SHA` = head SHA;
+   - exports `image.tar` (`scripts/image/export.sh`);
+   - uploads `preview-image` (1 day).
+2. **App Preview `record`** (credential-free, no checkout, `permissions: {}`) uploads `preview-meta`: `{"pr": <n>, "head_sha": "<40 hex>"}`. It runs for every type, including `closed`. Values reach the step through `env:`.
+3. **App Preview Deploy `resolve`** (credential-free):
+   - downloads both artifacts from `run-id: github.event.workflow_run.id` into `$RUNNER_TEMP/untrusted`;
+   - applies HD3; for a deploy, runs `inspect-image.sh` (HD4);
+   - uploads `checked-image` (1 day) and outputs `image-sha256`.
+4. **`deploy`** downloads `checked-image` from its own run and verifies the sha256 against the `resolve` output. It pushes with `scripts/image/ecr-push-tar.sh sis-dev-preview pr-<n>-<sha> <tar>` (crane, temp `DOCKER_CONFIG`). If the tag exists, the stored image is reused. The digest and media type come from `ecr describe-images`.
+5. Render, register and `up.sh` as before. The task definition references the digest.
 
-### J. Workflow `.github/workflows/app-preview.yml`
+### J. Workflows
 
-- `name: App Preview`. `run-name`: `Sweep previews by <actor>` on dispatch, else `Preview PR #<n> (<action>) by <actor>`.
+**`.github/workflows/app-preview.yml`** ("App Preview", credential-free)
+- `on.pull_request`: `branches: [main]`, `types: [opened, synchronize, reopened, closed]`. Paths: `app/**`, `.github/workflows/app-preview.yml`, `scripts/image/*.sh`, `scripts/lib.sh`, `scripts/names.sh`, `scripts/ci/install-tools.sh`, `scripts/ci/tools.sha256`, `mise.toml`.
+- `permissions: {}`. No `environment`, no `id-token`, no `secrets.` anywhere (self-test).
+
+| Job id | `name:` | `if` | Permissions | harden-runner |
+|---|---|---|---|---|
+| `build-scan` | `build, scan` | action != closed, same repo, not Dependabot | contents: read | audit |
+| `record` | `record` | same repo, not Dependabot | none | audit |
+
+Concurrency `app-preview-build-${{ github.event.pull_request.number }}`, cancel true. A cancelled run makes `resolve` skip (conclusion not success).
+
+**`.github/workflows/app-preview-deploy.yml`** ("App Preview Deploy", the only file in the preview trusts)
+- `run-name`: `Sweep previews by <actor>` on dispatch, else `Preview for App Preview run <workflow_run.id>`.
 - `permissions: {}`. `env: ENV: dev`.
-- `on.pull_request`: `branches: [main]`, `types: [opened, synchronize, reopened, closed]`. Paths: `app/**`, `.github/workflows/app-preview.yml`, `scripts/preview/**`, `scripts/image/*.sh`, `scripts/lib.sh`, `scripts/names.sh`, `scripts/aws/check-config.sh`, `scripts/ecs/wait-deployment.sh`, `scripts/ci/install-tools.sh`, `scripts/ci/tools.sha256`, `mise.toml`.
-- `on.workflow_dispatch`: no inputs.
+- `on`: `workflow_run` (`workflows: [App Preview]`, `types: [completed]`, `# zizmor: ignore[dangerous-triggers]` with the reason "credentialed code is main's; triggering-run artifacts are data, validated in a credential-free job"), and `workflow_dispatch`.
 
-| Job id | `name:` | `if` (plus the fork and Dependabot condition on every PR job) | Env | Permissions | harden-runner |
+| Job id | `name:` | `if` | Env | Permissions | harden-runner |
 |---|---|---|---|---|---|
-| `build-scan` | `build, scan` | PR event, action != closed | none | contents: read | audit |
-| `deploy` | `deploy (preview)` | needs build-scan; action != closed | `preview` | contents: read, id-token: write, pull-requests: read | block, telemetry off, containers allowed (V17) |
-| `cleanup` | `cleanup (preview)` | action == closed | `preview-cleanup` | contents: read, id-token: write | block, telemetry off, sudo and containers off |
-| `comment` | `sticky comment` | `always()`, and deploy or cleanup did not skip | none | contents: read, pull-requests: write | audit |
-| `sweep` | `sweep (preview)` | `workflow_dispatch` and `github.ref == 'refs/heads/main'` | `preview-cleanup` | contents: read, id-token: write, pull-requests: read | block, sudo and containers off |
+| `resolve` | `resolve` | `github.event_name == 'workflow_run'` | none | contents: read, actions: read, pull-requests: read | audit |
+| `deploy` | `deploy (preview)` | `needs.resolve.outputs.mode == 'deploy'` | `preview` | contents: read, id-token: write | block, telemetry off, sudo and containers off |
+| `cleanup` | `cleanup (preview)` | `needs.resolve.outputs.mode == 'cleanup'` | `preview-cleanup` | contents: read, id-token: write | block, sudo and containers off |
+| `comment` | `sticky comment` | `always() && needs.resolve.outputs.pr != ''` and deploy or cleanup did not skip | none | contents: read, pull-requests: write | audit |
+| `list-open` | `list open PRs` | `workflow_dispatch` on `main` | none | pull-requests: read | audit |
+| `sweep` | `sweep (preview)` | needs `list-open`, `github.ref == 'refs/heads/main'` | `preview-cleanup` | contents: read, id-token: write | block, sudo and containers off |
 
-**`deploy` steps:**
-1. harden-runner, checkout.
-2. Check that the PR is open (`gh api repos/$REPO/pulls/$PR --jq .state`, inputs via `env:`).
-3. Download the artifact, import with sha256 check.
-4. `check-config.sh sis-dev-gha-preview`.
-5. Assume the role: session `gha-preview-<run_id>-<attempt>`, `mask-aws-account-id: true`.
-6. N11 to N15 (`scripts/preview/assert-isolation.sh`).
-7. Sweep closed PRs (`sweep.sh --keep "$(gh pr list --state open --limit 100 --json number --jq '.[].number')"`).
-8. Preflight: listener present, cap.
-9. Push, render, register, `up.sh`, `wait-deployment.sh`.
-10. Outputs `url`, `digest`. Summary through `assert-no-account-id.sh`. Remove temp files.
-
-**`cleanup` steps:** `down.sh <n>`, then summary.
-
-**`sweep` steps:** the sweep, then N16.
-
-**`comment` steps:** checkout `base.sha` with sparse `scripts`, then `scripts/gh/sticky-comment.sh` with marker `<!-- app-preview:pr -->`. The body holds the URL, the head SHA, the digest, the result and the run link, or "Preview removed" on close. Every value reaches the step through `env:`.
-
-**Concurrency:** `deploy` and `cleanup` use `app-preview-pr-${{ github.event.pull_request.number }}`, cancel false. `build-scan` uses `app-preview-build-<n>`, cancel true. `sweep` uses `app-preview-sweep`.
-
-**Allowlists** (only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID`, `env.ENV` expressions):
-- `deploy`: `github.com`, `api.github.com`, `sts.<r>`, `api.ecr.<r>`, `<acct>.dkr.ecr.<r>`, `prod-<r>-starport-layer-bucket.s3.<r>`, `ecs.<r>`, `elasticloadbalancing.<r>`, `ec2.<r>`, `secretsmanager.<r>` (N12), `iam.amazonaws.com` (N15). All on port 443.
-- `cleanup`: `github.com`, `sts`, `ecs`, `elasticloadbalancing`, `api.ecr`.
-- `sweep`: those of `cleanup` plus `api.github.com`.
-
-**Policy and self-test changes:**
-- `NEEDS_CONTAINERS` adds `("app-preview.yml","deploy")`.
-- Self-tests:
-  - every `app-preview.yml` job on `pull_request` has the fork/Dependabot condition;
-  - `deploy` and `cleanup` share the concurrency group;
-  - `comment` checks out `base.sha`;
-  - no job holds both `id-token: write` and `pull-requests: write`;
-  - `workflow_files` lists `app-preview.yml`.
+- Every checkout uses the default ref (`main`'s `GITHUB_SHA`) with `persist-credentials: false`. Event values reach scripts only through `env:`.
+- **`resolve` steps:**
+  1. Download `preview-meta`, and `preview-image` when present (`run-id`, `github-token: github.token`).
+  2. `scripts/preview/resolve.sh`, which writes outputs `mode`, `pr`, `head_sha`, `keep` (open PR numbers), `reason`.
+  3. For a deploy: `inspect-image.sh`, upload `checked-image`, output `image-sha256`.
+  4. Remove the untrusted directory.
+- **`deploy` steps:**
+  1. Install crane (checksum verified).
+  2. Download `checked-image` and verify the sha256.
+  3. `check-config.sh sis-dev-gha-preview`.
+  4. Assume the role (session `gha-preview-<run_id>-<attempt>`, masked account).
+  5. N11 to N15.
+  6. `sweep.sh --keep "$KEEP"`.
+  7. Preflight (listener, cap).
+  8. Push with crane, render, register, `up.sh`, `wait-deployment.sh`.
+  9. Outputs `url` and `digest`; summary through `assert-no-account-id.sh`; remove temp files.
+- **`cleanup` steps:** `down.sh "$PR"`, then summary.
+- **`sweep` steps:** `sweep.sh --keep "$KEEP"`, then N16 (`assert-web-identity-denied.sh preview`).
+- **`comment` steps:** `sticky-comment.sh` with marker `<!-- app-preview:pr -->`, posting the URL, head SHA, digest, result and run link, or "Preview removed", or the skip reason when the cap is reached or dev is down.
+- **Concurrency:** `deploy` and `cleanup` use `app-preview-pr-${{ needs.resolve.outputs.pr }}`, cancel false. `sweep` uses `app-preview-sweep`.
+- **Allowlists** (only `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID`, `env.ENV`):
+  - `deploy`: `github.com`, `release-assets.githubusercontent.com` (crane), `sts.<r>`, `api.ecr.<r>`, `<acct>.dkr.ecr.<r>`, `prod-<r>-starport-layer-bucket.s3.<r>`, `ecs.<r>`, `elasticloadbalancing.<r>`, `ec2.<r>`, `secretsmanager.<r>` (N12), `iam.amazonaws.com` (N15). All on port 443.
+  - `cleanup` and `sweep`: `github.com`, `sts`, `ecs`, `elasticloadbalancing`, `api.ecr`.
+  - No credentialed job calls `api.github.com`; `resolve` and `list-open` do that without credentials.
+- **Policy and self-tests (HD9):**
+  - the trigger exception;
+  - `untrusted_inputs.py` with fixtures (a checkout `ref: ${{ github.event.workflow_run.head_sha }}`, `run-id` in `deploy`, `bash $RUNNER_TEMP/untrusted/x`, `actions/cache`, an event expression in `run:`; each must fail);
+  - `app-preview.yml` credential-free;
+  - `workflow_files` lists `app-preview-deploy.yml` and not `app-preview.yml`;
+  - `deploy` and `cleanup` share the group;
+  - no job holds both `id-token: write` and `pull-requests: write`.
 
 ### K. Negative tests
 
 | N | Where | Call | Pass when |
 |---|---|---|---|
 | N1 (ext) | `oidc-smoke-test` dispatch | `assert-web-identity-denied.sh plan apply deploy preview preview-cleanup` | AccessDenied from all five |
-| N8 (ext) | `oidc-smoke-test` PR | PR token (sub `pull_request`) against `apply deploy preview preview-cleanup` | AccessDenied |
-| N11 | `deploy` (preview role) | `ecs update-service --cluster sis-dev-cluster --service sis-dev-app --task-definition sis-dev-preview:999999` | AccessDenied (fence). Any other error fails without side effect |
-| N12 | `deploy` | `secretsmanager get-secret-value` and `describe-secret` on `sis/dev/app-api-key` (`--query Name`) | AccessDeniedException |
+| N8 (ext) | `oidc-smoke-test` PR | PR token against `apply deploy preview preview-cleanup` | AccessDenied |
+| N11 | `deploy` (preview role) | `ecs update-service --cluster sis-dev-cluster --service sis-dev-app --task-definition sis-dev-preview:999999` | AccessDenied (fence) |
+| N12 | `deploy` | `get-secret-value` and `describe-secret` on `sis/dev/app-api-key` | AccessDeniedException |
 | N13 | `deploy` | `ecr describe-images --repository-name sis-dev-app` | AccessDenied |
-| N14 | `deploy` | `elbv2 create-rule` on the dev port 80 listener, priority 50000, path `/n14-never-routed`, fixed 404, tag `Env=preview` | AccessDenied. If it ever succeeds, the script deletes the rule and fails |
+| N14 | `deploy` | `elbv2 create-rule` on the dev port 80 listener (priority 50000, `/n14-never-routed`, tag `Env=preview`) | AccessDenied; an unexpected success is deleted, then the test fails |
 | N15 | `deploy` | `iam tag-role --role-name sis-dev-preview-exec --tags Key=N15,Value=probe` | AccessDenied |
-| N16 | `sweep` (env `preview-cleanup` token) | `assert-web-identity-denied.sh preview` | AccessDenied; one alert email per dispatch |
-| N17 | static plus live | The self-test above; a fork PR or a Dependabot Docker PR touching `app/Dockerfile` | App Preview jobs skipped, no approval request |
-
-`web_identity_call` accepts `preview` and `preview-cleanup`. They map to `sis-${ENV}-gha-preview` and `sis-${ENV}-gha-preview-cleanup`.
+| N16 | `sweep` (env `preview-cleanup` token, same file, same ref) | `assert-web-identity-denied.sh preview` | AccessDenied; only `sub` differs. One alert email |
+| N17 | App Preview `if`, `resolve` HD3, live fork or Dependabot PR | refusal by API identity | No deploy run, no approval request; the `resolve` summary says "fork" or "dependabot" |
+| N18 | `untrusted_inputs.py` fixtures | static | Each fixture fails |
+| N19 | `up.sh` self-test | target group `sis-dev-tg` or SG `sis-dev-task` | Refused before any call |
 
 ### L. Secrets and state
 
@@ -347,27 +360,21 @@ None. The preview task definition has no `secrets`, and the preview exec role de
 
 ### M. PR split (V21)
 
-- **PR A, `infra(app-ecs): shared preview listener, repository and log group`:**
-  - `modules/app-ecs/preview.tf`, its variables, outputs, tests and README;
-  - `envs/dev` variable and `preview_enabled = true` in `terraform.tfvars` (prod, when it exists, sets false; the parity guard is unaffected);
-  - `scripts/gh/sticky-comment.sh` plus its self-test (not yet called).
-  - No bootstrap re-apply. About 9 resources added to dev.
-- **PR B, `infra(bootstrap): preview roles and app preview workflow`:**
-  - bootstrap E and F, `app-preview.yml`, `scripts/preview/*`;
-  - `terraform-destroy` sweep and the family loop, N1/N8 extension;
-  - the plan comment switched to `sticky-comment.sh`;
-  - policy and self-tests.
-  - The bootstrap is re-applied from the PR branch before merge, so PR B previews itself.
+- **PR A (built):** unchanged (HD12).
+- **PR B, `infra(bootstrap): preview roles and app preview workflows`:**
+  - bootstrap E and F;
+  - `app-preview.yml` and `app-preview-deploy.yml`;
+  - `scripts/preview/` (`resolve.sh`, `inspect-image.sh`, `render-task-def.sh`, `preflight.sh`, `up.sh`, `down.sh`, `sweep.sh`, `assert-isolation.sh`);
+  - `scripts/image/ecr-push-tar.sh`;
+  - the trigger exception and `untrusted_inputs.py`;
+  - the `terraform-destroy` sweep and the family loop;
+  - the N1/N8 extension;
+  - the plan comment switched to `sticky-comment.sh`.
+- PR B **cannot preview itself**: `workflow_run` runs only the default-branch file (Finding 14). The live proof starts after merge.
 
 ## Alternatives considered
 
-- **`workflow_run` after `App CI` (credentialed code always from `main`).** The trust could pin `app-preview.yml@refs/heads/main`, and PR code would never hold AWS credentials. It is the stronger isolation in principle, and it is the main rejected option. It was rejected because:
-  - it needs a trigger-policy exception;
-  - zizmor `dangerous-triggers` flags it, and the docs warn that attackers "often find ways" in;
-  - the PR number and artifacts would come from an untrusted run;
-  - closes would need a signal workflow;
-  - workflow changes take effect only after merge.
-  The approval plus the fenced role bounds the blast radius to `Env=preview` resources. Kept as Q4.
+- **`pull_request` credentialed jobs with an approval and the fence** (the original V13). Rejected by Amendment H: approved PR code holds the role, and ECS cannot restrict target groups or security groups by IAM (H1), so PR code could serve dev's traffic. `workflow_run` was chosen instead. Its known hazards (artifact poisoning, event-ref checkout, cache poisoning) are handled by HD2 to HD4 and the HD9 guard.
 - **Path rules on the dev port 80 listener.** Simplest URL, but the role would need `CreateRule` on the dev listener (Env=dev). A hostile approved PR could add a priority 1 `/*` rule and hijack dev. Rejected.
 - **A listener per PR port.** No rewrite needed. But `CreateListener` is authorized on the dev ALB, which cannot be tag-scoped, and an SG port range opens more surface. Rejected.
 - **Terraform per-PR state.** Declarative, but state write for PR code, slow init and orphaned keys. Rejected.
@@ -380,21 +387,28 @@ None. The preview task definition has no `secrets`, and the preview exec role de
 
 | R | Risk | Mitigation |
 |---|---|---|
-| R32 | Approved PR code holds the preview role (the workflow comes from the PR) | Reviewer approval reading `.github/**` and `scripts/**`; fence plus guardrails; tag- and name-scoped allows; env branch rule `refs/pull/*/merge`; no secrets; PassRole to one role with no secret access |
-| R33 | The unapproved cleanup token (unmerged close) runs PR code | Delete-only on `Env=preview` names; no create, PassRole or register |
-| R34 | The cap and N-tests run in PR-controlled scripts | Approval; budget alert; teardown sweep. Residual, accepted |
-| R35 | `job_workflow_ref` for `pull_request` runs is undocumented | Fails closed. Step B0 reads it from a real PR token before the trust is relied on |
-| R36 | ALB URL rewrite unavailable or misbehaving | Smoke at B5. Fallback: `BASE_PATH` support in the app (backend-dev, small) with plain path rules |
-| R37 | Merged close runs on `refs/heads/main` (Finding 7) | Cleanup main leg pinned to `app-preview.yml@main`; env `preview-cleanup` allows `main` |
-| R38 | A PR closed with a merge conflict triggers no run | Sweep in the next deploy, dispatch sweep, teardown |
-| R39 | Late approval after close; approval and concurrency interplay undocumented | The deploy re-checks that the PR is open; sweeps |
-| R40 | The preview URL (dev ALB hostname) is public in a public PR comment | The `ALB_INGRESS_CIDRS` rules cover port 8000; previews hold no secret |
-| R41 | Task definition revisions stay `ACTIVE` after close | No cost; deregistered at teardown (V19) |
-| R42 | A Docker-enabled credentialed job runs PR code | Same exception as app-deploy; move to crane once ADR 0008 PR B lands |
-| R43 | The ECR lifecycle (keep 20) may expire an image of a long-lived preview, so a restart fails | Push again; 20 is far above 3 previews times a few pushes |
-| R44 | The comment job's step text comes from the PR while it holds a write token | Same accepted residual as the plan comment; base-SHA scripts |
-| R45 | A sweep bug run by the apply role could delete the dev service | Strict name regex; self-test that `sis-dev-app` never matches |
-| R46 | Every push to a PR needs a new approval | Intended: new code, new review |
+| R32 | Closed by Amendment H: PR code never holds the preview role | n/a |
+| R33 | Closed: the cleanup token is held only by `main`'s code | n/a |
+| R34 | The cap is enforced by `main`'s script, not IAM | Review of `main`; budget alert; teardown sweep |
+| R35 | The `workflow_run` token claims (`ref`, `job_workflow_ref`) must equal the main pin | Fails closed; checkpoint B5 reads the claims from the N16 log |
+| R36 | ALB URL rewrite unavailable or misbehaving | Smoke at B7; fallback `BASE_PATH` in the app |
+| R37 | Closed: merged-close refs no longer reach a trust (credentialed runs are always on `main`) | n/a |
+| R38 | A PR closed with a merge conflict starts no App Preview run | Deploy-time sweep, dispatch sweep, teardown |
+| R39 | Approval and concurrency interplay undocumented | Shared per-PR group; cleanup decided by API state; sweeps |
+| R40 | The preview URL is public | Ingress CIDRs cover port 8000; no secret in previews |
+| R41 | Preview revisions stay `ACTIVE` until teardown | No cost; teardown deregisters |
+| R42 | Closed if crane pushes the tarball (HD10) | Fallback: Docker exception, recorded |
+| R43 | Lifecycle may expire a long-lived preview's image | Push again |
+| R44 | Closed for previews (comment from `main`); unchanged for the plan comment | n/a |
+| R45 | A sweep bug run by the apply role could delete the dev service | Strict name regex; self-test |
+| R46 | One approval per push | Intended |
+| R47 | **Malicious or buggy merged code on `main`** holds the preview role and could attach to `sis-dev-tg` or any SG (H1 class; IAM cannot express it) | PR review of `app-preview-deploy.yml` and `scripts/preview/**`; `up.sh` refusal (N19); fence; G1 to G6; `Env=preview` tags |
+| R48 | Untrusted image content runs in dev behind a public URL | `preview` approval; no secret, no task role; preview SG; cap; teardown |
+| R49 | Artifact poisoning, or a parser bug in `inspect-image.sh` | Credential-free `resolve`; size and name bounds; JSON read to stdout only; digest check on download; the HD9 guard |
+| R50 | Deploy-workflow changes take effect only after merge; a broken `main` file blocks previews until a fix merges | Self-tests and a dispatch sweep before demos |
+| R51 | The approval prompt is on the App Preview Deploy run, not on the PR checks | The comment links the run; the reviewer is notified by GitHub |
+| R52 | `workflows: [App Preview]` matches by name; another workflow could take that name | `resolve` requires `workflow_run.path == .github/workflows/app-preview.yml` |
+| R53 | `workflow_run` chains are limited to three levels | One level used |
 
 ### Other consequences
 
@@ -408,6 +422,64 @@ None. The preview task definition has no `secrets`, and the preview exec role de
   - ADR 0002 name contract (`sis-dev-preview-*`);
   - ADR 0007 exception lists;
   - a diagram of the preview path.
+
+## Amendment H: credentialed preview jobs run main's code (2026-10-30)
+
+### Why
+
+The PR A security review found a High (H1). In the `pull_request` design, approved PR code holds the preview role and can call `ecs create-service` with `loadBalancers[].targetGroupArn = sis-dev-tg`. PR code then serves dev's port 80 traffic. It can also pass any security group.
+
+ECS has no condition key for target groups or security groups. The `CreateService` keys are `aws:RequestTag`, `aws:TagKeys`, `ecs:auto-assign-public-ip`, `ecs:capacity-provider`, `ecs:enable-*`, `ecs:namespace`, `ecs:propagate-tags`, `ecs:subnet`, `ecs:task-cpu`, `ecs:task-definition` and `ecs:task-memory` (Finding 4). Target registration is done by the ECS service-linked role, so the fence's `RegisterTargets` deny never applies.
+
+IAM cannot close H1. Only the code that holds the role can, so that code must be reviewed code. The user chose the alternative this ADR first rejected: **deploy from `main` with `workflow_run`** (Q4).
+
+### Findings from official docs (added)
+
+14. `workflow_run`:
+    - "This event will only trigger a workflow run if the workflow file exists on the default branch."
+    - `GITHUB_SHA` is the "last commit on default branch" and `GITHUB_REF` is the "default branch".
+    - The run "is able to access secrets and write tokens, even if the previous workflow was not".
+    - "Running untrusted code on the `workflow_run` trigger may lead to security vulnerabilities."
+    - "You can't use `workflow_run` to chain together more than three levels of workflows."
+    - Types are `completed`, `requested` and `in_progress`.
+15. The REST "Get a workflow run" schema has `head_sha`, `head_branch`, `event`, `conclusion`, `pull_requests` (array or null), `head_repository`, `path` and `run_attempt`. The docs do not say when `pull_requests` is empty (for example for forks). **This design does not rely on it.**
+16. `actions/download-artifact`:
+    - `run-id` is "the id of the workflow run where the desired download artifact was uploaded from".
+    - `github-token` "is required when downloading artifacts from a different repository or from a different workflow run", and needs "actions:read".
+    - A single artifact "will always be extracted directly to the specified path".
+    - `digest-mismatch` defaults to `error`.
+17. Context availability: `jobs.<job_id>.concurrency` and `jobs.<job_id>.environment` accept `github, needs, strategy, matrix, inputs, vars`. A per-PR group can therefore use an output of an earlier job.
+18. `crane push PATH IMAGE`: "If the PATH is a directory, it will be read as an OCI image layout. Otherwise, PATH is assumed to be a docker-style tarball." No Docker daemon is needed.
+19. zizmor `dangerous-triggers` flags `workflow_run`. Its remediation suggests `workflow_call`, which cannot run a privileged follow-up of an untrusted PR. It warns that "a `workflow_run` always runs in the context of the target repository".
+20. Environment branch rules are "matched against the `GITHUB_REF` of the workflow run". A `workflow_run` job therefore matches the rule `main`.
+
+### Decisions
+
+| # | Decision | Alternatives | Pro | Con |
+|---|---|---|---|---|
+| HD1 | **Two workflows.** `app-preview.yml` ("App Preview", `pull_request`) is **credential-free**: build, test, smoke, scan, then upload `preview-image` and `preview-meta`. `app-preview-deploy.yml` ("App Preview Deploy", `workflow_run` on `["App Preview"]` `[completed]`, plus `workflow_dispatch` sweep) holds every credential and runs only `main`'s code | Keep `pull_request` with the fence (H1 stays open) | No PR-controlled step ever holds AWS credentials or a write token. H1 becomes reachable only by merged code | A trigger-policy exception and an inline zizmor ignore. Workflow changes take effect only after merge |
+| HD2 | **Everything from the triggering run is data.** Only the credential-free `resolve` job downloads it (into `$RUNNER_TEMP/untrusted`). It never checks out an event ref and never executes a file from the artifact. It validates, then re-uploads `checked-image` to its own run with a sha256 output. Credentialed jobs download only same-run artifacts | Download in the credentialed job | Untrusted parsing has no credentials. Credentialed egress allowlists stay as proven (same-run download, as app-deploy) | One extra artifact hop (about 30 s) |
+| HD3 | **Deploy or cleanup is decided by the GitHub API, not the event.** Resolve reads `pr` from `preview-meta` (untrusted, `^[1-9][0-9]{0,4}$`) and calls `GET /repos/{repo}/pulls/{pr}`. It refuses unless `head.repo.id == github.repository_id`, `user.login != 'dependabot[bot]'`, `workflow_run.event == 'pull_request'`, `workflow_run.path == '.github/workflows/app-preview.yml'` and `workflow_run.head_repository.full_name == github.repository`. Then: `state == open` with `head.sha == workflow_run.head_sha` and `conclusion == success` means **deploy**; `state == closed` means **cleanup** (any conclusion); anything else means **skip**, with the reason in the summary | Trust `pull_requests[]` or the meta `action` | A forged number can at most clean up a PR that is really closed (harmless), or deploy the image that matches that PR's current head. A superseded run skips | One API call |
+| HD4 | **Image bounds** (`scripts/preview/inspect-image.sh`, run in `resolve`, never executes content). The artifact is one file `image.tar` of at most 512 MB. `tar -tf` member names must not be absolute and must not contain `..`. `manifest.json` (read with `tar -xOf`, nothing written) lists exactly one image whose config has `Labels["org.opencontainers.image.revision"] == head_sha` (the Dockerfile sets it from `GIT_SHA`). At most 32 layers | Trust the artifact | Bounded parser input, bound to the reviewed head SHA | The label is attacker-chosen, so it binds identity, not intent (the image is untrusted code by definition) |
+| HD5 | **Trusts pinned to `main`:** both preview roles use `job_workflow_ref = O/R/.github/workflows/app-preview-deploy.yml@refs/heads/main` and `ref = refs/heads/main`, both StringEquals. No StringLike and no legs | Keep the PR legs | The same shape as apply and deploy (ADR 0007 S2). No trust standard amendment | A rename of the file needs a bootstrap re-apply |
+| HD6 | **Keep the separate cleanup role and `preview-cleanup` environment** (recommended) | One role trusting two subs; or cleanup inside `preview` | `preview` keeps a reviewer while cleanup must not wait for one. Least privilege per job. N16 becomes a refusal where only `sub` differs | One extra role and environment (already designed) |
+| HD7 | **Keep the `preview` approval.** It now gates cost and running untrusted image code in dev behind a public URL, not credentialed code | Drop it | A human decides what PR code runs in the account | One click per push. The prompt appears on the App Preview Deploy run, not on the PR checks (R51) |
+| HD8 | **The sticky comment is posted by `main`'s code**: job `comment` in `app-preview-deploy.yml` (contents: read, pull-requests: write; no id-token; no artifact), calling `scripts/gh/sticky-comment.sh` from the default checkout | Comment from App Preview | No PR code with a write token (closes R44 for previews) | None |
+| HD9 | **Policy.** Trigger allowlist: `workflow_run` only in `app-preview-deploy.yml`, with exactly `workflows: [App Preview]` and `types: [completed]`. New guard `scripts/guard/untrusted_inputs.py`: in that file, no `actions/checkout` with `ref` or `repository`; `run-id` on `actions/download-artifact` only in `resolve`, with a path under `runner.temp`; no `${{ github.event.* }}` in `run:`; no `actions/cache` or `cache:` input; any path under the untrusted directory appears only as an argument to `inspect-image.sh` or `upload-artifact`. `app-preview.yml` may hold no `id-token`, `environment`, `secrets.` or write permission. One inline `# zizmor: ignore[dangerous-triggers]` on the `workflow_run:` key, with the reason in a comment | No guard | The rules that make `workflow_run` safe are enforced in repo-guard | One more helper with fixtures; a third allowed inline ignore in `ci-cd.md` |
+| HD10 | **Push with crane** (pinned by ADR 0008 PR B1) from the checked tarball. Every credentialed job keeps `disable-sudo-and-containers: true`. No `NEEDS_CONTAINERS` entry for previews | Docker load and push | Closes R42 | Depends on the B1 pin being on `main`. If crane rejects the `docker save` format, fall back to the `NEEDS_CONTAINERS` exception (recorded at the checkpoint) |
+| HD11 | **Defense in depth stays:** the fence, tag and name scoping, the preview exec role, and no secret. `up.sh` refuses any target group other than `sis-dev-preview-<n>` and any security group other than `sis-dev-preview-task` (self-tested) | Drop the fence | Limits a buggy or hostile **merged** change | IAM still cannot express H1 (R47) |
+| HD12 | **PR A needs no change.** The listener, SGs, repo, log group and `sticky-comment.sh` are reused as built, provided `sticky-comment.sh` takes the PR number and body from env or arguments and does not read `GITHUB_EVENT_PATH`. If it does read the event, add a `PR_NUMBER` env override in PR B | n/a | n/a | n/a |
+
+### Risks closed and remaining
+
+- **Closed:**
+  - R32 (PR code holds the preview role);
+  - R33 (PR code holds the cleanup token);
+  - R42 (Docker in a credentialed job, if HD10 holds);
+  - R44 for previews (write token with PR-steered steps);
+  - H1 as exploitable **by PR code**;
+  - R35 changes from "undocumented PR claim" to the documented main pin, verified at checkpoint step B5.
+- **Remaining:** R47 to R53 below, plus R34, R36 to R41, R43, R45 and R46.
 
 ## Checkpoint commands (the user runs these; NFR-9)
 
@@ -435,33 +507,33 @@ Expect `404` from the preview listener, and the dev `/version` unchanged. Keep d
 
 ### PR B
 
-**B0. Read the PR `job_workflow_ref` format.** Open PR B's OIDC Smoke Test run, job "prove plan role identity", step N8. Expect the line `Token job_workflow_ref: trungleviet-agilityio/ship-it-safely/.github/workflows/oidc-smoke-test.yml@refs/pull/` followed by the PR number and `/merge`. If it differs, stop and report (R35).
+PR B cannot preview itself (Finding 14). Prove the code offline, apply the bootstrap, merge, then prove it live.
 
-**B1. Enable previews in the gitignored dev inputs.**
+**B1. Checks.** With the PR B branch checked out:
+```bash
+gh pr checks --watch
+```
+Expect green `guard`, `checks`, the plan and OIDC Smoke Test (N8 lists preview and preview-cleanup as denied). App Preview runs `build, scan` and `record`. No App Preview Deploy run appears yet (the file is not on `main`).
+
+**B2. Enable previews in the gitignored dev inputs.**
 ```bash
 printf 'preview_enabled = true\n' >> infra/terraform/bootstrap/accounts/dev.tfvars
 ```
 
-**B2. Dev bootstrap re-apply from the PR B branch.**
+**B3. Dev bootstrap re-apply from the PR B branch.**
 ```bash
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap init -backend-config="bucket=sis-dev-tfstate-$(AWS_PROFILE=sis-dev-admin aws sts get-caller-identity --query Account --output text)-ap-southeast-1-an"
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/dev.tfvars -out=bootstrap.tfplan
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap apply bootstrap.tfplan
 rm infra/terraform/bootstrap/bootstrap.tfplan
 ```
-Expect about 11 to add:
-- `aws_iam_role.preview`, `aws_iam_role.preview_cleanup`, `aws_iam_role.preview_exec`;
-- their 3 inline policies;
-- `aws_iam_policy.preview_fence`;
-- 4 attachments.
+Expect about 11 to add (3 roles, 3 inline policies, the fence, 4 attachments), 3 to change (`aws_iam_role_policy.apply`, `aws_iam_policy.guardrails`, `aws_cloudwatch_event_rule.oidc_unexpected`) and 0 to destroy. The plan, apply and deploy trusts are unchanged.
 
-Expect 3 to change (`aws_iam_role_policy.apply`, `aws_iam_policy.guardrails`, `aws_cloudwatch_event_rule.oidc_unexpected`) and 0 to destroy. The plan, apply and deploy trusts must show no change.
+**B4. GitHub environments (web UI, Settings > Environments).**
+- `preview`: Required reviewers = you; Prevent self-review **off**; Deployment branches and tags = Selected, branch rule **main**.
+- `preview-cleanup`: no reviewers; Selected, branch rule **main**.
 
-**B3. GitHub environments (web UI, Settings > Environments).**
-- `preview`: Required reviewers = you; Prevent self-review **off**; Deployment branches and tags = Selected, add branch rule **refs/pull/*/merge**.
-- `preview-cleanup`: no reviewers; Selected, add branch rules **main** and **refs/pull/*/merge**.
-
-Then the secrets. If a `gh secret set --env` line is refused (PAT without Environments write), add the same secret in the web UI.
+Then the secrets. If a line is refused (PAT without Environments write), add the same secret in the web UI.
 ```bash
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap output -raw preview_role_arn | gh secret set AWS_PREVIEW_ROLE_ARN --env preview --repo trungleviet-agilityio/ship-it-safely
 AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap output -raw preview_cleanup_role_arn | gh secret set AWS_PREVIEW_CLEANUP_ROLE_ARN --env preview-cleanup --repo trungleviet-agilityio/ship-it-safely
@@ -473,23 +545,23 @@ gh secret list --repo trungleviet-agilityio/ship-it-safely
 ```
 The repo-level list must not contain `AWS_PREVIEW_ROLE_ARN`, `AWS_PREVIEW_CLEANUP_ROLE_ARN` or `AWS_ACCOUNT_ID`.
 
-**B4. Dev up.** If dev is down: Run workflow Terraform (env `dev`), approve, run the A2 `put-secret-value` line, then Run workflow App Deploy and approve.
+**B5. Merge PR B (squash). Then prove the trust.**
+- The merge close starts App Preview `record`, then App Preview Deploy: `resolve` says "closed", and `cleanup (preview)` runs without approval and finds nothing (green). App Deploy also starts (`scripts/lib.sh` changed): approve it.
+- Then Run workflow **App Preview Deploy** on `main`. Expect in the `sweep (preview)` log:
+  - `Token sub` ending in `:environment:preview-cleanup`;
+  - `Token job_workflow_ref: trungleviet-agilityio/ship-it-safely/.github/workflows/app-preview-deploy.yml@refs/heads/main`;
+  - "the preview role denied as designed" (N16);
+  - one alert email.
 
-**B5. PR B previews itself.** Approve `preview` on the App Preview run. Expect:
-- the deploy log shows "denied as designed" for N11 to N15;
-- a bot comment with the URL.
+  If the assume step fails instead, stop and report the claims (R35).
 
-Then:
+**B6. Dev up.** If dev is down: Run workflow Terraform (env `dev`), approve, then:
 ```bash
-ALB_DNS="$(AWS_PROFILE=sis-dev-admin aws elbv2 describe-load-balancers --region ap-southeast-1 --names sis-dev-alb --query 'LoadBalancers[0].DNSName' --output text)"
-curl -s "http://${ALB_DNS}:8000/pr-$(gh pr view --json number --jq .number)/version"
-gh pr view --json headRefOid --jq .headRefOid
+AWS_PROFILE=sis-dev-admin aws secretsmanager put-secret-value --region ap-southeast-1 --secret-id sis/dev/app-api-key --secret-string "$(openssl rand -hex 24)" --query Name --output text
 ```
-`git_sha` must equal the head SHA, and `env` must be `preview`. Then `curl -s "http://${ALB_DNS}/version"` must still show the dev SHA.
+Then Run workflow App Deploy and approve.
 
-**B6. Merge PR B** (squash). Expect `cleanup (preview)` to run with no approval on the `main` leg, and PR B's preview to be gone. App Deploy starts because `scripts/lib.sh` changed: approve it.
-
-**B7. Two demo PRs from main.**
+**B7. Two demo PRs.**
 ```bash
 git switch -c demo/preview-a origin/main
 printf '# preview demo a\n' >> app/src/board.py
@@ -502,9 +574,21 @@ git commit -am "chore(app): preview demo b"
 git push -u origin demo/preview-b
 gh pr create --repo trungleviet-agilityio/ship-it-safely --fill
 ```
-Approve both. Expect two comments with different `/pr-<number>/` URLs, each `/version` showing its own head SHA.
+For each PR, App Preview goes green and then an App Preview Deploy run waits for the `preview` approval (Actions tab). Approve both. Expect:
+- the deploy logs show "denied as designed" for N11 to N15 and a crane push;
+- two bot comments with different `/pr-` URLs.
 
-**B8. Close both without merging** (keeps `main` clean; B6 proved the merged leg).
+Then, on each demo branch:
+```bash
+ALB_DNS="$(AWS_PROFILE=sis-dev-admin aws elbv2 describe-load-balancers --region ap-southeast-1 --names sis-dev-alb --query 'LoadBalancers[0].DNSName' --output text)"
+git switch demo/preview-a
+curl -s "http://${ALB_DNS}:8000/pr-$(gh pr view --json number --jq .number)/version"
+gh pr view --json headRefOid --jq .headRefOid
+curl -s "http://${ALB_DNS}/version"
+```
+`git_sha` must equal the head SHA, and `env` must be `preview`. The dev `/version` is unchanged. Repeat with `git switch demo/preview-b`.
+
+**B8. Close both without merging.**
 ```bash
 gh pr close demo/preview-a --repo trungleviet-agilityio/ship-it-safely --delete-branch
 gh pr close demo/preview-b --repo trungleviet-agilityio/ship-it-safely --delete-branch
@@ -512,25 +596,22 @@ AWS_PROFILE=sis-dev-admin aws ecs list-services --region ap-southeast-1 --cluste
 AWS_PROFILE=sis-dev-admin aws elbv2 describe-target-groups --region ap-southeast-1 --query 'TargetGroups[].TargetGroupName' --output text
 AWS_PROFILE=sis-dev-admin aws ecr list-images --region ap-southeast-1 --repository-name sis-dev-preview --query 'imageIds[].imageTag' --output text
 ```
-Expect:
-- only `sis-dev-app` in the service list;
-- only `sis-dev-tg` in the target group list;
-- no `pr-` tag of the closed PRs in the repo;
-- the comments updated to "Preview removed";
-- the URLs answering 404.
+Run the last three after both cleanup runs are green. Expect:
+- only `sis-dev-app` and `sis-dev-tg`;
+- no `pr-` tags of the closed PRs;
+- comments say "Preview removed";
+- the URLs return 404.
 
-**B9. Fork and Dependabot (N17).** If you have a second GitHub account, fork the repo and open a PR touching `app/`. Otherwise wait for the next Dependabot Docker PR. Expect App Preview jobs skipped and no approval request.
+**B9. Fork and Dependabot (N17).** With a second GitHub account, fork and open a PR touching `app/`. Otherwise use the next Dependabot Docker PR. Expect App Preview jobs skipped. If an App Preview Deploy run appears, `resolve` ends with mode `skip` and reason "fork" or "dependabot", and there is no approval request.
 
-**B10. Sweep and N16.** Run workflow App Preview on `main` (no approval needed). Expect the sweep summary, the line "the preview role denied as designed", and one alert email.
+**B10. N1 and N8.** Run workflow OIDC Smoke Test. Expect refusals from plan, apply, deploy, preview and preview-cleanup.
 
-**B11. N1 and N8.** Run workflow OIDC Smoke Test. Expect refusals from plan, apply, deploy, preview and preview-cleanup.
-
-**B12. Teardown with a preview open.** Open a third demo PR as in B7 and approve its preview. Then Run workflow Terraform Destroy: env `dev`, type **destroy-dev**, approve. Expect:
-- the step "Remove previews" reports one removed;
+**B11. Teardown with a preview open.** Open a third demo PR as in B7 and approve its preview. Then Run workflow Terraform Destroy: env `dev`, type **destroy-dev**, approve. Expect:
+- "Remove previews" reports one removed;
 - the destroy deletes all dev resources (about 36);
 - revisions are deregistered for both families.
 
-Then close the demo PR. Its cleanup finds nothing and ends green.
+Then close the demo PR; its cleanup finds nothing and ends green.
 
 ## Open questions (recommendation first)
 
@@ -539,7 +620,7 @@ Then close the demo PR. Its cleanup finds nothing and ends green.
 | Q1 | Dedicated preview listener on port 8000 with path rules and URL rewrite (V1) | Port 8080 or 81; a port per PR; path rules on port 80 |
 | Q2 | No-approval cleanup with the delete-only role (V6) | Cleanup behind the `preview` approval (one role fewer) |
 | Q3 | Cap 3 | 2 (cheaper) or 5 |
-| Q4 | `pull_request` with approval and the fenced role (V13) | `workflow_run` with a pinned-on-`main` trust (Alternatives) |
+| Q4 | **Answered (Amendment H): `workflow_run` deploy from `main`**; credential-free App Preview build | n/a |
 | Q5 | Leave preview revisions `ACTIVE` until teardown (V19) | `ecs:DeregisterTaskDefinition` on `*` for the approved role only |
 | Q6 | Separate repo `sis-dev-preview` (V11) | Dev repo with a `pr-` tag prefix and a second lifecycle rule |
 | Q7 | Fork proof through a Dependabot Docker PR if there is no second account | A second GitHub account |
@@ -588,49 +669,52 @@ Branch from `main` (lesson 25). Read this ADR at its absolute path under `docs/a
 
 ### devops-engineer, PR B
 
+Branch from `main` after PR A. Confirm that crane (ADR 0008 PR B1) is pinned on `main` in `scripts/ci/tools.sha256` and `mise.toml`. If it is not, stop and report.
+
 **Files**
-- Bootstrap: `variables.tf`, `locals.tf` (legs, names, `workflow_files`), `oidc.tf` (dynamic statement per leg), `iam_preview.tf` (new), `iam_apply.tf`, `iam_guardrails.tf`, `outputs.tf`, `accounts/dev.tfvars.example`, README. Tests in `trust.tftest.hcl`, `iam.tftest.hcl` and `monitoring.tftest.hcl`.
+- Bootstrap: `variables.tf`, `locals.tf` (`workflow_files.preview = ["app-preview-deploy.yml"]`, the two trust entries in the existing shape), `iam_preview.tf`, `iam_apply.tf`, `iam_guardrails.tf`, `outputs.tf`, `accounts/dev.tfvars.example`, README. Tests in `trust.tftest.hcl`, `iam.tftest.hcl` and `monitoring.tftest.hcl`.
 - `scripts/lib.sh`:
-  - `preview_names <n>` (validates `^[1-9][0-9]{0,4}$` and at most 50000);
-  - `PREVIEW_MAX=3`;
-  - `web_identity_call` accepts `preview` and `preview-cleanup`.
-- `scripts/preview/`: `render-task-def.sh`, `preflight.sh`, `up.sh`, `down.sh`, `sweep.sh`, `assert-isolation.sh`.
-- `scripts/ecs/deregister-revisions.sh`: loop over both families, with the preview precondition.
-- `scripts/guard/harden_runner_policy.py`: `NEEDS_CONTAINERS` entry.
-- Self-tests: `scripts/selftest/preview.sh` (new), plus `workflows.sh`, `ecs.sh` and `render.sh`.
-- Workflows:
-  - `app-preview.yml` (J);
-  - `terraform-destroy.yml` ("Remove previews" before the plan, summary line);
-  - `oidc-smoke-test.yml` (N1, N8 lists);
-  - `reusable-terraform-plan.yml` comment job calls `scripts/gh/sticky-comment.sh`.
+  - `preview_names`, `PREVIEW_MAX=3`;
+  - `web_identity_call` accepts `preview` and `preview-cleanup`;
+  - `PREVIEW_IMAGE_MAX_BYTES=536870912`, `PREVIEW_IMAGE_MAX_LAYERS=32`.
+- `scripts/preview/`: `resolve.sh` (offline-testable with a stubbed `gh`), `inspect-image.sh`, `render-task-def.sh`, `preflight.sh`, `up.sh` (refuses a foreign target group or SG), `down.sh`, `sweep.sh`, `assert-isolation.sh`.
+- `scripts/image/ecr-push-tar.sh` (crane, temp `DOCKER_CONFIG`, digest from ECR).
+- `scripts/ecs/deregister-revisions.sh` (both families).
+- `scripts/guard/workflow_triggers.py` (`workflow_run` exception: exact file, `workflows`, `types`).
+- `scripts/guard/untrusted_inputs.py` and its `.sh` entry in repo-guard and `make lint`.
+- Self-tests: `scripts/selftest/preview.sh`, plus `workflows.sh`.
+- Workflows: `app-preview.yml`, `app-preview-deploy.yml`, `terraform-destroy.yml` (Remove previews), `oidc-smoke-test.yml` (N1, N8), `reusable-terraform-plan.yml` (comment via `sticky-comment.sh`).
+- If `sticky-comment.sh` reads `GITHUB_EVENT_PATH`, add a `PR_NUMBER` env override (HD12).
 
 **Tests first**
 - Bootstrap:
-  - plan, apply and deploy trust JSON unchanged (golden documents);
-  - preview trust has exactly one leg, the `environment:preview` sub and StringLike ref and `job_workflow_ref` on `app-preview.yml@refs/pull/*/merge`;
-  - cleanup trust has exactly two legs (PR, main);
-  - no preview resources when disabled;
-  - PassRole only on `sis-dev-preview-exec` with `PassedToService`;
-  - every Allow `*` resource is on the approved list;
-  - `AddTags` and `ecs:TagResource` only with `CreateAction`;
-  - the fence statements as in F.4;
-  - the exec role has the boundary, no secret allow and the explicit deny;
-  - `expected_subs` contains both new subs;
-  - the apply `ListServices` carries the `ecs:cluster` condition.
-- Scripts (PATH-stubbed `aws` and `gh`):
-  - `up.sh` creates, then updates on a second run, waits on `DRAINING`, and refuses a priority held by another `PreviewPr`;
-  - `down.sh` handles each missing piece;
-  - `sweep.sh` keeps open PRs, never touches `sis-dev-app`, and catches a `DRAINING` service;
-  - preflight at, below and above the cap, and with no listener;
-  - renderer refuses a foreign repo, a tag, a bad SHA or a bad PR number, and outputs no `secrets` and no `taskRoleArn`;
-  - `assert-isolation.sh` passes only on AccessDenied, and N14 deletes the rule on an unexpected success.
-- Workflow self-tests (J).
+  - plan, apply and deploy trust JSON unchanged;
+  - preview and cleanup trusts are single statements with StringEquals `sub`, `ref = refs/heads/main` and `job_workflow_ref = .../app-preview-deploy.yml@refs/heads/main`;
+  - no StringLike outside the plan role;
+  - PassRole only on the exec role with `PassedToService`;
+  - Allow `*` only on the approved list;
+  - `AddTags` and `TagResource` only with `CreateAction`;
+  - fence as in F.4;
+  - exec role with boundary and secret deny;
+  - `expected_subs` has both new subs;
+  - `ListServices` scoped by `ecs:cluster`;
+  - no preview resources when disabled.
+- `resolve.sh`:
+  - open with a matching SHA and success means deploy;
+  - open with an older SHA means skip;
+  - open with a failed or cancelled conclusion means skip;
+  - closed means cleanup;
+  - fork (head repo ID differs), Dependabot author, wrong `workflow_run.path`, wrong event, a non-numeric or out-of-range PR, or missing meta means skip with a reason.
+- `inspect-image.sh` fixtures: an oversize file, an absolute path, `..`, two images, a label mismatch, too many layers, not a tar. Each is refused without writing files.
+- `up.sh`, `down.sh`, `sweep.sh` and preflight as before, plus N19.
+- `untrusted_inputs.py` fixtures (N18). Trigger exception fixtures: `workflow_run` in another file, another `workflows` name, or `types: [requested]` each fail.
+- crane push stub test.
 
 **Done**
-- `make check` green; zizmor and actionlint clean; trigger policy unchanged.
-- `terraform test` passes for bootstrap and module.
-- The hand-back lists the expected bootstrap plan counts (B2) and every allowlist host with its line.
-- No `apply` or `destroy` target. No 12-digit literal. No `<...>` placeholder in a runnable command.
+- `make check` green; zizmor clean with exactly one `dangerous-triggers` inline ignore; actionlint clean.
+- `terraform test` passes.
+- No 12-digit literal. No runnable `<...>`.
+- The hand-back lists the bootstrap plan counts and every allowlist host with its line.
 
 ### backend-dev
 
@@ -656,3 +740,8 @@ No change: the ALB URL rewrite removes the need for a base path, and the preview
 - https://docs.github.com/en/actions/reference/security/oidc
 - https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
 - https://docs.zizmor.sh/audits/
+- https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run
+- https://raw.githubusercontent.com/actions/download-artifact/main/README.md
+- https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+- https://github.com/google/go-containerregistry/blob/main/cmd/crane/doc/crane_push.md
+- https://docs.github.com/en/webhooks/webhook-events-and-payloads (workflow_run action values only)
