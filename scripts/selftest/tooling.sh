@@ -38,7 +38,7 @@ ok "lib helpers: die, run_capture, names and the environment name rule"
 
 # --- ci/install-tools.sh on scratch copies: nothing here touches the network (CI_TOOLS_BASE_URL is a directory)
 mkdir -p "$tmp/mirror" "$tmp/pack"
-for t in terraform tflint trivy hadolint; do
+for t in terraform tflint trivy hadolint crane; do
   printf '#!/bin/sh\necho "fake %s"\n' "$t" >"$tmp/pack/$t"
   chmod +x "$tmp/pack/$t"
 done
@@ -50,10 +50,11 @@ for n in ("terraform", "tflint"):
         z.write(f"{t}/pack/{n}", n)
 PY
 tar -czf "$tmp/mirror/trivy_9.9.9_Linux-64bit.tar.gz" -C "$tmp/pack" trivy
+tar -czf "$tmp/mirror/crane_9.9.9_Linux_x86_64.tar.gz" -C "$tmp/pack" crane
 cp "$tmp/pack/hadolint" "$tmp/mirror/hadolint_9.9.9_linux_x86_64"
-printf 'terraform = "9.9.9"\ntflint = "9.9.9"\ntrivy = "9.9.9"\nhadolint = "9.9.9"\n' >"$tmp/mise.toml"
+printf 'terraform = "9.9.9"\ntflint = "9.9.9"\ntrivy = "9.9.9"\nhadolint = "9.9.9"\ncrane = "9.9.9"\n' >"$tmp/mise.toml"
 : >"$tmp/sums"
-for f in terraform_9.9.9_linux_amd64.zip tflint_9.9.9_linux_amd64.zip trivy_9.9.9_Linux-64bit.tar.gz hadolint_9.9.9_linux_x86_64; do
+for f in terraform_9.9.9_linux_amd64.zip tflint_9.9.9_linux_amd64.zip trivy_9.9.9_Linux-64bit.tar.gz hadolint_9.9.9_linux_x86_64 crane_9.9.9_Linux_x86_64.tar.gz; do
   printf '%s  %s\n' "$(sha256_of "$tmp/mirror/$f")" "$f" >>"$tmp/sums"
 done
 install_tools() {
@@ -65,6 +66,8 @@ install_tools "$tmp/bin-default" >"$tmp/install.log" 2>&1 || die "selftest: defa
   || die "selftest: no tool arguments must install only terraform and tflint"
 install_tools "$tmp/bin-scan" trivy hadolint >"$tmp/install.log" 2>&1 || die "selftest: trivy and hadolint install failed: $(cat "$tmp/install.log")"
 { [ -x "$tmp/bin-scan/trivy" ] && [ -x "$tmp/bin-scan/hadolint" ] && [ ! -e "$tmp/bin-scan/terraform" ]; } || die "selftest: only the named tools may be installed"
+install_tools "$tmp/bin-crane" crane >"$tmp/install.log" 2>&1 || die "selftest: crane install failed: $(cat "$tmp/install.log")"
+[ -x "$tmp/bin-crane/crane" ] || die "selftest: crane was not installed"
 ok "installer installs the named tools only"
 expect_fail "installer with an unknown tool" "unknown tool 'kubectl'" install_tools "$tmp/bin-x" kubectl
 sed -E 's/^[0-9a-f]{64}  trivy/0000000000000000000000000000000000000000000000000000000000000000  trivy/' "$tmp/sums" >"$tmp/sums-bad"
@@ -75,7 +78,7 @@ expect_fail "installer with a bumped trivy version" "no checksum for trivy_9.9.1
   CI_TOOLS_MISE_TOML="$tmp/mise-bump.toml" CI_TOOLS_SHA256="$tmp/sums" CI_TOOLS_BASE_URL="file://$tmp/mirror" \
   "$ROOT/scripts/ci/install-tools.sh" "$tmp/bin-x" trivy
 # The checked-in pins exist for every tool at the version mise.toml names.
-for t in terraform tflint trivy hadolint; do
+for t in terraform tflint trivy hadolint crane; do
   v="$(sed -nE "s/^${t}[[:space:]]*=[[:space:]]*\"([0-9][^\"]*)\".*/\1/p" "$ROOT/mise.toml" | head -n1)"
   grep -Eq "^[0-9a-f]{64}  ${t}_${v//./\\.}_" "$ROOT/scripts/ci/tools.sha256" || die "selftest: no checked-in checksum for $t $v"
 done

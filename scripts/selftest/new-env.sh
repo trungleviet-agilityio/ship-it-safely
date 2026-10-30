@@ -148,7 +148,7 @@ done
 out="$("$new_env" pr --dry-run 2>&1)" || die "selftest: dry run failed: $out"
 case "$out" in *'vpc_cidr = "10.60.0.0/16"'*) ok "new-env: the next CIDR follows the highest used one" ;; *) die "selftest: expected 10.60: $out" ;; esac
 
-# --- T3 bad names, T4 bad --from, T6 bad CIDRs, strategy: all refused, nothing written
+# --- T3 bad names, T4 bad --from, T6 bad CIDRs: all refused, nothing written
 for bad in Dev a toolongname ../x "dev prod" bootstrap local shared env "$(printf 'qa\n../x')"; do
   ne "name '${bad//$'\n'/ NEWLINE }'" "env" "$new_env" "$bad"
 done
@@ -162,8 +162,7 @@ for bad in 10.40.0.0/16 10.50.0.0/16 10.1.0.0/24 192.168.0.0/16 garbage 10.300.0
   ne "--cidr $bad" "--cidr" "$new_env" pr --cidr "$bad"
 done
 "$new_env" pr --cidr 10.70.0.0/16 --dry-run >/dev/null 2>&1 || die "selftest: a free --cidr was refused"
-ne "--strategy without the key in the source" "deployment_strategy" "$new_env" pr --strategy BLUE_GREEN
-ne "--strategy with a bad value" "--strategy must be" "$new_env" pr --strategy CANARY
+ne "the removed --strategy flag" "usage:" "$new_env" pr --strategy ROLLING
 [ "$(tree_hash "$r")" = "$before" ] || die "selftest: a refused run wrote files"
 
 # --- T9 dry run writes nothing
@@ -171,15 +170,14 @@ ne "--strategy with a bad value" "--strategy must be" "$new_env" pr --strategy C
 [ "$(tree_hash "$r")" = "$before" ] || die "selftest: --dry-run wrote files"
 ok "new-env: a dry run writes nothing"
 
-# --- --strategy and promotion_target_env: rewritten only when the source has the keys
-r="$tmp/strategy"
+# --- promotion_target_env: reset only when the source has the key
+r="$tmp/promo"
 mk_repo "$r"
-printf 'deployment_strategy  = "ROLLING"\npromotion_target_env = "prod"\n' >>"$r/infra/terraform/envs/dev/terraform.tfvars"
-"$r/scripts/tf/new-env.sh" qa --strategy BLUE_GREEN >/dev/null 2>&1 || die "selftest: new-env with --strategy failed"
-grep -Eq '^deployment_strategy +=[ ]+"BLUE_GREEN"$' "$r/infra/terraform/envs/qa/terraform.tfvars" || die "selftest: deployment_strategy was not rewritten"
+printf 'promotion_target_env = "prod"\n' >>"$r/infra/terraform/envs/dev/terraform.tfvars"
+"$r/scripts/tf/new-env.sh" qa >/dev/null 2>&1 || die "selftest: new-env with a promotion_target_env source failed"
 grep -Eq '^promotion_target_env +=[ ]+""$' "$r/infra/terraform/envs/qa/terraform.tfvars" || die "selftest: promotion_target_env must be reset to empty in a clone"
 grep -q 'promotion_target_env = "prod"' "$r/infra/terraform/envs/dev/terraform.tfvars" || die "selftest: the source tfvars was changed"
-ok "new-env: --strategy and the promotion reset apply when the source has the keys"
+ok "new-env: the promotion reset applies when the source has the key"
 
 # --- T7 source format changed
 r="$tmp/t7"

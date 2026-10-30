@@ -64,8 +64,8 @@ docs: ## Regenerate terraform-docs tables in every Terraform README
 	pre-commit run terraform_docs --all-files
 
 # ENV must come from the command line: make imports the shell environment, and an exported ENV must not pick the name.
-new-env: ## Clone an environment: make new-env ENV=qa [FROM=dev] [CIDR=10.N.0.0/16] [STRATEGY=ROLLING|BLUE_GREEN] [DRY_RUN=1]
-	@$(if $(filter command line,$(origin ENV)),:,echo "usage: make new-env ENV=<name> [FROM=dev] [CIDR=...] [STRATEGY=...] [DRY_RUN=1]" >&2; exit 2)
-	scripts/tf/new-env.sh "$(ENV)" $(if $(FROM),--from "$(FROM)") $(if $(CIDR),--cidr "$(CIDR)") $(if $(STRATEGY),--strategy "$(STRATEGY)") $(if $(DRY_RUN),--dry-run)
+new-env: ## Clone an environment: make new-env ENV=qa [FROM=dev] [CIDR=10.N.0.0/16] [DRY_RUN=1]
+	@$(if $(filter command line,$(origin ENV)),:,echo "usage: make new-env ENV=<name> [FROM=dev] [CIDR=...] [DRY_RUN=1]" >&2; exit 2)
+	scripts/tf/new-env.sh "$(ENV)" $(if $(FROM),--from "$(FROM)") $(if $(CIDR),--cidr "$(CIDR)") $(if $(DRY_RUN),--dry-run)
 
 check: lint test tf-check ## Everything a PR must pass
