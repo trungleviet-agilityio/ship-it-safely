@@ -40,6 +40,9 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
   means `0.0.0.0/0`. CI passes it as `TF_VAR_alb_ingress_cidrs_json` and masks each element in the log
   (`scripts/tf/mask-cidrs.sh`). Only IPv4 CIDRs are accepted. A wrong value locks you out of the ALB, never out of
   CI (ADR 0007 S10).
+- **Preview infrastructure.** `preview_enabled` (default false) comes from `terraform.tfvars` and turns on the shared
+  PR preview resources of the module (ADR 0009): a second listener, a repository, a log group and a task security
+  group. They hold no per-PR resource and no cost of their own. The root adds no output for them.
 - **Placeholder image.** `container_image` in `terraform.tfvars` is a digest-pinned image with no command, so
   it never serves. The first deployment after a create stalls by design (ADR 0005, F2) until app-deploy sets
   the real image.
@@ -79,6 +82,7 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
 | task_memory | Task-level memory in MiB. | `number` | n/a | yes |
 | vpc_cidr | CIDR block of the VPC. | `string` | n/a | yes |
 | alb_ingress_cidrs_json | JSON list of IPv4 CIDRs allowed to reach the ALB on port 80, e.g. ["198.51.100.7/32"]. CI passes the secret ALB_INGRESS_CIDRS. Empty means 0.0.0.0/0 (ADR 0007 S10). | `string` | `""` | no |
+| preview_enabled | Create the shared PR preview infrastructure (listener, repository, log group, task security group; ADR 0009). Off by default. | `bool` | `false` | no |
 | secret_recovery_window_days | Secrets Manager recovery window; 0 deletes at once (ADR 0004, Q3). | `number` | `0` | no |
 
 ## Outputs

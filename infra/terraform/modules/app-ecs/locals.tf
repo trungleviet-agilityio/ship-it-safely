@@ -16,6 +16,13 @@ locals {
     task_role      = "${local.name}-ecs-task"
     secret         = "${var.prefix}/${var.env}/app-api-key"
     boundary       = "${local.name}-ecs-boundary"
+
+    # Shared preview infrastructure (ADR 0009, V2). The per-PR names `${local.name}-preview-<n>` are made by the
+    # preview scripts; they all sit under the `${local.name}-*` patterns the apply role already covers.
+    preview_listener   = "${local.name}-preview"
+    preview_repository = "${local.name}-preview"
+    preview_log_group  = "/ecs/${local.name}-preview"
+    preview_task_sg    = "${local.name}-preview-task"
   }
 
   boundary_arn = "arn:${local.partition}:iam::${local.account_id}:policy/${local.names.boundary}"

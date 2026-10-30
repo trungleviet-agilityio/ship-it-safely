@@ -63,6 +63,12 @@ variable "log_retention_days" {
   description = "Retention of the application log group."
 }
 
+variable "preview_enabled" {
+  type        = bool
+  description = "Create the shared PR preview infrastructure (listener, repository, log group, task security group; ADR 0009). Off by default."
+  default     = false
+}
+
 variable "secret_recovery_window_days" {
   type        = number
   description = "Secrets Manager recovery window; 0 deletes at once (ADR 0004, Q3)."

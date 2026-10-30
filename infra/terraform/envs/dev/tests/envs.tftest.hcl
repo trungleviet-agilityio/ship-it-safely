@@ -82,6 +82,18 @@ run "root_outputs_are_exactly_the_account_free_set" {
   }
 }
 
+run "preview_follows_the_committed_flag" {
+  command = plan
+
+  assert {
+    condition = (
+      module.app_ecs.preview_repository_name == (var.preview_enabled ? "sis-${var.env}-preview" : null)
+      && module.app_ecs.preview_listener_port == (var.preview_enabled ? 8000 : null)
+    )
+    error_message = "the shared preview resources exist exactly when terraform.tfvars sets preview_enabled, with contract names"
+  }
+}
+
 run "short_account_id_is_rejected" {
   command = plan
 
