@@ -130,7 +130,7 @@ jobs:
       ALB_INGRESS_CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
 
   apply:
-    name: apply (${{ inputs.env || 'dev' }})
+    name: apply
     # Only main applies, and only after a push or a manual run. Never a pull request.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

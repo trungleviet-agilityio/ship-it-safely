@@ -15,13 +15,17 @@ bootstrap re-apply (ADR 0007 S2). Change display names instead.
 | Workflow `name:` | Title Case, domain first, so the sidebar groups by domain | `App Deploy`, `Terraform Destroy` |
 | `run-name:` | On workflows that change AWS state: what, where, who | `Deploy main to dev by <actor>` |
 | Job id | kebab-case, stable: callers, `needs:` and self-tests use it | `build-scan`, `plan-dev` |
-| Job `name:` | lower-case `verb (target)`, short; the env in parentheses | `deploy (dev)`, `apply (prod)` |
+| Job `name:` | lower-case `verb (target)`, short; a literal env in parentheses, never an expression | `deploy (dev)`, `plan (prod)`, `apply` |
 | Step `name:` | Sentence case, imperative | `Assume the deploy role` |
 
 - No notes in job names ("no AWS", "approval required"): the job's `permissions:`, `environment:` and a
-  comment say that. A self-test in `scripts/selftest/workflows.sh` enforces the workflow and job name rules.
+  comment say that. A self-test in `scripts/selftest/workflows.sh` enforces the workflow and job name rules,
+  including no expression in a job name.
 - A required status check matches a job name (`guard`; a reusable job shows as `<caller name> / <job name>`).
   Renaming such a job is also a change to the `main` ruleset, made in the same window as the merge.
+- A job name never holds an expression: GitHub shows a skipped job's name unevaluated
+  (`apply (${{ inputs.env }})`), and apply runs are skipped on every pull request. A job whose env comes from an
+  input has a plain name (`apply`, `destroy`); the `run-name:` carries the env.
 - `run-name:` may use `inputs`, `github.ref_name`, `github.actor` and PR numbers. It is display text, never
   run by a shell.
 

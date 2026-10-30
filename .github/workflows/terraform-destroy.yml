@@ -74,7 +74,7 @@ jobs:
           fi
 
   destroy:
-    name: destroy (${{ inputs.env }})
+    name: destroy
     needs: confirm
     # Evaluated before the environment gate: a run from another branch never raises an approval request. The confirm
     # job checks the ref too, for the readable error; this `if` is what keeps the prompt from appearing at all.
