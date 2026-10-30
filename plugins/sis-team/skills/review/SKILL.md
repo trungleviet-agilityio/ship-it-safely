@@ -9,7 +9,7 @@ argument-hint: "[PR number]"
 Target: PR `$ARGUMENTS` if given (`gh pr diff $ARGUMENTS --name-only`, and `gh pr checkout` only if the user
 agrees), otherwise the current branch against `main` (`git diff --name-only main...HEAD`).
 
-1. Collect the changed files and map them to `PLAN.md` phases and requirement IDs.
+1. Collect the changed files and map them to phases and requirement IDs (`docs/requirements.md`).
 2. Spawn in one message: `sis-team:e2e`, `sis-team:reviewer`, `sis-team:security-reviewer`,
    `sis-team:code-simplifier`, each with the changed files and requirement IDs.
 3. Merge the results into one report: findings ranked Critical to Low with `file:line`, then the e2e table,

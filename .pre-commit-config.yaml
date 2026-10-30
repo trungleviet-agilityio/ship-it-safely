@@ -24,7 +24,7 @@ repos:
         args:
           - --args=--config=.terraform-docs.yml
 
-  # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID and the PLAN.md placeholders are allowed.
+  # D2: no AWS account ID in git. gitleaks does not look for them. The AWS doc example ID and repeated-digit placeholders are allowed.
   - repo: local
     hooks:
       - id: no-aws-account-id
