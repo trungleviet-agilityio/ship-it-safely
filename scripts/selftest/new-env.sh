@@ -121,7 +121,7 @@ def rename(node):
     if isinstance(node, dict):
         return {k: rename(v) for k, v in node.items()}
     if isinstance(node, str):
-        return "qa" if node == "dev" else node.replace("plan-dev", "plan-qa").replace("_DEV", "_QA")
+        return "qa" if node == "dev" else node.replace("plan-dev", "plan-qa").replace("(dev)", "(qa)").replace("_DEV", "_QA")
     return node
 
 
@@ -264,7 +264,7 @@ wf = sys.argv[1]
 text = open(f"{wf}/terraform-iac.yml").read()
 text = text.replace("options: [dev]", "options: [dev, qa]")
 block = re.search(r"  plan-dev:\n.*?(?=\n  apply:)", text, re.S).group(0)
-text = text.replace(block, block + "\n" + block.replace("plan-dev", "plan-qa").replace("env: dev", "env: qa").replace("_DEV", "_QA"))
+text = text.replace(block, block + "\n" + block.replace("plan-dev", "plan-qa").replace("(dev)", "(qa)").replace("env: dev", "env: qa").replace("_DEV", "_QA"))
 open(f"{wf}/terraform-iac.yml", "w").write(text)
 text = open(f"{wf}/terraform-destroy.yml").read()
 text = text.replace("options: [dev]", "options: [dev, qa]").replace('allowed_envs="dev"', 'allowed_envs="dev qa"')

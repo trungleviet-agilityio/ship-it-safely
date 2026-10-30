@@ -9,7 +9,8 @@
 # Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
 # Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
 # name in the log, add it here (the repo-guard workflow enforces the shape).
-name: app-deploy
+name: App Deploy
+run-name: Deploy ${{ github.ref_name }} to dev by ${{ github.actor }}
 
 on:
   push:
@@ -46,7 +47,7 @@ env:
 
 jobs:
   build-scan:
-    name: build and scan (no AWS)
+    name: build, scan
     # Only main builds for a deploy: a branch run would build an image nobody may deploy.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -89,7 +90,7 @@ jobs:
           if-no-files-found: error
 
   deploy:
-    name: deploy (dev, approval required)
+    name: deploy (dev)
     needs: build-scan
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

@@ -8,6 +8,7 @@ Usage: python -I scripts/selftest/workflow_facts.py <command> <workflow file> [a
   jobs                      job ids, one per line
   job <id>                  the job as JSON
   top                       the document without `jobs`, as JSON
+  names                     the workflow `name`, then `<job id>\t<job name>` per job
   on                        the trigger names, one per line
   options <input>           the options of a workflow_dispatch choice input, one per line
   step-run <id> <fragment>  the `run:` text of the steps of a job named with the fragment
@@ -65,6 +66,10 @@ def main(argv: list[str]) -> int:
             print(json.dumps(_job(document, args[0])))
         elif command == "top" and not args:
             print(json.dumps({k: v for k, v in document.items() if k != "jobs"}))
+        elif command == "names" and not args:
+            print(document.get("name", ""))
+            for job_id, job in document["jobs"].items():
+                print(f"{job_id}\t{job.get('name', '')}")
         elif command == "on" and not args:
             on = workflow_on(document)
             print("\n".join([on] if isinstance(on, str) else list(on)))

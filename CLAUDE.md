@@ -13,7 +13,7 @@ privilege and supply-chain hardening. `PLAN.md` is the requirements source; `doc
 - This shell has no AWS credentials on purpose. Do not ask for them or export a profile.
 - Never commit secrets, a real `.env`, `*.tfstate`, `*.tfvars` holding account IDs, or plan files.
 - Look up current versions and commit SHAs for actions and tools; never guess them (NFR-3).
-- Follow `docs/reference/CODING_STANDARDS.md` (Python, Dockerfile, Terraform, GitHub Actions, Makefile and shell).
+- Follow `docs/reference/standards/` (one file per domain: application, Terraform, CI/CD, tooling; index in its `README.md`).
 - Run checks through `make` (`make help`): `make check` runs everything a PR must pass. No `apply` or `destroy`
   targets, ever.
 - Load the `pr-conventions` skill before committing, branching or opening a PR. It holds the commit and PR title

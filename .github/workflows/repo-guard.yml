@@ -2,7 +2,7 @@
 # The file path is in the role trust (bootstrap `workflow_files`), and terraform-iac is path filtered, so a change
 # that touches only another workflow file would skip its checks. This workflow has no AWS access and no secrets.
 # This file must never be added to the bootstrap `workflow_files`.
-name: repo-guard
+name: Repo Guard
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   guard:
-    name: guard (no AWS)
+    name: guard
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

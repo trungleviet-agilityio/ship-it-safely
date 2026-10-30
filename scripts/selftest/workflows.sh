@@ -335,6 +335,32 @@ awk '!done && /uses:.*@[0-9a-f]{40} # v/ { sub(/@[0-9a-f]{40}/, "@00000000000000
 ! pins_ok "$deploy_wf" "$tmp/wf-other-sha.yml" 2>/dev/null || die "selftest: the pin check missed two SHAs for one action"
 ok "every action is pinned to one SHA with a version comment"
 
+# --- display names (docs/reference/standards/ci-cd.md, Naming): the sidebar shows a Title Case workflow name;
+# every job has a short lower-case `verb (target)` name, and no note such as "no AWS" or "approval required" (the
+# environment and the permissions say that). Required checks match job names, so a rename is a ruleset change too.
+names_ok() {
+  local f="$1" wf_name id name
+  { read -r wf_name
+    [[ "$wf_name" =~ ^[A-Z][A-Za-z0-9]*( [A-Z(][A-Za-z0-9)]*)*$ ]] || { echo "${f##*/}: workflow name '$wf_name' is not Title Case"; return 1; }
+    while IFS=$'\t' read -r id name; do
+      [[ "$name" =~ ^[a-z] ]] || { echo "${f##*/}: job '$id' needs a lower-case name, got '$name'"; return 1; }
+      case "$name" in *"no AWS"* | *approval*) echo "${f##*/}: job '$id' name '$name' carries a note"; return 1 ;; esac
+      # A skipped job shows its name unevaluated, so an expression would reach the check list as raw text.
+      # shellcheck disable=SC2016  # a literal GitHub expression, not a shell one
+      case "$name" in *'${{'*) echo "${f##*/}: job '$id' name '$name' holds an expression"; return 1 ;; esac
+    done
+  } < <(facts names "$f")
+}
+for wf in "$ROOT"/.github/workflows/*.yml; do names_ok "$wf" || die "selftest: ${wf##*/} breaks the naming rule"; done
+# shellcheck disable=SC2016  # sed scripts holding a literal GitHub expression
+for bad in 's/^name: .*/name: app-ci/' 's/^    name: build, test, scan$/    name: build (${{ inputs.env }})/' 's/^    name: build, test, scan$/    name: Build/' 's/^    name: build, test, scan$/    name: build (no AWS)/'; do
+  sed -E "$bad" "$ROOT/.github/workflows/app-ci.yml" >"$tmp/names.yml"
+  ! names_ok "$tmp/names.yml" >/dev/null || die "selftest: the naming check missed '$bad'"
+done
+printf 'name: X\non: push\njobs:\n  a:\n    runs-on: ubuntu-24.04\n' >"$tmp/names.yml"
+! names_ok "$tmp/names.yml" >/dev/null || die "selftest: the naming check missed a job without a name"
+ok "workflow names are Title Case, job names are short lower-case labels"
+
 "$ROOT/scripts/guard/workflow-triggers.sh"
 
 # --- guard/harden-runner.sh (ADR 0007 S45)

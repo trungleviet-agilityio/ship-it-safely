@@ -19,7 +19,7 @@ Order: `bootstrap` first (it creates the state bucket and the CI roles), then `e
 - **Every root and module has a `README.md`**: hand-written purpose and usage, plus the inputs, outputs and
   resources tables that `terraform-docs` writes between the `BEGIN_TF_DOCS` / `END_TF_DOCS` markers.
   `make tf-check` fails when a directory with `.tf` files has no README or no markers.
-- File layout, naming, IAM and testing rules: [`CODING_STANDARDS.md`](../../docs/reference/CODING_STANDARDS.md#terraform-infraterraform).
+- File layout, naming, IAM and testing rules: [Terraform standards](../../docs/reference/standards/terraform.md).
 
 ## Commands
 
