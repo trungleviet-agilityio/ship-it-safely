@@ -8,6 +8,7 @@
 #   image       build mirror policy, ECR push, image archive
 #   tooling     account ID guard, lib.sh helpers, tool installer, config check, usage contracts
 #   new-env     environment clone script (tf/new-env.sh) and the env parity guard
+#   gh          sticky pull request comment (gh/sticky-comment.sh)
 # A bad fixture must fail with its message; the real workflows must pass. Areas are independent, so one can be run
 # alone: scripts/selftest/ecs.sh.
 #
@@ -18,7 +19,7 @@ source "$(dirname "$0")/../lib.sh"
 
 [ $# -eq 0 ] || die "usage: scripts/ci/selftest.sh"
 
-for area in terraform workflows render ecs image tooling new-env; do
+for area in terraform workflows render ecs image tooling new-env gh; do
   log "self-tests: ${area}"
   "$ROOT/scripts/selftest/${area}.sh" || die "self-tests failed in scripts/selftest/${area}.sh"
 done
