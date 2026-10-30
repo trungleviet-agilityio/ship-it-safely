@@ -9,6 +9,11 @@ access keys, separate plan/apply/deploy roles, Secrets Manager per environment, 
 - Phase status: [`PROGRESS.md`](PROGRESS.md)
 - Locked decisions: [`docs/adr/`](docs/adr/)
 - Agent team: [`plugins/sis-team/`](plugins/sis-team/)
+- Diagrams: [overview](docs/diagrams/overview.drawio.png), [infra pipeline](docs/diagrams/ci-cd.drawio.png),
+  [app pipeline](docs/diagrams/ci-cd-app-pipeline.drawio.png), [app-ecs runtime](docs/diagrams/app-ecs.drawio.png),
+  [bootstrap](docs/diagrams/bootstrap.drawio.png) (all in [`docs/diagrams/`](docs/diagrams/))
+
+![Overview](docs/diagrams/overview.drawio.png)
 
 ## Agent team (Claude Code plugin `sis-team`)
 

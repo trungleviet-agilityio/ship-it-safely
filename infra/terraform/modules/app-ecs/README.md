@@ -4,6 +4,8 @@ The application stack of one environment (ADR 0004, E5 to E15): a two-subnet pub
 repository, a log group, a secret shell, two ECS roles, a Fargate cluster, task definition and service.
 It declares no provider and no backend; `envs/<env>` supplies both.
 
+![app-ecs runtime diagram](../../../../docs/diagrams/app-ecs.drawio.png)
+
 ## What it creates
 
 | Area | Resources |
