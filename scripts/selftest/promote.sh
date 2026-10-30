@@ -186,6 +186,41 @@ not_called "crane copy" "an existing tag with the same digest must not be copied
 no_leftover "same digest"
 ok "promote-copy: an existing target tag is reused, with or without the source"
 
+# The target tag exists and the source cannot be reached (login denied, read denied): the source is only a cross-check, so
+# the target digest is reused, one line says so, and no host is printed.
+stub_reset
+stub crane-digest-tgt out "$dig_src"
+stub crane-auth rc 1 1
+stub crane-auth err "denied: login refused for ${acct}.dkr.ecr.ap-southeast-1.amazonaws.com" 1
+out="$(copy_default 2>"$tmp/err")" || die "selftest: the rollback path with the source login denied failed: $(cat "$tmp/err")"
+[ "$out" = "$(printf 'IMAGE_DIGEST=%s\nPROMOTE_COPIED=false' "$dig_src")" ] || die "selftest: the source login denied path printed: $out"
+grep -q "the source login failed" "$tmp/err" || die "selftest: the skipped cross-check must be logged"
+not_called "crane copy" "a rollback must not copy"
+no_leftover "source login denied"
+no_host_in "$(cat "$tmp/err")"
+stub_reset
+stub crane-digest-tgt out "$dig_src"
+stub crane-digest-src rc 1
+stub crane-digest-src err "denied: not authorized to perform ecr:BatchGetImage on ${acct}.dkr.ecr.ap-southeast-1.amazonaws.com"
+out="$(copy_default 2>"$tmp/err")" || die "selftest: the rollback path with the source read denied failed: $(cat "$tmp/err")"
+[ "$out" = "$(printf 'IMAGE_DIGEST=%s\nPROMOTE_COPIED=false' "$dig_src")" ] || die "selftest: the source read denied path printed: $out"
+grep -q "the source read failed" "$tmp/err" || die "selftest: the skipped cross-check must be logged"
+not_called "crane copy" "a rollback must not copy"
+no_leftover "source read denied"
+no_host_in "$(cat "$tmp/err")"
+# With no target tag everything stays strict: a denied source login or read stops the run.
+stub_reset
+tag_missing crane-digest-tgt
+stub crane-auth rc 1 1
+expect_fail "copy where the source login is denied and the target has no tag" "source registry login failed" copy_default
+stub_reset
+tag_missing crane-digest-tgt
+stub crane-digest-src rc 1
+stub crane-digest-src err "denied: not authorized to perform ecr:BatchGetImage"
+expect_fail "copy where the source read is denied and the target has no tag" "crane digest failed" copy_default
+no_leftover "strict source"
+ok "promote-copy: with a target tag the source is a best-effort cross-check; without one it is strict"
+
 # The target tag exists with another digest than the source: refused, nothing copied.
 stub_reset
 stub crane-digest-tgt out "$dig_other"

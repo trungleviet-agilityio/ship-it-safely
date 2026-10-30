@@ -50,7 +50,8 @@ from workflow_yaml import dispatch_options, run, trigger_input  # noqa: E402  (i
 ACTION = "step-security/harden-runner@"
 # One endpoint is a run of non-space characters; `${{ ... }}` may hold spaces and stays whole.
 ENDPOINT = re.compile(r"(?:\$\{\{.*?\}\}|\S)+")
-EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+# DOTALL: an expression may span lines (a YAML block scalar) and must still be seen.
+EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}", re.DOTALL)
 PORT = re.compile(r":[0-9]{1,5}$")
 ACCOUNT_ID = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 # The account ID is the environment secret AWS_ACCOUNT_ID (a reusable workflow gets that name too).
@@ -98,7 +99,14 @@ def _env_name_is_clean(name: str, env: dict[str, Any], seen: frozenset[str] = fr
     if not variants:
         return False
     for value in variants:
-        for expression in EXPRESSION.findall(str(value)):
+        text = str(value)
+        # The raw text is checked too: a mention of secrets or the token anywhere, or a `${{`
+        # that no complete expression consumed (an unclosed one), is never trusted as a literal.
+        if SECRETS_REF.search(text) or "github.token" in text.lower():
+            return False
+        if "${{" in EXPRESSION.sub("", text):
+            return False
+        for expression in EXPRESSION.findall(text):
             ref = CLEAN_EXPRESSION.match(expression)
             if not ref:
                 return False
