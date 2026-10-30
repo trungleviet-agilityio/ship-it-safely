@@ -1,6 +1,6 @@
 ---
 name: close
-description: Close a PLAN.md phase (or one checkpoint of it) of the ship-it-safely lab after the user has run the checkpoint - record the results in the ADR, update PROGRESS.md and the lessons log, and open the docs PR. Use as /sis-team:close <phase> [checkpoint letter].
+description: Close a phase (or one checkpoint of it) of the ship-it-safely lab after the user has run the checkpoint - record the results in the ADR, update the progress note (outside the repo) and the lessons log, and open the docs PR. Use as /sis-team:close <phase> [checkpoint letter].
 argument-hint: <phase number> [checkpoint letter]
 ---
 
@@ -18,13 +18,13 @@ step as passed that the user or a run log has not shown.
 - Note what was **not** observed and why. A failure that was expected (a guard refusing by design) is a pass
   with a note.
 
-## 2. Write the docs (orchestrator owns `docs/**`, `README.md`, `PROGRESS.md`)
+## 2. Write the docs (orchestrator owns `docs/**`, `README.md` and the progress note)
 
 Branch `docs/phase-<n>-checkpoint-<x>` from `origin/main` (fetch first), not from the phase branch.
 
 1. **ADR:** insert `## Checkpoint <X> results (<YYYY-MM-DD>)` right above the checkpoint section: a table
    `| Step | Result |` with one row per step, then "Not observed: ..." if any.
-2. **PROGRESS.md:**
+2. **Progress note** (outside the repo; its path is in `CLAUDE.local.md`; never commit it):
    - the phase row: status (✅ when the last checkpoint passed, 🟡 otherwise), PRs, and a one-line result;
    - plan alignment text: what is now in place, and what is still to do;
    - open items: close the ones this checkpoint settled (say how), add new ones with source and target

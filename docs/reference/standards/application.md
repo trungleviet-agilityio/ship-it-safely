@@ -8,7 +8,7 @@ The Python app (`app/`), its container image and how it runs on Fargate. Part of
 
 - Standard library only, no runtime dependencies (ADR D4). Dev tools (ruff, mypy) run through
   pre-commit or `uvx` and never land in the image.
-- Keep the app tiny: one module, about 100 lines (`PLAN.md` §6). The app is not the point of the
+- Keep the app tiny: one module, about 100 lines ([requirements, demo app](../../requirements.md#demo-app)). The app is not the point of the
   lab; the pipeline is.
 
 ### Naming, imports

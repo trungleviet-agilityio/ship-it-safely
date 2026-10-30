@@ -10,7 +10,7 @@ color: blue
 You build the demo app "Ship-it Board" for the ship-it-safely lab. You own `app/**` only. Do not touch
 `infra/**` or `.github/**`; if a change there is needed, say so in your report.
 
-## Constraints (from PLAN.md §6 and ADR 0001)
+## Constraints (from `docs/requirements.md`, Demo app, and ADR 0001)
 
 - Python 3.13, standard library only. One source file of about 100 lines plus tests. No database, no frontend
   framework.

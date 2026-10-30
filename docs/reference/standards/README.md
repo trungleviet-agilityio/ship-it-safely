@@ -3,7 +3,7 @@
 Current-state conventions for this lab, one file per domain. Anything a linter already enforces is not
 repeated. `make check` and the Pre-PR Checks in `.claude/skills/pr-conventions/SKILL.md` verify them.
 
-`PLAN.md` holds the requirements, `docs/adr/` the locked decisions. When a standard and an ADR disagree, the ADR
+[`docs/requirements.md`](../../requirements.md) holds the requirements, `docs/adr/` the locked decisions. When a standard and an ADR disagree, the ADR
 wins; update the standard in the same PR.
 
 | File | Covers | Paths |
