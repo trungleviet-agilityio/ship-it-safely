@@ -159,8 +159,8 @@ infra/terraform/
 **Usage**
 
 ```
-scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--strategy ROLLING|BLUE_GREEN] [--dry-run]
-make new-env ENV=<env> [FROM=dev] [CIDR=...] [STRATEGY=...] [DRY_RUN=1]
+scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--dry-run]
+make new-env ENV=<env> [FROM=dev] [CIDR=...] [DRY_RUN=1]
 ```
 
 Exit codes: 0 created (or dry run shown), 1 refused, 2 usage.
@@ -319,7 +319,7 @@ Never in Terraform or git: the app secret values (set by the user with `put-secr
   - P1 (generic `tests/envs.tftest.hcl` in `envs/dev/`), P2 script, P3 guard, P4 names, P5 secret names, P6 (dev legs), P8 policies (minus the `app-promote` exception), YAML-loader self-tests.
   - No bootstrap re-apply. The dev plan addresses are identical to Phase 6.
 - **PR B: prod.**
-  - `envs/prod/` (via `make new-env ENV=prod FROM=dev STRATEGY=BLUE_GREEN`), `accounts/prod.tfvars.example`.
+  - `envs/prod/` (via `make new-env ENV=prod FROM=dev`; `STRATEGY=` was removed by amendment S1), `accounts/prod.tfvars.example`.
   - Module BLUE_GREEN, bootstrap F, `app-promote.yml`, crane, waiter P14, guards P15, prod legs of every workflow, N10, N1 for prod.
   - Merged only after the prod bootstrap and secrets exist, so its own prod plan check is green.
 
@@ -457,6 +457,26 @@ phase. Promote and isolation stay; rollback becomes a use of promote.
 
 The checkpoint commands below still show the `BLUE_GREEN` steps as written on 2026-10-27; the PR B build rewrites
 them to S1 to S5 before it is merged.
+
+## PR B1 build notes (2026-10-30)
+
+PR B split per P22. **B1** is everything that needs no prod account; **B2** (after Q1) adds `envs/prod`, the prod
+bootstrap, the dev ECR repository policy, `app-promote.yml`, the prod workflow legs and N10.
+
+| Item | Built |
+|---|---|
+| S1 | `STRATEGY=` and `--strategy` removed; `make new-env` now refuses `STRATEGY` with a message naming this amendment |
+| P9 tool | crane v0.22.1 in `mise.toml`, `scripts/ci/install-tools.sh` and `scripts/ci/tools.sha256` (hash checked against the release `checksums.txt`) |
+| P10 | `scripts/image/promote-resolve.sh`: 40-hex SHA, ancestor of `origin/main`, and an App Deploy run for that SHA on `main` (event `push` or `workflow_dispatch`) whose job `deploy (dev)` concluded `success`. A run whose jobs were all skipped no longer counts. A self-test pins the job name to `app-deploy.yml` |
+| P9, S2 | `scripts/image/promote-copy.sh <source repo> <target repo> <sha> [temp dir]`: copy by digest with read-back. When the target tag exists, the source check is best effort (rollback works with dev down) but a readable, different source digest is refused. Prints `IMAGE_DIGEST` and `PROMOTE_COPIED` only; `DOCKER_CONFIG` is a temp dir removed on exit |
+| P15(2), S4 | `render-task-def.sh` now checks the `APP_ENV` value, not only the name |
+| N1 Low | harden-runner taint for audit endpoints fails closed: an env value is clean only as a literal or built from `vars.X` and clean `env.X` (multi-line expressions, `env[...]`, `toJSON(env)`, `github.*`, case-variant keys and undefined names all taint) |
+| Step-order Low | A self-test requires exactly one `aws-actions/configure-aws-credentials` step in the composite, after the root select and the CIDR mask |
+
+Verify: e2e green (`make check` three times, `pre-commit`, crane install). Two fix rounds closed security M1
+(skipped-jobs run counted as green), M2 (taint gaps, including a multi-line expression) and the Lows; the
+simplifier's stub and flow suggestions were applied. Accepted: an SHA deployed before #30 renamed the job to
+`deploy (dev)` cannot be promoted (fails closed; prod has no such SHA).
 
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
@@ -694,7 +714,7 @@ Create a branch from the phase branch (lesson 25). Read this ADR at its absolute
 
 **Files**
 
-- `make new-env ENV=prod FROM=dev STRATEGY=BLUE_GREEN`, then review `envs/prod/terraform.tfvars` (`bake_time_minutes = 5`). Add `deployment_strategy = "ROLLING"` and `promotion_target_env = "prod"` to `envs/dev/terraform.tfvars`.
+- `make new-env ENV=prod FROM=dev`, then review `envs/prod/terraform.tfvars`. Add `promotion_target_env = "prod"` to `envs/dev/terraform.tfvars` (amendment S1: no `deployment_strategy`, no bake time).
 - `bootstrap/accounts/prod.tfvars.example`.
 - Module E: `alb.tf`, `ecs.tf`, `alarms.tf` (new), `ecr.tf`, variables, tests, README.
 - Root variables and `main.tf` wiring.

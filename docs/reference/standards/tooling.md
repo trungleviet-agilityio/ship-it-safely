@@ -8,7 +8,8 @@ Tool versions, the `Makefile` and `scripts/`. Part of the [standards index](READ
   version in `mise.toml`, and `mise install` sets up a machine. Do not document `brew install` for
   them.
 - CI installs the same versions as checksum-verified binaries (`scripts/ci/install-tools.sh`, sums in
-  `scripts/ci/tools.sha256`), so local and CI results match (NFR-3).
+  `scripts/ci/tools.sha256`), so local and CI results match (NFR-3). That includes crane, which copies images
+  between registries by digest without Docker.
 - Bump a version in its own `chore(repo)` commit and run `make check` before pushing.
 - Python packages stay in `pyproject.toml` and run through `uv` / `uvx`, not mise.
 
