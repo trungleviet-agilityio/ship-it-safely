@@ -6,7 +6,7 @@
 # No `environment:` on any job: it would change the OIDC subject the plan role trusts (ADR 0003).
 # Workflow-level `env` of the caller is not propagated, so ENV is set again below from the input.
 # The plan job starts from the local action .github/actions/terraform-setup, shared with the apply and destroy jobs.
-name: reusable-terraform-plan
+name: Terraform Plan (reusable)
 
 on:
   workflow_call:
@@ -38,7 +38,7 @@ env:
 
 jobs:
   plan:
-    name: plan (read-only role)
+    name: terraform plan
     # Fork and Dependabot PRs get no ID token or secrets, so skip them instead of failing.
     if: >-
       github.event_name == 'pull_request'
@@ -119,7 +119,7 @@ jobs:
         run: rm -f "$TF_DIR/tfplan"
 
   plan-role-guardrails:
-    name: plan role guardrails
+    name: role guardrails
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
@@ -169,7 +169,7 @@ jobs:
         run: scripts/tf/plan-role-guardrails.sh
 
   comment:
-    name: sticky plan comment
+    name: sticky comment
     needs: plan
     # Runs after a failed plan too, so the PR shows the failure. Skipped when the plan was skipped (fork, Dependabot).
     if: >-

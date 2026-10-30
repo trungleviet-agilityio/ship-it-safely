@@ -162,7 +162,7 @@ Next steps (you run these; this script never runs terraform, aws or gh):
 5. Wire the workflows (a reviewed diff; the parity guard checks it):
    a. .github/workflows/terraform-iac.yml: add the job below, and add @ENV@ to the options of the dispatch input env.
         plan-@ENV@:
-          name: plan-@ENV@
+          name: plan (@ENV@)
           needs: checks
           if: >-
             github.event_name == 'pull_request'

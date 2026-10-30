@@ -1,7 +1,7 @@
 # App CI (PLAN Phase 4, ADR 0005, FR-10): build the image, run the tests (they run inside the image build), smoke
 # test it like Fargate and scan it. It never pushes and never touches AWS: no secrets, no OIDC token, no deployment environment,
 # so it also runs for fork and Dependabot pull requests. Not a required status check (path filtered, ADR 0005, Q5).
-name: app-ci
+name: App CI
 
 on:
   pull_request:
@@ -33,7 +33,7 @@ env:
 
 jobs:
   build-test-scan:
-    name: build, test and scan (no AWS)
+    name: build, test, scan
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

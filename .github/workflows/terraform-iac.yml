@@ -6,7 +6,11 @@
 # Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
 # Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
 # name in the log, add it here (the repo-guard workflow enforces the shape).
-name: terraform-iac
+name: Terraform
+run-name: >-
+  ${{ github.event_name == 'pull_request'
+  && format('Terraform plan · PR #{0}', github.event.pull_request.number)
+  || format('Terraform apply · {0} by {1}', inputs.env || 'dev', github.actor) }}
 
 on:
   pull_request:
@@ -72,7 +76,7 @@ env:
 
 jobs:
   checks:
-    name: checks (no AWS)
+    name: checks
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -106,7 +110,7 @@ jobs:
   # One caller job per environment (ADR 0008, P6; the parity guard checks the set). Secrets are mapped by name, never
   # inherited. The caller grants the union of what the called jobs need; each called job narrows it again.
   plan-dev:
-    name: plan-dev
+    name: plan (dev)
     needs: checks
     # Fork and Dependabot PRs get no secrets, and the called workflow requires them: skip the caller, not just the jobs.
     if: >-
@@ -126,7 +130,7 @@ jobs:
       ALB_INGRESS_CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
 
   apply:
-    name: apply (${{ inputs.env || 'dev' }}, approval required)
+    name: apply (${{ inputs.env || 'dev' }})
     # Only main applies, and only after a push or a manual run. Never a pull request.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

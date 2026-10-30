@@ -421,6 +421,24 @@ High or Medium. Open Low items, not fixed after the two-round limit:
 | reviewer | No self-test pins the step order in the composite (mask and select before the role) | Open item, with PR B (which edits the composite) |
 | security N1 | The audit-endpoint taint check follows `env` one level and matches `secrets` case-sensitively | Open item (defense in depth; nothing in the repo does this) |
 
+## Amendment W: workflow display names (2026-10-30, before PR B)
+
+The Actions tab showed slugs (`terraform-iac`, `app-deploy`) and job names carried notes (`deploy (dev, approval
+required)`, `guard (no AWS)`). Production repositories show Title Case workflow names and short `verb (target)` job
+names. The rules now live in `docs/reference/standards/ci-cd.md` (Naming), and a self-test enforces them.
+
+| Decision | Choice | Why |
+|---|---|---|
+| W1 | Change display names only (`name:`, job `name:`); file names and job ids stay | File names are pinned in the apply, deploy and destroy role trusts (`job_workflow_ref`, ADR 0007 S2); a rename would need a bootstrap re-apply. Job ids are used by `needs:`, the parity guard and self-tests |
+| W2 | Workflow names: `App CI`, `App Deploy`, `OIDC Smoke Test`, `Repo Guard`, `Terraform`, `Terraform Destroy`, `Terraform Plan (reusable)`; PR B adds `App Promote` | Domain first, so the sidebar groups by domain |
+| W3 | `run-name:` on the workflows that change AWS state: `Terraform plan · PR #<n>` or `Terraform apply · <env> by <actor>`, `Deploy <ref> to dev by <actor>`, `Destroy <env> by <actor>` | The run list says what ran where, and who started it, without opening it |
+| W4 | Job names drop notes: `guard`, `checks`, `confirm`, `build, test, scan`, `deploy (dev)`, `apply (<env>)`, `destroy (<env>)`; the reusable plan's jobs are `terraform plan`, `role guardrails`, `sticky comment` under the caller `plan (<env>)` | Permissions, environments and comments carry the notes; names stay short in check lists |
+| W5 | The required check becomes `guard`. The user swaps it in the `main` ruleset after the PR's first run and before the merge | A required check that never reports blocks every PR |
+
+PR B check names: `plan (dev) / terraform plan`, `plan (prod) / terraform plan`, and so on. The sticky comment
+marker `terraform-iac:plan:<env>` and every concurrency group key stay as they are, except groups built from
+`github.workflow`, which follow the new names (no state lock depends on them).
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_A>`, `<PR_B>`, `<SHA>`, `<PROD_ALB>`, `<BROKEN_REV>`. Each command is one line for zsh; there are no packed arguments (lessons 5, 37). Dispatches use the web UI (Actions > workflow > Run workflow), because the PAT has Actions read-only (lesson 31).

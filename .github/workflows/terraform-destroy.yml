@@ -8,7 +8,8 @@
 # Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
 # Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
 # name in the log, add it here (the repo-guard workflow enforces the shape).
-name: terraform-destroy
+name: Terraform Destroy
+run-name: Destroy ${{ inputs.env }} by ${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -34,7 +35,7 @@ env:
 
 jobs:
   confirm:
-    name: confirm (no AWS)
+    name: confirm
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -73,7 +74,7 @@ jobs:
           fi
 
   destroy:
-    name: destroy (${{ inputs.env }}, approval required)
+    name: destroy (${{ inputs.env }})
     needs: confirm
     # Evaluated before the environment gate: a run from another branch never raises an approval request. The confirm
     # job checks the ref too, for the readable error; this `if` is what keeps the prompt from appearing at all.

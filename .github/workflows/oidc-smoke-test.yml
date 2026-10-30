@@ -5,7 +5,7 @@
 # Jobs that assume an AWS role run harden-runner in block mode with telemetry off and an exact allowlist (ADR 0007 S39).
 # Hosts holding the account ID come from secret expressions, never literals. A blocked host fails the job: read its
 # name in the log, add it here (the repo-guard workflow enforces the shape).
-name: oidc-smoke-test
+name: OIDC Smoke Test
 
 on:
   pull_request:
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   assume-plan-role:
-    name: assume the plan role and prove identity
+    name: prove plan role identity
     # Fork and Dependabot PRs get no ID token or secrets, so skip them instead of failing.
     if: >-
       github.event_name == 'pull_request'
@@ -113,7 +113,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   roles-deny-outside-pr:
-    name: every role refuses a non-PR token (N1)
+    name: refuse non-PR token (N1)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
