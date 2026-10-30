@@ -22,7 +22,9 @@ Rules, per job:
   7. in any other job (audit) an endpoint may use `vars.X` and `env.X` only: no `secrets` in any
      form (`secrets.`, `secrets[`, `toJSON(secrets)`), no `env[...]`, `format(...)` or other
      function, and no `env.X` whose value is built from a secret, directly or through other env
-     values; `secrets` matches in any letter case (ADR 0007 N1 Low, ADR 0008 P8);
+     values: an env value is clean only as a literal or from `vars.X` and clean `env.X`, so
+     `env[...]`, `toJSON(env)`, `github.*`, an `env:` expression and an undefined `env.X` all
+     fail closed; `secrets` matches in any letter case (ADR 0007 N1, ADR 0008 P8);
   8. a job with `uses:` calls a reusable workflow. It has no steps, so it is checked through its
      callee (the reusable-*.yml file is checked like any workflow). It must call
      ./.github/workflows/reusable-*.yml and must not pass `secrets: inherit`;
@@ -56,7 +58,6 @@ ALLOWED_EXPRESSIONS = ("vars.AWS_REGION", "secrets.AWS_ACCOUNT_ID", "env.ENV")
 # Context names are case-insensitive: `SECRETS.X` and `Secrets[...]` read a secret too.
 SECRETS_REF = re.compile(r"\bsecrets\b", re.IGNORECASE)
 ENV_REF = re.compile(r"^env\.([A-Za-z_][A-Za-z0-9_]*)$", re.IGNORECASE)
-ENV_REF_ANYWHERE = re.compile(r"\benv\.([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 VARS_REF = re.compile(r"^vars\.[A-Za-z_][A-Za-z0-9_]*$")
 # The only forms of the ENV value that follow an input: `${{ inputs.env }}`, or with a literal
 # fallback.
@@ -74,25 +75,38 @@ def _has_id_token(permissions: Any) -> bool:
     return isinstance(permissions, dict) and permissions.get("id-token") == "write"
 
 
-def _tainted_env(env: dict[str, Any]) -> set[str]:
-    """Lower-cased names of the env values built from a secret, directly or via other env values.
+OPAQUE_ENV = "*opaque*"  # key of the merged env when some `env:` is an expression, not a mapping
+CLEAN_EXPRESSION = re.compile(r"^(vars|env)\.([A-Za-z_][A-Za-z0-9_]*)$", re.IGNORECASE)
 
-    Env names are case-insensitive in expressions, so names are compared lower-cased. A value taints
-    when it names `secrets` or reads an env value that is already tainted; the loop runs to a fixed
-    point, so a chain of any length (env C from env B from env A from a secret) is followed.
+
+def _env_name_is_clean(name: str, env: dict[str, Any], seen: frozenset[str] = frozenset()) -> bool:
+    """Whether env value `name` is provably free of secrets (fail closed).
+
+    Clean means a literal, or built only from `vars.X` and other clean `env.X`. Anything else
+    taints: any secrets form, `env[...]`, `toJSON(env)`, `github.*`, `steps.*`, `needs.*` or other
+    expressions, an `env:` that is an expression instead of a mapping, and a name no literal
+    mapping defines.
+    Env names are case-insensitive in expressions: with keys that differ only in case, the name is
+    clean only if every variant is. A cycle adds no taint of its own.
     """
-    values = {str(k).lower(): str(v) for k, v in env.items()}
-    tainted = {k for k, v in values.items() if SECRETS_REF.search(v)}
-    changed = True
-    while changed:
-        changed = False
-        for name, value in values.items():
-            if name not in tainted and any(
-                m.lower() in tainted for m in ENV_REF_ANYWHERE.findall(value)
+    key = name.lower()
+    if OPAQUE_ENV in env:
+        return False
+    if key in seen:
+        return True
+    variants = [v for k, v in env.items() if str(k).lower() == key]
+    if not variants:
+        return False
+    for value in variants:
+        for expression in EXPRESSION.findall(str(value)):
+            ref = CLEAN_EXPRESSION.match(expression)
+            if not ref:
+                return False
+            if ref.group(1).lower() == "env" and not _env_name_is_clean(
+                ref.group(2), env, seen | {key}
             ):
-                tainted.add(name)
-                changed = True
-    return tainted
+                return False
+    return True
 
 
 def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -> list[str]:
@@ -113,17 +127,16 @@ def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -
             if e not in ALLOWED_EXPRESSIONS
         )
     else:
-        tainted = _tainted_env(env)
         for e in expressions:
             ref = ENV_REF.match(e)
             if SECRETS_REF.search(e):
                 problems.append(
                     f"endpoint '{endpoint}' reads a secret in a job without credentials"
                 )
-            elif ref and ref.group(1).lower() in tainted:
+            elif ref and not _env_name_is_clean(ref.group(1), env):
                 problems.append(
-                    f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret, "
-                    "in a job without credentials"
+                    f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret "
+                    "or from a source that is not proven clean, in a job without credentials"
                 )
             elif not ref and not VARS_REF.match(e):
                 problems.append(
@@ -207,12 +220,17 @@ def _call_problems(job: dict[str, Any]) -> list[str]:
 
 
 def _merged_env(document: Any, job: dict[str, Any], step: Any) -> dict[str, Any]:
-    """Workflow, job and first-step `env:` values, the narrowest scope winning."""
+    """Workflow, job and first-step `env:` values, the narrowest scope winning.
+
+    An `env:` that is not a mapping (an expression) cannot be read, so the result is marked opaque.
+    """
     merged: dict[str, Any] = {}
     for scope in (document, job, step):
         env = scope.get("env") if isinstance(scope, dict) else None
         if isinstance(env, dict):
             merged.update(env)
+        elif env is not None:
+            merged[OPAQUE_ENV] = True
     return merged
 
 

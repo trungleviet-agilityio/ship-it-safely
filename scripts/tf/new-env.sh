@@ -26,9 +26,14 @@ usage_error() {
 env_name="" from="dev" cidr="" dry_run=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --from | --cidr)
+    --from)
       [ $# -ge 2 ] || usage_error
-      case "$1" in --from) from="$2" ;; --cidr) cidr="$2" ;; esac
+      from="$2"
+      shift 2
+      ;;
+    --cidr)
+      [ $# -ge 2 ] || usage_error
+      cidr="$2"
       shift 2
       ;;
     --dry-run) dry_run=1; shift ;;
@@ -254,9 +259,10 @@ rewrite_value "$tmp_env/backend.tf" key "envs/${env_name}/terraform.tfstate"
   printf '# Copy to %s.tfvars (gitignored) and fill in. Never commit real values.\n' "$env_name"
   grep -v '^# Copy to ' "$src_example" | sed "s/<${from_up}_ACCOUNT_ID>/<${env_up}_ACCOUNT_ID>/g"
 } >"$tmp_example"
-if [ "$(key_count "$tmp_example" env)" = 1 ]; then
+example_env_count="$(key_count "$tmp_example" env)"
+if [ "$example_env_count" = 1 ]; then
   rewrite_value "$tmp_example" env "$env_name"
-elif [ "$(key_count "$tmp_example" env)" = 0 ]; then
+elif [ "$example_env_count" = 0 ]; then
   printf '\n# The bootstrap default is dev: every other environment must set env.\nenv = "%s"\n' "$env_name" >>"$tmp_example"
 else
   die "source format changed: env is assigned more than once in ${src_example#"$ROOT"/}; update scripts/tf/new-env.sh"

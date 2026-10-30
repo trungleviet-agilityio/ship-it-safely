@@ -162,7 +162,8 @@ for bad in 10.40.0.0/16 10.50.0.0/16 10.1.0.0/24 192.168.0.0/16 garbage 10.300.0
   ne "--cidr $bad" "--cidr" "$new_env" pr --cidr "$bad"
 done
 "$new_env" pr --cidr 10.70.0.0/16 --dry-run >/dev/null 2>&1 || die "selftest: a free --cidr was refused"
-ne "the removed --strategy flag" "usage:" "$new_env" pr --strategy ROLLING
+ne "an unknown flag with a value" "usage:" "$new_env" pr --other ROLLING
+expect_fail "make new-env with the removed STRATEGY input" "STRATEGY was removed by ADR 0008 amendment S" make -s -C "$ROOT" new-env ENV=pr STRATEGY=ROLLING
 [ "$(tree_hash "$r")" = "$before" ] || die "selftest: a refused run wrote files"
 
 # --- T9 dry run writes nothing
