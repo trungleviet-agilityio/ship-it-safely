@@ -18,6 +18,23 @@ It declares no provider and no backend; `envs/<env>` supplies both.
 | Secret (FR-8) | `<prefix>/<env>/app-api-key`, a shell with **no value**. The module never creates a secret version |
 | IAM | Execution role (ECR pull on one repository, log writes on one group, `GetSecretValue` on the one secret ARN) and task role (no permissions). Both carry the bootstrap boundary and trust only `ecs-tasks.amazonaws.com` |
 | ECS (FR-15) | Cluster, task definition (task-level `cpu`/`memory`, `X86_64`, read-only root, `/tmp` volume, `secrets[].valueFrom` = secret ARN) and service (`ROLLING`, circuit breaker with rollback) |
+| Preview (FR-17, only with `preview_enabled`) | Shared infrastructure of the PR previews (ADR 0009), see below. Nothing per PR |
+
+### Shared preview infrastructure (`preview.tf`)
+
+Off by default. With `preview_enabled = true` the module adds 9 resources (with one `alb_ingress_cidrs` entry; one more per extra entry) and changes no existing one:
+
+| Resource | Name | Notes |
+|---|---|---|
+| ALB listener | `<prefix>-<env>-preview` | HTTP on `preview_listener_port` (8000), default action fixed 404 `No preview at this path`, tag `Env=preview` (the tag is how a preview role finds this listener and not the dev one) |
+| ALB SG ingress | n/a | TCP on the preview port, one rule per `alb_ingress_cidrs` entry, indexed like port 80 |
+| Preview task SG | `<prefix>-<env>-preview-task` | Container port in from the ALB group, TCP 443 out; the ALB group gets a matching egress rule |
+| ECR repository + lifecycle | `<prefix>-<env>-preview` | Immutable, scan on push, AES256, `force_delete`, tag `Env=preview`, keeps the last `preview_ecr_keep_images` (20) images |
+| Log group | `/ecs/<prefix>-<env>-preview` | 1 day, tag `Env=preview` |
+
+The per-PR target group, listener rule and ECS service are **not** Terraform resources: scripts create and delete
+them (ADR 0009, V2), so the listener rules never show up as drift. The preview execution role is created by
+bootstrap, not here (V8).
 
 ## Usage
 
@@ -55,6 +72,16 @@ module "app_ecs" {
   (`alb_http[0]`, ...) and their descriptions hold no CIDR, so neither plan output nor state keys reveal it
   (ADR 0007 S35).
 
+- **Preview names and the apply role.** The preview names sit under the `<prefix>-<env>-*` patterns the apply role
+  already covers (ECR repository, log group, ALB listener, security group). The task security group keeps the
+  stack tags (`Env = <env>`), because the apply role changes EC2 resources only by tag. The listener, repository and
+  log group carry `Env=preview`, which overrides the provider default.
+- **Preview port.** `preview_listener_port` is 1024 to 65535 and differs from `container_port`, so never 80.
+  Deleting the listener removes its rules, so they do not block a teardown. Two things do: per-PR services still in
+  the cluster (the cluster cannot be deleted) and the network interfaces of running preview tasks, which keep the
+  preview task security group in use. Teardown must remove the per-PR services first (ADR 0009, V4; the sweep lands
+  with PR B).
+
 Offline checks: `make tf-check` runs `terraform test` with a mocked provider, plus the `tf/policy.sh` rules.
 
 <!-- BEGIN_TF_DOCS -->
@@ -76,8 +103,11 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | Name | Type |
 | ---- | ---- |
 | [aws_cloudwatch_log_group.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_cloudwatch_log_group.preview](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_ecr_lifecycle_policy.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_lifecycle_policy) | resource |
+| [aws_ecr_lifecycle_policy.preview](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_lifecycle_policy) | resource |
 | [aws_ecr_repository.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository) | resource |
+| [aws_ecr_repository.preview](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository) | resource |
 | [aws_ecs_cluster.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_cluster) | resource |
 | [aws_ecs_service.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_service) | resource |
 | [aws_ecs_task_definition.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition) | resource |
@@ -87,18 +117,24 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | [aws_internet_gateway.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/internet_gateway) | resource |
 | [aws_lb.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb) | resource |
 | [aws_lb_listener.http](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener) | resource |
+| [aws_lb_listener.preview](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener) | resource |
 | [aws_lb_target_group.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_target_group) | resource |
 | [aws_route.internet](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route) | resource |
 | [aws_route_table.public](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table) | resource |
 | [aws_route_table_association.public](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table_association) | resource |
 | [aws_secretsmanager_secret.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret) | resource |
 | [aws_security_group.alb](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
+| [aws_security_group.preview_task](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_security_group.task](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_subnet.public](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/subnet) | resource |
 | [aws_vpc.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc) | resource |
+| [aws_vpc_security_group_egress_rule.alb_to_preview_task](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_egress_rule) | resource |
 | [aws_vpc_security_group_egress_rule.alb_to_task](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_egress_rule) | resource |
+| [aws_vpc_security_group_egress_rule.preview_task_https](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_egress_rule) | resource |
 | [aws_vpc_security_group_egress_rule.task_https](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_egress_rule) | resource |
 | [aws_vpc_security_group_ingress_rule.alb_http](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
+| [aws_vpc_security_group_ingress_rule.alb_preview](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
+| [aws_vpc_security_group_ingress_rule.preview_task_from_alb](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [aws_vpc_security_group_ingress_rule.task_from_alb](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 
 ## Inputs
@@ -116,6 +152,9 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | ecr_keep_images | Number of images the ECR lifecycle rule keeps. | `number` | `10` | no |
 | health_check_path | HTTP path the load balancer probes. | `string` | `"/health"` | no |
 | log_retention_days | Retention of the application log group. | `number` | `7` | no |
+| preview_ecr_keep_images | Number of images the preview repository lifecycle rule keeps. | `number` | `20` | no |
+| preview_enabled | Create the shared PR preview infrastructure: a second ALB listener, a task security group, a repository and a log group (ADR 0009). Per-PR resources are never created here. | `bool` | `false` | no |
+| preview_listener_port | Port of the preview listener (default action: 404). One rule per PR is added to it by CLI scripts, not by Terraform. | `number` | `8000` | no |
 | secret_recovery_window_days | Secrets Manager recovery window. 0 deletes at once, so a torn-down stack can be re-created (ADR 0004, Q3). | `number` | `0` | no |
 | task_cpu | Task-level CPU units. The apply role caps this at 512 (ecs:task-cpu). | `number` | `256` | no |
 | task_memory | Task-level memory in MiB. The apply role caps this at 1024 (ecs:task-memory). | `number` | `512` | no |
@@ -132,6 +171,10 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | exec_role_arn | Task execution role ARN. |
 | exec_role_name | Task execution role name. |
 | log_group_name | Application log group. |
+| preview_listener_arn | Preview listener ARN (holds the account ID, so the root does not re-export it), or null while disabled. |
+| preview_listener_port | Port of the preview listener, or null while preview_enabled is false. |
+| preview_repository_name | Preview ECR repository name, or null while preview_enabled is false. |
+| preview_task_security_group_id | Security group of the preview tasks, or null while preview_enabled is false. |
 | secret_arn | Secret ARN used in secrets[].valueFrom. |
 | secret_name | Secrets Manager secret name. |
 | service_name | ECS service name. |

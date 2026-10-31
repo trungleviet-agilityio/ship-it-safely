@@ -147,6 +147,34 @@ variable "secret_recovery_window_days" {
   }
 }
 
+variable "preview_enabled" {
+  type        = bool
+  description = "Create the shared PR preview infrastructure: a second ALB listener, a task security group, a repository and a log group (ADR 0009). Per-PR resources are never created here."
+  default     = false
+}
+
+variable "preview_listener_port" {
+  type        = number
+  description = "Port of the preview listener (default action: 404). One rule per PR is added to it by CLI scripts, not by Terraform."
+  default     = 8000
+
+  validation {
+    condition     = var.preview_listener_port >= 1024 && var.preview_listener_port <= 65535 && var.preview_listener_port != var.container_port
+    error_message = "preview_listener_port must be between 1024 and 65535 (so never 80) and differ from container_port."
+  }
+}
+
+variable "preview_ecr_keep_images" {
+  type        = number
+  description = "Number of images the preview repository lifecycle rule keeps."
+  default     = 20
+
+  validation {
+    condition     = var.preview_ecr_keep_images >= 1
+    error_message = "preview_ecr_keep_images must be at least 1."
+  }
+}
+
 variable "alb_ingress_cidrs" {
   type        = list(string)
   description = "CIDR blocks allowed to reach the ALB on port 80. Open by default (ADR 0004, Q1); restrict it when the lab is not being demoed."

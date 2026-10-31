@@ -15,3 +15,6 @@ desired_count      = 1
 task_cpu           = 256
 task_memory        = 512
 log_retention_days = 7
+
+# Shared PR preview infrastructure (ADR 0009): a second ALB listener, a repository and a log group. No per-PR cost.
+preview_enabled = true

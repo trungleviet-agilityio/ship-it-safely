@@ -572,3 +572,251 @@ run "validation_rejects_a_recovery_window_of_three_days" {
 
   expect_failures = [var.secret_recovery_window_days]
 }
+
+# --- Shared preview infrastructure (ADR 0009, V1, V2, V11, PR A). Everything sits behind preview_enabled.
+
+override_resource {
+  override_during = plan
+  target          = aws_vpc.this
+  values          = { id = "vpc-00000000000000000" }
+}
+override_resource {
+  override_during = plan
+  target          = aws_security_group.preview_task
+  values          = { id = "sg-prev000000000000" }
+}
+
+run "preview_disabled_plans_no_preview_resource" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_lb_listener.preview) == 0
+      && length(aws_vpc_security_group_ingress_rule.alb_preview) == 0
+      && length(aws_security_group.preview_task) == 0
+      && length(aws_vpc_security_group_ingress_rule.preview_task_from_alb) == 0
+      && length(aws_vpc_security_group_egress_rule.preview_task_https) == 0
+      && length(aws_vpc_security_group_egress_rule.alb_to_preview_task) == 0
+      && length(aws_ecr_repository.preview) == 0
+      && length(aws_ecr_lifecycle_policy.preview) == 0
+      && length(aws_cloudwatch_log_group.preview) == 0
+    )
+    error_message = "with preview_enabled = false (the default) no preview resource is planned"
+  }
+
+  assert {
+    condition     = output.preview_listener_port == null && output.preview_repository_name == null && output.preview_task_security_group_id == null
+    error_message = "preview outputs are null while the preview is disabled"
+  }
+}
+
+run "preview_enabled_adds_the_listener_with_a_404_default" {
+  command = plan
+
+  variables {
+    preview_enabled = true
+  }
+
+  assert {
+    condition = (
+      aws_lb_listener.preview[0].port == 8000
+      && aws_lb_listener.preview[0].protocol == "HTTP"
+      && aws_lb_listener.preview[0].default_action[0].type == "fixed-response"
+      && aws_lb_listener.preview[0].default_action[0].fixed_response[0].status_code == "404"
+      && aws_lb_listener.preview[0].default_action[0].target_group_arn == null
+      && length(aws_lb_listener.preview[0].default_action[0].forward) == 0
+    )
+    error_message = "the preview listener answers 404 on port 8000 and never forwards by default"
+  }
+
+  # The preview role selects this listener by its tag (ADR 0009, F.1); the dev listener must not carry it.
+  assert {
+    # tags_all (resource tags merged over the provider default_tags) is unknown under a mock provider and the module
+    # declares no provider, so the resource's own tag is what can be asserted offline. The provider documents that a
+    # resource tag overrides a default tag of the same key; the CI plan shows tags_all.
+    condition     = aws_lb_listener.preview[0].tags["Env"] == "preview"
+    error_message = "the preview listener is tagged Env=preview"
+  }
+
+  assert {
+    condition     = aws_lb_listener.http.port == 80 && aws_lb_listener.http.default_action[0].type == "forward" && aws_lb_listener.http.tags == null
+    error_message = "the dev listener stays on port 80, forwarding, with no tag of its own (so never Env=preview)"
+  }
+
+  assert {
+    condition = (
+      output.preview_listener_port == 8000
+      && output.preview_repository_name == "sis-dev-preview"
+      && output.preview_task_security_group_id == "sg-prev000000000000"
+    )
+    error_message = "outputs: listener port, repository name and task group id"
+  }
+}
+
+run "preview_ingress_is_one_rule_per_cidr_and_hides_the_cidr" {
+  command = plan
+
+  variables {
+    preview_enabled   = true
+    alb_ingress_cidrs = ["198.51.100.0/24", "203.0.113.0/24"]
+  }
+
+  assert {
+    condition = (
+      length(aws_vpc_security_group_ingress_rule.alb_preview) == 2
+      && aws_vpc_security_group_ingress_rule.alb_preview[0].cidr_ipv4 == "198.51.100.0/24"
+      && aws_vpc_security_group_ingress_rule.alb_preview[1].cidr_ipv4 == "203.0.113.0/24"
+      && alltrue([for r in aws_vpc_security_group_ingress_rule.alb_preview : r.from_port == 8000 && r.to_port == 8000 && r.ip_protocol == "tcp"])
+    )
+    error_message = "one ingress rule per allowed CIDR on TCP 8000, indexed in input order"
+  }
+
+  assert {
+    condition = alltrue([
+      for r in aws_vpc_security_group_ingress_rule.alb_preview : !strcontains(r.description, "198.51") && !strcontains(r.description, "203.0")
+    ])
+    error_message = "preview rule descriptions must not hold a CIDR (ADR 0007 S35)"
+  }
+}
+
+run "preview_task_group_rules_are_exact" {
+  command = plan
+
+  variables {
+    preview_enabled = true
+  }
+
+  assert {
+    condition     = aws_security_group.preview_task[0].name == "sis-dev-preview-task" && aws_security_group.preview_task[0].vpc_id == aws_vpc.this.id
+    error_message = "preview task group is sis-dev-preview-task in the module VPC"
+  }
+
+  # The apply role changes EC2 resources by the stack tag (the provider default Env=<env>) only, so this group must
+  # not set an Env tag of its own, least of all Env=preview.
+  assert {
+    condition     = !contains(keys(aws_security_group.preview_task[0].tags), "Env")
+    error_message = "the preview task group sets no Env tag, so it keeps the stack default"
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].from_port == 8080
+      && aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].to_port == 8080
+      && aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].ip_protocol == "tcp"
+      && aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].referenced_security_group_id == aws_security_group.alb.id
+      && aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].cidr_ipv4 == null
+      && aws_vpc_security_group_ingress_rule.preview_task_from_alb[0].security_group_id == aws_security_group.preview_task[0].id
+    )
+    error_message = "preview task ingress is the container port from the ALB group only"
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.preview_task_https[0].from_port == 443
+      && aws_vpc_security_group_egress_rule.preview_task_https[0].to_port == 443
+      && aws_vpc_security_group_egress_rule.preview_task_https[0].ip_protocol == "tcp"
+      && aws_vpc_security_group_egress_rule.preview_task_https[0].security_group_id == aws_security_group.preview_task[0].id
+    )
+    error_message = "preview task egress is TCP 443 only"
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.alb_to_preview_task[0].from_port == 8080
+      && aws_vpc_security_group_egress_rule.alb_to_preview_task[0].to_port == 8080
+      && aws_vpc_security_group_egress_rule.alb_to_preview_task[0].security_group_id == aws_security_group.alb.id
+      && aws_vpc_security_group_egress_rule.alb_to_preview_task[0].referenced_security_group_id == aws_security_group.preview_task[0].id
+    )
+    error_message = "ALB egress to the preview tasks is the container port to the preview group only"
+  }
+}
+
+run "preview_repository_and_logs" {
+  command = plan
+
+  variables {
+    preview_enabled = true
+  }
+
+  assert {
+    condition = (
+      aws_ecr_repository.preview[0].name == "sis-dev-preview"
+      && aws_ecr_repository.preview[0].image_tag_mutability == "IMMUTABLE"
+      && aws_ecr_repository.preview[0].image_scanning_configuration[0].scan_on_push
+      && aws_ecr_repository.preview[0].force_delete
+      && aws_ecr_repository.preview[0].tags["Env"] == "preview"
+    )
+    error_message = "immutable, scanned, force delete, tagged Env=preview, named sis-dev-preview"
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_group.preview[0].name == "/ecs/sis-dev-preview"
+      && aws_cloudwatch_log_group.preview[0].retention_in_days == 1
+      && aws_cloudwatch_log_group.preview[0].tags["Env"] == "preview"
+      && aws_cloudwatch_log_group.app.name == "/ecs/sis-dev-app"
+      && aws_cloudwatch_log_group.app.retention_in_days == 7
+    )
+    error_message = "preview log group /ecs/sis-dev-preview keeps 1 day and is tagged Env=preview; the app log group is untouched"
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_ecr_lifecycle_policy.preview[0].policy).rules) == 1
+      && jsondecode(aws_ecr_lifecycle_policy.preview[0].policy).rules[0].selection.tagStatus == "any"
+      && jsondecode(aws_ecr_lifecycle_policy.preview[0].policy).rules[0].selection.countType == "imageCountMoreThan"
+      && jsondecode(aws_ecr_lifecycle_policy.preview[0].policy).rules[0].selection.countNumber == 20
+      && aws_ecr_lifecycle_policy.preview[0].repository == "sis-dev-preview"
+    )
+    error_message = "exactly one lifecycle rule: any tag, more than 20 images"
+  }
+
+  assert {
+    condition     = aws_ecr_repository.app.name == "sis-dev-app" && jsondecode(aws_ecr_lifecycle_policy.app.policy).rules[0].selection.countNumber == 10
+    error_message = "the dev repository and its lifecycle are untouched"
+  }
+}
+
+run "preview_listener_port_follows_the_input" {
+  command = plan
+
+  variables {
+    preview_enabled       = true
+    preview_listener_port = 8181
+  }
+
+  assert {
+    condition     = aws_lb_listener.preview[0].port == 8181 && alltrue([for r in aws_vpc_security_group_ingress_rule.alb_preview : r.from_port == 8181 && r.to_port == 8181])
+    error_message = "the listener and the ingress rules use preview_listener_port"
+  }
+}
+
+run "validation_rejects_preview_port_80" {
+  command = plan
+
+  variables {
+    preview_listener_port = 80
+  }
+
+  expect_failures = [var.preview_listener_port]
+}
+
+run "validation_rejects_preview_port_equal_to_the_container_port" {
+  command = plan
+
+  variables {
+    preview_listener_port = 8080
+  }
+
+  expect_failures = [var.preview_listener_port]
+}
+
+run "validation_rejects_zero_preview_images" {
+  command = plan
+
+  variables {
+    preview_ecr_keep_images = 0
+  }
+
+  expect_failures = [var.preview_ecr_keep_images]
+}

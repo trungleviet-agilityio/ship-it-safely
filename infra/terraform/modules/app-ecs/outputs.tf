@@ -63,6 +63,26 @@ output "target_group_arn" {
   value       = aws_lb_target_group.app.arn
 }
 
+output "preview_listener_port" {
+  description = "Port of the preview listener, or null while preview_enabled is false."
+  value       = one(aws_lb_listener.preview[*].port)
+}
+
+output "preview_listener_arn" {
+  description = "Preview listener ARN (holds the account ID, so the root does not re-export it), or null while disabled."
+  value       = one(aws_lb_listener.preview[*].arn)
+}
+
+output "preview_repository_name" {
+  description = "Preview ECR repository name, or null while preview_enabled is false."
+  value       = one(aws_ecr_repository.preview[*].name)
+}
+
+output "preview_task_security_group_id" {
+  description = "Security group of the preview tasks, or null while preview_enabled is false."
+  value       = one(aws_security_group.preview_task[*].id)
+}
+
 output "alb_dns_name" {
   description = "ALB DNS name."
   value       = aws_lb.this.dns_name
