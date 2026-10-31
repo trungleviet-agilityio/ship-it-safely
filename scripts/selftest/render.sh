@@ -95,9 +95,13 @@ expect_fail "render without a user" "user must be 10001:10001" render "$tmp/td-n
 mutate rw '.containerDefinitions[0].readonlyRootFilesystem = false'
 expect_fail "render with a writable root" "readonlyRootFilesystem must be true" render "$tmp/td-rw.json"
 mutate env2 '.containerDefinitions[0].environment += [{"name": "DEBUG", "value": "1"}]'
-expect_fail "render with an extra environment variable" "environment must be exactly APP_ENV" render "$tmp/td-env2.json"
+expect_fail "render with an extra environment variable" "environment must be exactly APP_ENV=dev" render "$tmp/td-env2.json"
 mutate env0 '.containerDefinitions[0].environment = []'
-expect_fail "render with no environment" "environment must be exactly APP_ENV" render "$tmp/td-env0.json"
+expect_fail "render with no environment" "environment must be exactly APP_ENV=dev" render "$tmp/td-env0.json"
+mutate envval '.containerDefinitions[0].environment[0].value = "prod"'
+expect_fail "render with APP_ENV of another environment" "environment must be exactly APP_ENV=dev" render "$tmp/td-envval.json"
+mutate envname '.containerDefinitions[0].environment[0].name = "app_env"'
+expect_fail "render with a renamed APP_ENV" "environment must be exactly APP_ENV=dev" render "$tmp/td-envname.json"
 mutate logg '.containerDefinitions[0].logConfiguration.options["awslogs-group"] = "/ecs/other"'
 expect_fail "render with another log group" "logConfiguration must be awslogs with the group /ecs/sis-dev-app" render "$tmp/td-logg.json"
 mutate logd '.containerDefinitions[0].logConfiguration.logDriver = "splunk"'
@@ -111,11 +115,11 @@ expect_fail "render with a second volume" "exactly the /tmp volume" render "$tmp
 mutate nocontainers '.containerDefinitions = []'
 expect_fail "render with no containers" "exactly one container" render "$tmp/td-nocontainers.json"
 # A task definition for another environment renders for that environment only.
-sed 's/sis-dev/sis-prod/g; s#sis/dev#sis/prod#g' "$tmp/td-good.json" >"$tmp/td-prod.json"
+sed 's/sis-dev/sis-prod/g; s#sis/dev#sis/prod#g; s/"value": "dev"/"value": "prod"/' "$tmp/td-good.json" >"$tmp/td-prod.json"
 image_prod="${image/sis-dev-app/sis-prod-app}"
 "$ROOT/scripts/ecs/render-task-def.sh" --env prod "$tmp/td-prod.json" "$image_prod" "$commit" 2>/dev/null \
   | jq -e '(.tags | map({(.key): .value}) | add).Env == "prod"' >/dev/null || die "selftest: the prod task definition was not rendered with Env prod"
-expect_fail "render of the dev task definition for prod" "the group /ecs/sis-prod-app" \
+expect_fail "render of the dev task definition for prod" "environment must be exactly APP_ENV=prod" \
   "$ROOT/scripts/ecs/render-task-def.sh" --env prod "$tmp/td-good.json" "$image_prod" "$commit"
 expect_fail "render without --env" "usage:" "$ROOT/scripts/ecs/render-task-def.sh" "$tmp/td-good.json" "$image" "$commit"
 expect_fail "render with an invalid env" "ENV must be lowercase" "$ROOT/scripts/ecs/render-task-def.sh" --env "../x" "$tmp/td-good.json" "$image" "$commit"

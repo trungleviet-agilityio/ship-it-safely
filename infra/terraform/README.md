@@ -27,7 +27,7 @@ Order: `bootstrap` first (it creates the state bucket and the CI roles), then `e
 |---|---|
 | `make tf-check` | Offline policy rules (`tf/policy.sh`), README check, `fmt`, `init -backend=false`, `validate`, `terraform test` (own temporary data dir, so a real `init` in a checkout does not disturb it) |
 | `make docs` | Regenerate the `terraform-docs` tables in every README |
-| `make new-env ENV=<name> [FROM=dev] [CIDR=] [STRATEGY=] [DRY_RUN=1]` | Clone an environment root (`scripts/tf/new-env.sh`): copies the tracked files of `envs/<from>/`, rewrites `env`, `vpc_cidr` and the backend key, writes the bootstrap account example, and prints the steps you run yourself. Never runs terraform, aws or gh |
+| `make new-env ENV=<name> [FROM=dev] [CIDR=] [DRY_RUN=1]` | Clone an environment root (`scripts/tf/new-env.sh`): copies the tracked files of `envs/<from>/`, rewrites `env`, `vpc_cidr` and the backend key, writes the bootstrap account example, and prints the steps you run yourself. Never runs terraform, aws or gh |
 
 ## Environments
 

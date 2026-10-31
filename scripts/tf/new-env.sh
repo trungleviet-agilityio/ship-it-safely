@@ -4,32 +4,36 @@
 # steps you run yourself (account, bootstrap, GitHub environment and secrets, the workflow wiring).
 #
 # It copies the tracked files of the source root (so the lock file is copied and local state, .terraform/ and
-# *.auto.tfvars never are) and rewrites only named keys: `env`, `vpc_cidr`, `deployment_strategy` (only with
-# --strategy; the source must have the key) and `promotion_target_env = ""` (only if the source has the key; a new
-# environment is never a promotion source), plus the `key` line of backend.tf. Every other line is byte-identical,
+# *.auto.tfvars never are) and rewrites only named keys: `env`, `vpc_cidr` and `promotion_target_env = ""` (only if the source has the
+# key; a new environment is never a promotion source), plus the `key` line of backend.tf. Every other line is byte-identical,
 # which the parity guard (scripts/guard/env-parity.sh) enforces afterwards.
 # It refuses on any doubt before writing, builds everything in temp paths next to the targets, then moves them in. It
 # never runs terraform, aws, gh or a git write, never calls the network, and never takes or prints an account ID.
 #
-# Usage: scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--strategy ROLLING|BLUE_GREEN] [--dry-run]
-#        make new-env ENV=<env> [FROM=dev] [CIDR=...] [STRATEGY=...] [DRY_RUN=1]
+# Usage: scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--dry-run]
+#        make new-env ENV=<env> [FROM=dev] [CIDR=...] [DRY_RUN=1]
 # Exit codes: 0 created (or dry run shown), 1 refused, 2 usage.
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/../lib.sh"
 
-USAGE="usage: scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--strategy ROLLING|BLUE_GREEN] [--dry-run]"
+USAGE="usage: scripts/tf/new-env.sh <env> [--from <env>] [--cidr 10.N.0.0/16] [--dry-run]"
 usage_error() {
   printf '%s\n' "$USAGE" >&2
   exit 2
 }
 
-env_name="" from="dev" cidr="" strategy="" dry_run=0
+env_name="" from="dev" cidr="" dry_run=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --from | --cidr | --strategy)
+    --from)
       [ $# -ge 2 ] || usage_error
-      case "$1" in --from) from="$2" ;; --cidr) cidr="$2" ;; --strategy) strategy="$2" ;; esac
+      from="$2"
+      shift 2
+      ;;
+    --cidr)
+      [ $# -ge 2 ] || usage_error
+      cidr="$2"
       shift 2
       ;;
     --dry-run) dry_run=1; shift ;;
@@ -84,13 +88,7 @@ need_once "$src/backend.tf" key
 grep -Eq "^[[:space:]]*key[[:space:]]*=[[:space:]]*\"envs/${from}/terraform.tfstate\"" "$src/backend.tf" \
   || die "source format changed: the backend key of envs/${from} is not envs/${from}/terraform.tfstate"
 
-# deployment_strategy: only when asked, and only if the source has the key (the variable arrives with the blue/green
-# change). promotion_target_env: reset to "" only if the source has the key.
-if [ -n "$strategy" ]; then
-  case "$strategy" in ROLLING | BLUE_GREEN) ;; *) die "--strategy must be ROLLING or BLUE_GREEN, got '${strategy}'" ;; esac
-  [ "$(key_count "$src/terraform.tfvars" deployment_strategy)" = 1 ] \
-    || die "--strategy needs exactly one deployment_strategy line in envs/${from}/terraform.tfvars (the variable does not exist yet?)"
-fi
+# promotion_target_env: reset to "" only if the source has the key.
 promo_count="$(key_count "$src/terraform.tfvars" promotion_target_env)"
 [ "$promo_count" -le 1 ] || die "source format changed: promotion_target_env is assigned more than once; update scripts/tf/new-env.sh"
 
@@ -192,7 +190,6 @@ describe_plan() {
   log "new environment '${env_name}' from '${from}'"
   log "${verb} infra/terraform/envs/${env_name}/ (tracked files of envs/${from}/)"
   log "  terraform.tfvars: env = \"${env_name}\", vpc_cidr = \"${cidr}\""
-  if [ -n "$strategy" ]; then log "  terraform.tfvars: deployment_strategy = \"${strategy}\""; fi
   if [ "$promo_count" = 1 ]; then log "  terraform.tfvars: promotion_target_env = \"\""; fi
   log "  backend.tf: key = \"envs/${env_name}/terraform.tfstate\""
   log "${verb} infra/terraform/bootstrap/accounts/${env_name}.tfvars.example"
@@ -253,7 +250,6 @@ tfvars="$tmp_env/terraform.tfvars"
 mv "$tfvars.new" "$tfvars"
 rewrite_value "$tfvars" env "$env_name"
 rewrite_value "$tfvars" vpc_cidr "$cidr"
-if [ -n "$strategy" ]; then rewrite_value "$tfvars" deployment_strategy "$strategy"; fi
 if [ "$promo_count" = 1 ]; then rewrite_value "$tfvars" promotion_target_env ""; fi
 rewrite_value "$tmp_env/backend.tf" key "envs/${env_name}/terraform.tfstate"
 
@@ -263,9 +259,10 @@ rewrite_value "$tmp_env/backend.tf" key "envs/${env_name}/terraform.tfstate"
   printf '# Copy to %s.tfvars (gitignored) and fill in. Never commit real values.\n' "$env_name"
   grep -v '^# Copy to ' "$src_example" | sed "s/<${from_up}_ACCOUNT_ID>/<${env_up}_ACCOUNT_ID>/g"
 } >"$tmp_example"
-if [ "$(key_count "$tmp_example" env)" = 1 ]; then
+example_env_count="$(key_count "$tmp_example" env)"
+if [ "$example_env_count" = 1 ]; then
   rewrite_value "$tmp_example" env "$env_name"
-elif [ "$(key_count "$tmp_example" env)" = 0 ]; then
+elif [ "$example_env_count" = 0 ]; then
   printf '\n# The bootstrap default is dev: every other environment must set env.\nenv = "%s"\n' "$env_name" >>"$tmp_example"
 else
   die "source format changed: env is assigned more than once in ${src_example#"$ROOT"/}; update scripts/tf/new-env.sh"
