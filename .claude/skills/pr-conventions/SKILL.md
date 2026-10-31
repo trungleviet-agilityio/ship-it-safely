@@ -26,7 +26,7 @@ This is a solo lab: no ticket prefix, and Conventional Commits everywhere, inclu
 
 | Work | Branch |
 |---|---|
-| A `PLAN.md` phase | `phase-<n>-<slug>`, e.g. `phase-1-bootstrap-dev` |
+| A phase of the working plan | `phase-<n>-<slug>`, e.g. `phase-1-bootstrap-dev` |
 | Anything else | `<type>/<slug>`, e.g. `chore/repo-conventions`, `fix/healthcheck-timeout` |
 
 ## Commit messages
@@ -56,7 +56,7 @@ type(scope): subject
 | `refactor` | behavior-preserving restructuring |
 | `perf` | a change whose point is speed or cost |
 | `test` | tests only (unittest, `terraform test`) |
-| `docs` | `README.md`, `PLAN.md`, `docs/`, `CLAUDE.md`, skills |
+| `docs` | `README.md`, `docs/`, `CLAUDE.md`, skills |
 | `build` | `Dockerfile`, `compose.yaml`, `pyproject.toml` |
 | `ci` | `.github/workflows/`, Dependabot |
 | `infra` | `infra/terraform/**` |
@@ -109,7 +109,7 @@ act on), then the key points that support it, then detail. A reviewer who stops 
 section should know what to do. Pick headings that fit; there is no fixed template. For a phase
 PR, include:
 
-- the `PLAN.md` phase and the requirement IDs it covers,
+- the phase and the requirement IDs (`docs/requirements.md`) it covers,
 - the verify result (which checks ran, open findings by severity),
 - the commands the user still runs by hand at the checkpoint (`terraform apply`,
   `aws secretsmanager put-secret-value`, GitHub environment setup). Claude never runs them (NFR-9).
