@@ -1,6 +1,6 @@
 # ADR 0010: Scope v4, trim the remaining work to the production path
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-02
 - Supersedes: the Phase 8 part of PLAN v3 (`docs/requirements.md`, Goal); amends ADR 0008 amendment S
 
@@ -53,3 +53,4 @@
 |---|---|
 | 2026-11-02 | Proposed |
 | 2026-11-02 | T9: Q1 answered |
+| 2026-11-02 | Accepted (user) |
