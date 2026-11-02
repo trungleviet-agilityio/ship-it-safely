@@ -49,6 +49,10 @@ class BoardTest(unittest.TestCase):
             self.assertIn(text, body)
         self.assertNotIn(KEY, body)
 
+    def test_index_prod_shipped_by_promote(self) -> None:
+        with mock.patch.dict(os.environ, {"APP_ENV": "prod"}):
+            self.assertIn("shipped by: app-promote", get(self.port, "/")[1])
+
     def test_index_secret_not_loaded(self) -> None:
         with mock.patch.dict(os.environ, {"APP_API_KEY": ""}):
             self.assertIn("secret_loaded: no", get(self.port, "/")[1])

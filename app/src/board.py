@@ -38,12 +38,14 @@ def color() -> str:
 
 def page() -> str:
     key_set = "yes" if os.environ.get("APP_API_KEY") else "no"
+    promoted = os.environ.get("APP_ENV") == "prod"
+    shipped_by = "app-promote (dev digest)" if promoted else "app-deploy (digest-pinned)"
     rows = [
         ("APP_ENV", os.environ.get("APP_ENV", "unknown")),
         ("GIT_SHA", os.environ.get("GIT_SHA", "unknown")),
         ("started", STARTED),
         ("image digest", image_digest()),
-        ("shipped by", "app-deploy (digest-pinned)"),
+        ("shipped by", shipped_by),
         ("secret_loaded: " + key_set, ""),
     ]
     body = "".join(f"<p>{html.escape(': '.join(r) if r[1] else r[0])}</p>" for r in rows)
