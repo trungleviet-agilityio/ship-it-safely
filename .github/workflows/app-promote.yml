@@ -112,7 +112,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh "sis-${ENV}-gha-deploy"
+        run: scripts/aws/check-config.sh deploy
 
       - name: Assume the deploy role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -137,7 +137,9 @@ jobs:
           SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
-          source_repo="${SOURCE_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/sis-dev-app"
+          source_name="$(ENV=dev scripts/names.sh app | sed -n 's/^REPOSITORY=//p')"
+          [[ -n "$source_name" ]] || { echo "::error::no dev repository name"; exit 1; }
+          source_repo="${SOURCE_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${source_name}"
           target_repo="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPOSITORY}"
           out="$(scripts/image/promote-copy.sh "$source_repo" "$target_repo" "$SHA" "$RUNNER_TEMP")"
           digest="$(sed -n 's/^IMAGE_DIGEST=//p' <<<"$out")"

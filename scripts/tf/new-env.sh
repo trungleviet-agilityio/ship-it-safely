@@ -126,29 +126,29 @@ if [[ "$url" =~ github\.com[:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$ ]]; then slug=
 
 # --- Next steps (printed in a dry run too). Static text with @TOKENS@, so nothing in it is ever expanded by the shell.
 print_next_steps() {
-  sed -e "s#@ENV@#${env_name}#g" -e "s#@ENVUP@#${env_up}#g" -e "s#@SLUG@#${slug}#g" >&2 <<'EOF'
+  sed -e "s#@PREFIX@#${PROJECT_PREFIX}#g" -e "s#@ENV@#${env_name}#g" -e "s#@ENVUP@#${env_up}#g" -e "s#@SLUG@#${slug}#g" >&2 <<'EOF'
 
 Next steps (you run these; this script never runs terraform, aws or gh):
 
-1. Account. Create or pick the AWS account for @ENV@ and an SSO admin profile named sis-@ENV@-admin.
+1. Account. Create or pick the AWS account for @ENV@ and an SSO admin profile named @PREFIX@-@ENV@-admin.
 2. Fill infra/terraform/bootstrap/accounts/@ENV@.tfvars (gitignored): account ID, budget email, GitHub owner and repo IDs.
 3. Bootstrap the account (first apply on local state, then migrate it to the account's state bucket):
      printf 'terraform {\n  backend "local" {\n    path = "@ENV@.tfstate"\n  }\n}\n' > infra/terraform/bootstrap/backend_override.tf
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap init
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/@ENV@.tfvars -out=@ENV@-bootstrap.tfplan
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap apply @ENV@-bootstrap.tfplan
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap init
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/@ENV@.tfvars -out=@ENV@-bootstrap.tfplan
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap apply @ENV@-bootstrap.tfplan
      rm infra/terraform/bootstrap/backend_override.tf
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap init -migrate-state -backend-config="bucket=sis-@ENV@-tfstate-<ENV_ACCOUNT_ID>-ap-southeast-1-an"
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/@ENV@.tfvars
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap init -migrate-state -backend-config="bucket=@PREFIX@-@ENV@-tfstate-<ENV_ACCOUNT_ID>-ap-southeast-1-an"
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap plan -var-file=accounts/@ENV@.tfvars
      rm -f infra/terraform/bootstrap/@ENV@.tfstate infra/terraform/bootstrap/@ENV@.tfstate.backup infra/terraform/bootstrap/@ENV@-bootstrap.tfplan
    The second plan must say "No changes".
 4. GitHub environment @ENV@ (reviewer, main only) and secrets:
      MY_ID="$(gh api user --jq .id)"
      printf '{"reviewers":[{"type":"User","id":%s}],"prevent_self_review":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' "$MY_ID" | gh api -X PUT repos/@SLUG@/environments/@ENV@ --input -
      gh api -X POST repos/@SLUG@/environments/@ENV@/deployment-branch-policies -f name=main -f type=branch
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw apply_role_arn | gh secret set AWS_APPLY_ROLE_ARN --env @ENV@ --repo @SLUG@
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw deploy_role_arn | gh secret set AWS_DEPLOY_ROLE_ARN --env @ENV@ --repo @SLUG@
-     AWS_PROFILE=sis-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_@ENVUP@ --repo @SLUG@
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw apply_role_arn | gh secret set AWS_APPLY_ROLE_ARN --env @ENV@ --repo @SLUG@
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw deploy_role_arn | gh secret set AWS_DEPLOY_ROLE_ARN --env @ENV@ --repo @SLUG@
+     AWS_PROFILE=@PREFIX@-@ENV@-admin TF_DATA_DIR=.terraform-@ENV@ terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_@ENVUP@ --repo @SLUG@
      gh secret set AWS_ACCOUNT_ID --env @ENV@ --repo @SLUG@
      gh secret set AWS_ACCOUNT_ID_@ENVUP@ --repo @SLUG@
    The last two prompt: paste <ENV_ACCOUNT_ID> each time. Then the ALB allow-list, a JSON list such as ["<YOUR_IP>/32"]:

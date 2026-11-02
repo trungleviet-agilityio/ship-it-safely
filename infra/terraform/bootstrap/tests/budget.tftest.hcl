@@ -14,6 +14,8 @@ mock_provider "aws" {
 }
 
 variables {
+  # The fixture names use the prefix sis, whatever project.env holds (a fork).
+  prefix          = "sis"
   aws_account_id  = "123456789012"
   github_owner_id = "111"
   github_repo_id  = "222"

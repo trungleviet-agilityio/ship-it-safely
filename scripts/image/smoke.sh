@@ -17,7 +17,7 @@ require_cmd docker "install Docker"
 require_cmd curl "apt-get install curl"
 require_cmd jq "brew install jq"
 
-name="sis-smoke-$$"
+name="${PROJECT_PREFIX}-smoke-$$"
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
 }

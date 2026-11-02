@@ -19,6 +19,7 @@ on:
       - app/**
       - .github/workflows/app-deploy.yml
       - scripts/lib.sh
+      - project.env
       - scripts/names.sh
       - scripts/image/smoke.sh
       - scripts/aws/assert-no-account-id.sh
@@ -147,7 +148,7 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh "sis-${ENV}-gha-deploy"
+        run: scripts/aws/check-config.sh deploy
 
       - name: Assume the deploy role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0

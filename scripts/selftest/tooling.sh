@@ -84,16 +84,40 @@ for t in terraform tflint trivy hadolint crane; do
 done
 ok "checked-in checksums cover every pinned tool"
 
+# --- project.sh: the prefix copies follow project.env (a fork renames the project with one command)
+proj="$tmp/project"
+for f in project.env infra/terraform/bootstrap/variables.tf app/compose.yaml infra/terraform/envs/dev/terraform.tfvars \
+  infra/terraform/envs/prod/terraform.tfvars .github/workflows/terraform-iac.yml .github/workflows/repo-guard.yml; do
+  mkdir -p "$proj/$(dirname "$f")"
+  cp "$ROOT/$f" "$proj/$f"
+done
+"$ROOT/scripts/project.sh" set acme "$proj" 2>/dev/null || die "selftest: project set failed"
+grep -qx 'PREFIX=acme' "$proj/project.env" || die "selftest: project set did not write project.env"
+# shellcheck disable=SC2016  # a literal workflow expression, not a shell one
+grep -qF 'acme-${{ env.ENV }}-tfstate-' "$proj/.github/workflows/terraform-iac.yml" || die "selftest: project set missed the bucket host"
+grep -q 'image: acme-app:local' "$proj/app/compose.yaml" || die "selftest: project set missed the compose image"
+cmp -s "$ROOT/.github/workflows/repo-guard.yml" "$proj/.github/workflows/repo-guard.yml" || die "selftest: project set changed a file without a copy"
+printf 'prefix     = "sis"\n' >>"$proj/infra/terraform/envs/prod/terraform.tfvars"
+expect_fail "a stale prefix copy" "1 file(s) disagree with project.env" "$ROOT/scripts/project.sh" check "$proj"
+case "$EXPECT_OUT" in *"envs/prod/terraform.tfvars"*) ;; *) die "selftest: the stale copy was not named" ;; esac
+printf 'PREFIX=Bad-Name\n' >"$proj/project.env"
+expect_fail "a bad prefix" "project.env must set PREFIX" "$ROOT/scripts/project.sh" check "$proj"
+expect_fail "set a bad prefix" "the prefix must be" "$ROOT/scripts/project.sh" set "a" "$proj"
+ok "project.sh sets every prefix copy and names a stale one"
+
 # --- aws/check-config.sh
 role=sis-dev-gha-deploy
 good_arn="arn:aws:iam::${acct}:role/${role}"
-check_cfg() { env ROLE_ARN="$1" ACCOUNT="$2" REGION="$3" "$ROOT/scripts/aws/check-config.sh" "$role"; }
+check_cfg() { env ENV=dev ROLE_ARN="$1" ACCOUNT="$2" REGION="$3" "$ROOT/scripts/aws/check-config.sh" deploy; }
 out="$(check_cfg "$good_arn" "$acct" ap-southeast-1 2>/dev/null)" || die "selftest: good AWS config rejected"
 case "$out" in *"::add-mask::${acct}"*) ok "config check masks the account" ;; *) die "selftest: the account was not masked" ;; esac
 expect_fail "config with the plan role" "is not the ${role} role ARN" check_cfg "arn:aws:iam::${acct}:role/sis-dev-gha-plan" "$acct" ap-southeast-1
 expect_fail "config with another account" "differs from the account" check_cfg "$good_arn" "$leak_id" ap-southeast-1
 expect_fail "config with no region" "AWS_REGION is empty" check_cfg "$good_arn" "$acct" ""
 expect_fail "config with no secrets" "is empty or not set" check_cfg "" "" ap-southeast-1
+expect_fail "config with an unknown role kind" "role must be plan, apply or deploy" \
+  env ENV=dev ROLE_ARN="$good_arn" ACCOUNT="$acct" REGION=ap-southeast-1 "$ROOT/scripts/aws/check-config.sh" "$role"
+[ "$(ENV=prod "$ROOT/scripts/names.sh" gha-role plan)" = "sis-prod-gha-plan" ] || die "selftest: names gha-role printed the wrong name"
 
 # --- aws/redact-account-ids.sh
 redacted="$(printf 'role %s failed' "$acct" | "$ROOT/scripts/aws/redact-account-ids.sh")"

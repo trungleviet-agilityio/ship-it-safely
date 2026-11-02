@@ -16,6 +16,8 @@ on:
       - scripts/aws/assert-web-identity-denied.sh
       - scripts/aws/check-config.sh
       - scripts/lib.sh
+      - project.env
+      - scripts/names.sh
   # Runs only the negative job: a non-PR token must be refused by every role (N1).
   workflow_dispatch:
 
@@ -60,7 +62,8 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh sis-dev-gha-plan
+          ENV: dev
+        run: scripts/aws/check-config.sh plan
 
       # N8: a pull_request token is refused by the apply and deploy roles (their sub is the dev environment).
       - name: Apply and deploy roles refuse a pull request token (N8)
@@ -96,8 +99,9 @@ jobs:
           account="$(jq -r '.Account' <<<"$identity")"
           echo "::add-mask::$account"
           arn="$(jq -r '.Arn' <<<"$identity")"
-          if [[ ! "$arn" =~ ^arn:aws:sts::[0-9]{12}:assumed-role/sis-dev-gha-plan/gha-oidc-smoke- ]]; then
-            echo "::error::Caller identity is not the sis-dev-gha-plan role"
+          role="$(ENV=dev scripts/names.sh gha-role plan)"
+          if [[ ! "$arn" =~ ^arn:aws:sts::[0-9]{12}:assumed-role/${role}/gha-oidc-smoke- ]]; then
+            echo "::error::Caller identity is not the ${role} role"
             exit 1
           fi
           role_account="${ROLE_ARN#arn:aws:iam::}"
@@ -142,7 +146,8 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh sis-dev-gha-plan
+          ENV: dev
+        run: scripts/aws/check-config.sh plan
 
       # A script that calls STS directly, not configure-aws-credentials: that action fails on network, token or ARN
       # errors too, so "any failure" would pass. Here only an explicit AccessDenied passes. The workflow_dispatch
@@ -160,7 +165,8 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_PROD }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh sis-prod-gha-plan
+          ENV: prod
+        run: scripts/aws/check-config.sh plan
 
       - name: Require an explicit access denied from every prod role
         env:
@@ -204,7 +210,8 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_PROD }}
           ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
           REGION: ${{ vars.AWS_REGION }}
-        run: scripts/aws/check-config.sh sis-prod-gha-plan
+          ENV: prod
+        run: scripts/aws/check-config.sh plan
 
       - name: Require an explicit access denied from every prod role
         env:

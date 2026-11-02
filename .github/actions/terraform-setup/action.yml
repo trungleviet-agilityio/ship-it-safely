@@ -18,7 +18,7 @@ inputs:
     description: Environment name (a directory under infra/terraform/envs)
     required: true
   role-kind:
-    description: Which role to assume, plan or apply (the role is sis-<env>-gha-<kind>)
+    description: Which role to assume, plan or apply (the role is <prefix>-<env>-gha-<kind>, project.env)
     required: true
   role-arn:
     description: ARN of that role
@@ -71,7 +71,7 @@ runs:
         REGION: ${{ inputs.region }}
       run: |
         case "$ROLE_KIND" in plan | apply) ;; *) echo "::error::role-kind must be plan or apply"; exit 1 ;; esac
-        scripts/aws/check-config.sh "sis-${ENV}-gha-${ROLE_KIND}"
+        scripts/aws/check-config.sh "$ROLE_KIND"
 
     # Optional secret: a JSON list of CIDRs allowed to reach the ALB. Each element is masked before Terraform can print
     # it. The apply requires it (set it to ["0.0.0.0/0"] to open the ALB on purpose); this runs before the role is

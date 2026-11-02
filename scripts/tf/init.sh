@@ -16,6 +16,6 @@ valid_env "$env_name" || die "ENV must be lowercase letters and digits (${ENV_NA
 require_cmd terraform "run scripts/ci/install-tools.sh"
 
 dir="infra/terraform/envs/${env_name}"
-bucket="sis-${env_name}-tfstate-${account}-${region}-an"
+bucket="$(state_bucket "$env_name" "$account" "$region")"
 terraform -chdir="$dir" init -input=false -lockfile=readonly -backend-config="bucket=${bucket}"
 terraform -chdir="$dir" validate -no-color
