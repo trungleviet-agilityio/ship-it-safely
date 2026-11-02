@@ -61,6 +61,10 @@ sent to CloudWatch Logs. `AssumeRoleWithWebIdentity` is logged as a read-only ev
 - a call is refused (any `errorCode`: wrong `sub`, `ref`, `job_workflow_ref`, or a session longer than the cap);
 - a call succeeds with a `sub` other than the trusted ones (a trust mistake).
 
+The email is a few plain lines, not the raw event: an input transformer on the target picks the time and region,
+the error code (blank on a success, which means the trust let in an unexpected subject), the role, the `sub`, the
+session name and the source IP. The full event stays in CloudTrail event history.
+
 The negative tests in `oidc-smoke-test` raise these alerts on purpose. If the account already has a trail, set
 `create_trail = false` so management events are not paid for twice; the rule and topic are still created.
 The rule is regional: STS calls through the global endpoint are logged in us-east-1 and do not reach it. The

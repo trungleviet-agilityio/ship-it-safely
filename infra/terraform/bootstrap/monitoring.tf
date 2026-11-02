@@ -229,7 +229,32 @@ resource "aws_cloudwatch_event_rule" "oidc_unexpected" {
   })
 }
 
+# A few plain lines instead of the raw event JSON (ADR 0007 checkpoint A5); the full event stays in CloudTrail.
+# Each line is its own quoted string, which is how EventBridge emits multi-line text. A path missing from the event
+# (errorCode on a success) creates no variable, so that line ends blank.
 resource "aws_cloudwatch_event_target" "security_alerts" {
   rule = aws_cloudwatch_event_rule.oidc_unexpected.name
   arn  = aws_sns_topic.security_alerts.arn
+
+  input_transformer {
+    input_paths = {
+      time    = "$.detail.eventTime"
+      region  = "$.detail.awsRegion"
+      sub     = "$.detail.userIdentity.userName"
+      role    = "$.detail.requestParameters.roleArn"
+      session = "$.detail.requestParameters.roleSessionName"
+      error   = "$.detail.errorCode"
+      ip      = "$.detail.sourceIPAddress"
+    }
+    input_template = <<-EOT
+      "GitHub OIDC alert from rule <aws.events.rule-name>: an AssumeRoleWithWebIdentity call was refused, or granted to a subject outside the trust."
+      "Time: <time> (<region>)"
+      "Error code (blank: the role was granted, check the trust): <error>"
+      "Role: <role>"
+      "Subject (sub): <sub>"
+      "Session: <session>"
+      "Source IP: <ip>"
+      "Full event: CloudTrail event history, event name AssumeRoleWithWebIdentity."
+    EOT
+  }
 }
