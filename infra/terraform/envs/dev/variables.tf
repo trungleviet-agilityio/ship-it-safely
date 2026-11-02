@@ -85,3 +85,16 @@ variable "alb_ingress_cidrs_json" {
     error_message = "alb_ingress_cidrs_json must be empty or a JSON list of at least one IPv4 CIDR."
   }
 }
+
+variable "promotion_target_env" {
+  type        = string
+  description = "Environment that promotes this environment's images (ADR 0008 P9): \"prod\" in dev, empty elsewhere. Set in terraform.tfvars."
+  default     = ""
+}
+
+variable "promotion_target_account_id" {
+  type        = string
+  description = "Account of promotion_target_env. Never committed: CI passes TF_VAR_promotion_target_account_id from the secret PROMOTION_TARGET_ACCOUNT_ID (env dev) or AWS_ACCOUNT_ID_PROD (PR plan)."
+  default     = ""
+  sensitive   = true
+}

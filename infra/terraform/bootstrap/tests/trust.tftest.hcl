@@ -273,3 +273,34 @@ run "requested_region_pinned_on_every_role" {
     error_message = "every role must require aws:RequestedRegion = the bootstrap region, exactly once"
   }
 }
+
+# ADR 0008 P7: a promoted environment (prod) trusts app-promote.yml for deploy; apply is unchanged.
+run "promoted_env_trusts_app_promote" {
+  command = plan
+
+  variables {
+    env                         = "prod"
+    promotion_source_account_id = "222222222222"
+  }
+
+  assert {
+    condition = toset(flatten([
+      for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:job_workflow_ref" && c.test == "StringEquals"
+    ])) == toset(["trungleviet-agilityio/ship-it-safely/.github/workflows/app-promote.yml@refs/heads/main"])
+    error_message = "a promoted env's deploy job_workflow_ref must be exactly the app-promote file at main"
+  }
+
+  assert {
+    condition = flatten([
+      for c in data.aws_iam_policy_document.trust["deploy"].statement[0].condition : c.values
+      if c.variable == "token.actions.githubusercontent.com:sub"
+    ]) == ["repo:trungleviet-agilityio@111/ship-it-safely@222:environment:prod"]
+    error_message = "a promoted env's deploy sub must end with :environment:prod"
+  }
+
+  assert {
+    condition     = local.workflow_files.apply == ["terraform-iac.yml", "terraform-destroy.yml"]
+    error_message = "apply files do not depend on promotion"
+  }
+}

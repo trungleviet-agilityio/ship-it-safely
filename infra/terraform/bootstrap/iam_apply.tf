@@ -369,6 +369,8 @@ data "aws_iam_policy_document" "apply" {
       "ecr:GetLifecyclePolicy",
       "ecr:DeleteLifecyclePolicy",
       "ecr:GetRepositoryPolicy",
+      "ecr:SetRepositoryPolicy",
+      "ecr:DeleteRepositoryPolicy",
       "ecr:TagResource",
       "ecr:UntagResource",
       "ecr:ListTagsForResource",

@@ -498,6 +498,18 @@ write_hardening "$tmp/exc/app-deploy.yml" other "$cred" '          egress-policy
 case_check guard/harden-runner.sh "another app-deploy job without it" "disable-sudo-and-containers must be true" "$tmp/exc/app-deploy.yml"
 write_hardening "$tmp/exc/other.yml" deploy "$cred" '          egress-policy: block\n          disable-telemetry: true\n'
 case_check guard/harden-runner.sh "deploy in another file without it" "disable-sudo-and-containers must be true" "$tmp/exc/other.yml"
+# The one source registry exception (ADR 0008 P8): only app-promote.yml promote may name the dev account in a host.
+# shellcheck disable=SC2016  # workflow expressions, not shell
+src_host='            ${{ secrets.AWS_ACCOUNT_ID_DEV }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443\n'
+write_hardening "$tmp/exc/app-promote.yml" promote "$cred" "${block_with}${hosts_head}${src_host}"
+case_check guard/harden-runner.sh "app-promote promote with the dev registry host" ok "$tmp/exc/app-promote.yml"
+write_hardening "$tmp/exc/app-promote.yml" other "$cred" "${block_with}${hosts_head}${src_host}"
+case_check guard/harden-runner.sh "another app-promote job with the dev registry host" "uses the expression 'secrets.AWS_ACCOUNT_ID_DEV'" "$tmp/exc/app-promote.yml"
+write_hardening "$tmp/exc/other.yml" promote "$cred" "${block_with}${hosts_head}${src_host}"
+case_check guard/harden-runner.sh "promote in another file with the dev registry host" "uses the expression 'secrets.AWS_ACCOUNT_ID_DEV'" "$tmp/exc/other.yml"
+# shellcheck disable=SC2016  # workflow expressions, not shell
+write_hardening "$tmp/exc/app-promote.yml" promote "$cred" "${block_with}${hosts_head}"'            ${{ secrets.AWS_ACCOUNT_ID_QA }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com:443\n'
+case_check guard/harden-runner.sh "app-promote promote with another account secret" "uses the expression 'secrets.AWS_ACCOUNT_ID_QA'" "$tmp/exc/app-promote.yml"
 # A job without credentials in audit may list nothing; a missing harden-runner first step fails.
 printf 'name: x\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo hi\n' >"$tmp/h.yml"
 expect_fail "job with no harden-runner first step" "first step is not step-security/harden-runner" "$ROOT/scripts/guard/harden-runner.sh" "$tmp/h.yml"

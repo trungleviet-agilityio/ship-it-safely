@@ -13,4 +13,6 @@ module "app_ecs" {
   log_retention_days          = var.log_retention_days
   secret_recovery_window_days = var.secret_recovery_window_days
   alb_ingress_cidrs           = local.alb_ingress_cidrs
+  promotion_target_env        = var.promotion_target_env
+  promotion_target_account_id = var.promotion_target_account_id
 }

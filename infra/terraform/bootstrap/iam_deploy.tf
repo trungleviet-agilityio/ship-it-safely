@@ -36,6 +36,18 @@ data "aws_iam_policy_document" "deploy" {
     resources = [local.ecr_repo_app]
   }
 
+  # Promoted environments only (ADR 0008 P9): pull the image by digest from the one source repository. The source
+  # repository policy must also allow this role (modules/app-ecs, promotion_target_*), so both accounts agree.
+  dynamic "statement" {
+    for_each = local.is_promoted ? [local.ecr_repo_source] : []
+    content {
+      sid       = "EcrPullFromSource"
+      effect    = "Allow"
+      actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+      resources = [statement.value]
+    }
+  }
+
   statement {
     sid       = "RegisterTaskDef"
     effect    = "Allow"

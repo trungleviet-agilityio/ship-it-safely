@@ -10,12 +10,12 @@ output "plan_role_arn" {
 }
 
 output "apply_role_arn" {
-  description = "Role for apply jobs in the dev environment."
+  description = "Role for apply jobs in this environment."
   value       = aws_iam_role.apply.arn
 }
 
 output "deploy_role_arn" {
-  description = "Role for deploy jobs in the dev environment."
+  description = "Role for deploy jobs in this environment."
   value       = aws_iam_role.deploy.arn
 }
 
@@ -52,4 +52,9 @@ output "workflow_files" {
 output "security_alerts_topic_name" {
   description = "SNS topic that receives unexpected GitHub OIDC assumption alerts. Confirm the email subscription once."
   value       = aws_sns_topic.security_alerts.name
+}
+
+output "deploy_workflow_file" {
+  description = "Workflow file the deploy role trusts (app-deploy.yml in the build env, app-promote.yml in a promoted env)."
+  value       = local.workflow_files.deploy[0]
 }
