@@ -3,6 +3,8 @@
 # fixture values and the stub aws, docker and terraform commands. Source it; do not run it.
 # Written for bash 3.2, like lib.sh.
 
+# The fixtures name resources with the prefix sis, so the self-tests pass whatever project.env holds (a fork).
+export PROJECT_PREFIX=sis
 # shellcheck source=scripts/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 

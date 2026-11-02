@@ -47,12 +47,12 @@ run "committed_tfvars_plan_this_envs_stack" {
   command = plan
 
   assert {
-    condition     = module.app_ecs.cluster_name == "sis-${var.env}-cluster" && module.app_ecs.service_name == "sis-${var.env}-app"
+    condition     = module.app_ecs.cluster_name == "${var.prefix}-${var.env}-cluster" && module.app_ecs.service_name == "${var.prefix}-${var.env}-app"
     error_message = "the committed tfvars must produce the bootstrap name contract for var.env"
   }
 
   assert {
-    condition     = module.app_ecs.secret_name == "sis/${var.env}/app-api-key"
+    condition     = module.app_ecs.secret_name == "${var.prefix}/${var.env}/app-api-key"
     error_message = "secret shell name follows the contract"
   }
 }
@@ -73,12 +73,12 @@ run "root_outputs_are_exactly_the_account_free_set" {
 
   assert {
     condition = (
-      output.cluster_name == "sis-${var.env}-cluster"
-      && output.service_name == "sis-${var.env}-app"
-      && output.task_family == "sis-${var.env}-app"
-      && output.ecr_repository_name == "sis-${var.env}-app"
+      output.cluster_name == "${var.prefix}-${var.env}-cluster"
+      && output.service_name == "${var.prefix}-${var.env}-app"
+      && output.task_family == "${var.prefix}-${var.env}-app"
+      && output.ecr_repository_name == "${var.prefix}-${var.env}-app"
       && output.log_group_name == "/ecs/sis-${var.env}-app"
-      && output.secret_name == "sis/${var.env}/app-api-key"
+      && output.secret_name == "${var.prefix}/${var.env}/app-api-key"
     )
     error_message = "output values must be the plain names from the bootstrap contract"
   }

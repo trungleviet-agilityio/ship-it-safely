@@ -26,7 +26,10 @@ Infrastructure as code under `infra/terraform/`. Part of the [standards index](R
 ## Naming and inputs
 
 - Resource and variable names are `snake_case`. AWS resource names use `<prefix>-<env>-<thing>`,
-  including GitHub Actions roles (`sis-dev-gha-plan`). Names `envs/<env>` creates must match the
+  including GitHub Actions roles (`sis-dev-gha-plan`). The prefix comes from `project.env` (ADR 0011);
+  Terraform holds copies of it (bootstrap `prefix` default, `envs/*/terraform.tfvars`) that
+  `scripts/project.sh check` keeps equal. Tests assert names through `var.prefix`, or pin `prefix = "sis"`
+  as a fixture, never through the committed value. Names `envs/<env>` creates must match the
   bootstrap `resource_names` output, because the apply and deploy roles are scoped by them
   (ADR 0002).
 - Every variable has a `type` and a `description`; add `validation` where a bad value would only

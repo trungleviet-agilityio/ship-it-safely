@@ -106,7 +106,7 @@ jwt_claim() {
 }
 
 # web_identity_call <role: plan|apply|deploy> <token> [aws args...]: run an unsigned sts assume-role-with-web-identity for
-# role sis-<ENV>-gha-<role> in ACCOUNT and REGION. Callers mask ACCOUNT first (a mask printed inside a captured call never reaches the log). It only builds and runs the command, so
+# role gha_role_name <role> in ACCOUNT and REGION. Callers mask ACCOUNT first (a mask printed inside a captured call never reaches the log). It only builds and runs the command, so
 # pass it to assert_denied or run_capture. A success holds credentials: never print its stdout.
 web_identity_call() {
   local role="$1" token="$2"
@@ -116,7 +116,7 @@ web_identity_call() {
   case "$role" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$role'" ;; esac
   # No credentials are needed or sent: --no-sign-request.
   aws sts assume-role-with-web-identity \
-    --role-arn "arn:aws:iam::${ACCOUNT}:role/sis-${ENV}-gha-${role}" \
+    --role-arn "arn:aws:iam::${ACCOUNT}:role/$(gha_role_name "$role")" \
     --role-session-name "gha-oidc-negative-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${role}" \
     --web-identity-token "$token" --region "$REGION" --no-sign-request "$@"
 }
@@ -169,8 +169,15 @@ sha256_of() {
 
 # --- App deploy contract: the one place for names and limits the deploy scripts share.
 
+# The project prefix of every name (project.env). PROJECT_PREFIX in the environment wins, so the self-tests can pin
+# their fixture prefix; nothing else sets it. The Terraform validations use the same pattern.
+PREFIX_RE='^[a-z][a-z0-9]{1,9}$'
+PROJECT_PREFIX="${PROJECT_PREFIX:-$(sed -n 's/^PREFIX=//p' "$ROOT/project.env" 2>/dev/null || true)}"
+[[ "$PROJECT_PREFIX" =~ $PREFIX_RE ]] \
+  || die "project.env must set PREFIX to 2 to 10 lowercase letters or digits, starting with a letter, got '${PROJECT_PREFIX}'"
+
 # image_name <commit sha>: the local image name every build, smoke, scan and push step uses.
-image_name() { printf 'sis-app:%s' "$1"; }
+image_name() { printf '%s-app:%s' "$PROJECT_PREFIX" "$1"; }
 
 # The one rule for an environment name (ADR 0008, P4): 2 to 8 lowercase letters and digits, starting with a letter. The
 # cap keeps every AWS name built from it in its limit. The Terraform validations use the same pattern. RESERVED_ENVS
@@ -201,10 +208,22 @@ env_root() {
 # app_names: derive the resource names of one environment from ENV (default dev; ADR 0001, naming).
 app_names() {
   require_env
-  CLUSTER="sis-${ENV}-cluster" SERVICE="sis-${ENV}-app" FAMILY="sis-${ENV}-app" REPOSITORY="sis-${ENV}-app"
-  EXEC_ROLE="sis-${ENV}-ecs-exec" TASK_ROLE="sis-${ENV}-ecs-task"
-  SECRET_ID="sis/${ENV}/app-api-key" LOG_GROUP="/ecs/sis-${ENV}-app"
+  local p="${PROJECT_PREFIX}-${ENV}"
+  CLUSTER="${p}-cluster" SERVICE="${p}-app" FAMILY="${p}-app" REPOSITORY="${p}-app"
+  EXEC_ROLE="${p}-ecs-exec" TASK_ROLE="${p}-ecs-task"
+  SECRET_ID="${PROJECT_PREFIX}/${ENV}/app-api-key" LOG_GROUP="/ecs/${p}-app"
 }
+
+# gha_role_name <plan|apply|deploy>: the name of a GitHub Actions role of ENV (default dev; bootstrap iam_*.tf).
+gha_role_name() {
+  require_env
+  case "$1" in plan | apply | deploy) ;; *) die "role must be plan, apply or deploy, got '$1'" ;; esac
+  printf '%s-%s-gha-%s' "$PROJECT_PREFIX" "$ENV" "$1"
+}
+
+# state_bucket <env> <account> <region>: the Terraform state bucket of an environment (ADR 0002, B8). It holds the
+# account ID, so callers never print it.
+state_bucket() { printf '%s-%s-tfstate-%s-%s-an' "$PROJECT_PREFIX" "$1" "$2" "$3"; }
 
 # ecs_service_status <cluster> <service>: set SERVICE_STATUS to ACTIVE, DRAINING, INACTIVE or MISSING. MISSING covers
 # no cluster and the answers "None", "MISSING" and empty. Any other error or status dies with redacted text, so a

@@ -22,8 +22,11 @@ Tool versions, the `Makefile` and `scripts/`. Part of the [standards index](READ
   `.SHELLFLAGS`).
 - Scripts live in one folder per domain: `tf/`, `image/`, `ecs/`, `aws/`, `guard/` (workflow policy checks)
   and `ci/` (tool install, venv, self-test runner). Names drop the domain prefix (`scripts/tf/init.sh`).
-  `scripts/lib.sh` holds shared functions; `scripts/names.sh <image|app|role>` prints derived names; a
-  one-line wrapper around a `lib.sh` function belongs in `names.sh`, not in a new file.
+  `scripts/lib.sh` holds shared functions; `scripts/names.sh <image|app|env-root|gha-role|role>` prints
+  derived names; a one-line wrapper around a `lib.sh` function belongs in `names.sh`, not in a new file.
+- Every name starts with the project prefix from `project.env` (`PROJECT_PREFIX` in `lib.sh`). Never write
+  the prefix literally in a script or workflow; derive it (`names.sh`, `gha_role_name`, `state_bucket`). The
+  few copies that cannot read the file are owned by `scripts/project.sh` (ADR 0011).
 - Scripts start with `#!/usr/bin/env bash` and `source "$(dirname "$0")/../lib.sh"`, which sets
   `set -Eeuo pipefail`, `ROOT`, `log`/`ok`/`warn`/`die` and `require_cmd`. Messages go to stderr.
 - Write for bash 3.2: no `mapfile`, no associative arrays, and never expand an empty array under

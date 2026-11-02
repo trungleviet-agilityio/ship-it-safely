@@ -11,7 +11,7 @@ FULL_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo local)
 IMAGE := $(shell scripts/names.sh image $(FULL_SHA))
 
 .DEFAULT_GOAL := help
-.PHONY: help up down test image smoke scan verify venv lint tf-check docs new-env check
+.PHONY: help up down test image smoke scan verify venv lint tf-check docs new-env set-prefix check
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,10 +48,11 @@ verify: ## Build, smoke test and scan in one go (what app-ci runs)
 
 venv: .venv-ci/.installed ## Hash-locked CI venv (.venv-ci) for pre-commit and the YAML trigger check
 
-lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint, the env parity guard and the CI helper self-tests
+lint: .venv-ci/.installed ## pre-commit hooks on all files, plus hadolint, shellcheck, actionlint, the prefix and env parity guards and the CI helper self-tests
 	pre-commit run --all-files
 	hadolint app/Dockerfile
 	shellcheck -x $$(find scripts -name '*.sh' | sort)
+	scripts/project.sh check
 	scripts/guard/env-parity.sh
 	scripts/ci/selftest.sh
 	$(if $(wildcard .github/workflows/*.yml),actionlint,@echo "no workflows yet, skipping actionlint")
@@ -68,5 +69,10 @@ new-env: ## Clone an environment: make new-env ENV=qa [FROM=dev] [CIDR=10.N.0.0/
 	@$(if $(filter command line,$(origin STRATEGY)),echo "STRATEGY was removed by ADR 0008 amendment S" >&2; exit 2,:)
 	@$(if $(filter command line,$(origin ENV)),:,echo "usage: make new-env ENV=<name> [FROM=dev] [CIDR=...] [DRY_RUN=1]" >&2; exit 2)
 	scripts/tf/new-env.sh "$(ENV)" $(if $(FROM),--from "$(FROM)") $(if $(CIDR),--cidr "$(CIDR)") $(if $(DRY_RUN),--dry-run)
+
+# Like ENV above, PREFIX must come from the command line.
+set-prefix: ## Rename the project for a fork, before its first bootstrap: make set-prefix PREFIX=acme
+	@$(if $(filter command line,$(origin PREFIX)),:,echo "usage: make set-prefix PREFIX=<2 to 10 lowercase letters or digits>" >&2; exit 2)
+	scripts/project.sh set "$(PREFIX)"
 
 check: lint test tf-check ## Everything a PR must pass

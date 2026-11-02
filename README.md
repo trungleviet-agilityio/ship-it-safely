@@ -133,6 +133,27 @@ Without `DRY_RUN` it writes `envs/qa/` (tracked files of `envs/dev/` only, with 
 secrets, and the workflow lines to add. It never calls `terraform`, `aws` or `gh`, and never writes an account
 ID. Names match `^[a-z][a-z0-9]{1,7}$`.
 
+### Using this repo as a template for another product
+
+The pipeline fits any HTTP service that ships as one container image to ECS Fargate behind an ALB, in any
+language. Every AWS name is `<prefix>-<env>-<thing>`, and the prefix lives in one file,
+[`project.env`](project.env) (ADR 0011). In a fresh fork, before any bootstrap:
+
+```bash
+make set-prefix PREFIX=acme
+```
+
+It rewrites `project.env` and the few copies that cannot read it (Terraform defaults and tfvars, the state bucket
+host in the harden-runner allowlists, the compose image); `make lint` fails if one drifts later. Then:
+
+1. Replace `app/` and the lint and test steps of `app-ci.yml`. Keep the app contract: one container port and a
+   health path (module inputs `container_port`, `health_check_path`), a `/version` endpoint that reports the
+   commit SHA and image digest, no writes to disk, secrets read from the environment.
+2. More secrets or a database: extend `modules/app-ecs` (the secret shell) or add a module next to it.
+3. Bootstrap each account and set the GitHub environments and secrets as in [Setup](#setup).
+
+Changing the prefix on a live project names new resources; nothing in AWS is renamed.
+
 ## How the trust works
 
 GitHub Actions never holds AWS keys. Each job asks GitHub for an OIDC token and exchanges it with AWS STS for
@@ -160,7 +181,8 @@ Gates outside the trust policy:
 - **Security alert:** a CloudTrail trail plus an EventBridge rule email you (SNS) about every refused
   `AssumeRoleWithWebIdentity` in ap-southeast-1 and any assumption with a `sub` other than the two trusted ones
   (ADR 0007 S8). The region pin means a success can only happen there; refused probes in other regions are not
-  alerted (accepted: they grant nothing). Diagram:
+  alerted (accepted: they grant nothing). The email is a few plain lines (time, error code, role, `sub`,
+  session, source IP), not the raw event. Diagram:
   [bootstrap security alert](docs/diagrams/bootstrap-security-alert.drawio.png).
 
 ## Pipelines (`.github/workflows/`)

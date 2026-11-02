@@ -23,6 +23,8 @@ mock_provider "aws" {
 }
 
 variables {
+  # The fixture names use the prefix sis, whatever project.env holds (a fork).
+  prefix          = "sis"
   aws_account_id  = "123456789012"
   github_owner_id = "111"
   github_repo_id  = "222"
@@ -179,6 +181,38 @@ run "alert_rule_pattern" {
   assert {
     condition     = aws_cloudwatch_event_target.security_alerts.rule == "sis-dev-oidc-unexpected"
     error_message = "the target must hang off the alert rule"
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_event_target.security_alerts.input_transformer) == 1
+      && aws_cloudwatch_event_target.security_alerts.input_transformer[0].input_paths == tomap({
+        time    = "$.detail.eventTime"
+        region  = "$.detail.awsRegion"
+        sub     = "$.detail.userIdentity.userName"
+        role    = "$.detail.requestParameters.roleArn"
+        session = "$.detail.requestParameters.roleSessionName"
+        error   = "$.detail.errorCode"
+        ip      = "$.detail.sourceIPAddress"
+      })
+    )
+    error_message = "the alert email is plain lines (time, region, error, role, sub, session, source IP), not the raw event"
+  }
+
+  assert {
+    condition = alltrue([
+      for line in split("\n", trimspace(aws_cloudwatch_event_target.security_alerts.input_transformer[0].input_template)) :
+      can(regex("^\"[^\"]*\"$", line))
+    ])
+    error_message = "every template line must be one double-quoted string (EventBridge multi-line text), with no inner quotes"
+  }
+
+  assert {
+    condition = alltrue([
+      for v in ["time", "region", "error", "role", "sub", "session", "ip"] :
+      strcontains(aws_cloudwatch_event_target.security_alerts.input_transformer[0].input_template, "<${v}>")
+    ])
+    error_message = "the template must use every input path"
   }
 }
 

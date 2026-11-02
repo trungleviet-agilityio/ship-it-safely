@@ -10,6 +10,7 @@ on:
       - app/**
       - .github/workflows/app-ci.yml
       - scripts/lib.sh
+      - project.env
       - scripts/image/smoke.sh
       - scripts/image/build.sh
       - scripts/ci/requirements.txt

@@ -37,6 +37,7 @@ on:
       - scripts/tf/mask-cidrs.sh
       - scripts/aws/redact-account-ids.sh
       - scripts/lib.sh
+      - project.env
       - mise.toml
       - .tflint.hcl
   push:
