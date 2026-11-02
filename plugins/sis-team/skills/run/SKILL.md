@@ -1,6 +1,6 @@
 ---
 name: run
-description: Build and verify one PLAN.md phase of the ship-it-safely lab with the sis-team agents - build agents in parallel worktrees, merge, update docs, then verify agents in parallel, then stop at the checkpoint. Use as /sis-team:run <phase>.
+description: Build and verify one phase of the ship-it-safely lab with the sis-team agents - build agents in parallel worktrees, merge, update docs, then verify agents in parallel, then stop at the checkpoint. Use as /sis-team:run <phase>.
 argument-hint: <phase number>
 ---
 
@@ -14,7 +14,7 @@ Phase: `$ARGUMENTS` (ask for it if empty).
   worktrees from the default branch, so anything uncommitted is invisible to them: if `git status` is not
   clean, stop and ask the user to commit first.
 - `docs/adr/` has an `accepted` ADR for this phase. If not, tell the user to run `/sis-team:plan <phase>`
-  (Phase 0 may skip this: it follows `PLAN.md` §6 directly).
+  (Phase 0 may skip this: it follows the working plan directly).
 - Create a feature branch `phase-<n>-<slug>` for the merged result.
 
 ## 1. Build (parallel)
@@ -41,7 +41,7 @@ You own the repo `README.md` and `docs/**` (ADR 0001 D14); build agents never ed
 docs this phase changed, from the ADR and the merged diff:
 
 - `README.md`: setup steps, commands, variables, ports and outputs that the phase added or changed, plus any
-  section `PLAN.md` asks for in this phase (for example the trust conditions, cost and teardown notes).
+  section the working plan asks for in this phase (for example the trust conditions, cost and teardown notes).
 - `docs/**` other than `docs/adr/`: runbooks or notes the phase calls for.
 - Write only what the code does now. Every command must match a real script, target or workflow; no account
   IDs or emails (D2).
@@ -67,7 +67,7 @@ Commit on the feature branch (Conventional Commit, per phase). Then report:
 
 1. What was built (files, one line each).
 2. A verify table: agent, result, open findings.
-3. The exact commands the user runs by hand for this phase's checkpoint in `PLAN.md`, such as
+3. The exact commands the user runs by hand for this phase's checkpoint in the working plan (kept outside the repo; its path is in `CLAUDE.local.md`), such as
    `terraform apply`, `aws secretsmanager put-secret-value`, GitHub environment setup, `git push` and PR.
    Never run them yourself.
 

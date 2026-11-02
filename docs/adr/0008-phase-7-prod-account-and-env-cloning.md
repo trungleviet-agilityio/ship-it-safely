@@ -443,7 +443,7 @@ marker `terraform-iac:plan:<env>` and every concurrency group key stay as they a
 
 ## Amendment S: PR B scope for the deployment path (2026-10-30)
 
-PLAN v3 makes the goal the deployment path: PR preview, dev, promote, rollback (PLAN §1). `BLUE_GREEN` serves
+PLAN v3 makes the goal the deployment path: PR preview, dev, promote, rollback (`docs/requirements.md`, Goal). `BLUE_GREEN` serves
 a different goal (safe traffic shifting under real load) and is the largest part of PR B, so it leaves the
 phase. Promote and isolation stay; rollback becomes a use of promote.
 

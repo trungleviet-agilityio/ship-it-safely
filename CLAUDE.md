@@ -1,12 +1,15 @@
 # ship-it-safely
 
 Lab: ship a small containerized app to AWS ECS Fargate through GitHub Actions + Terraform, with OIDC, least
-privilege and supply-chain hardening. `PLAN.md` is the requirements source; `docs/adr/` holds locked decisions
-(read `0001-lab-decisions.md` first).
+privilege and supply-chain hardening. `docs/requirements.md` is the requirements source (goal, scope, `FR-*`,
+`NFR-*`); `docs/adr/` holds locked decisions (read `0001-lab-decisions.md` first). The phase plan and the
+progress tracker are the maintainer's working notes, kept outside the repo; their paths are in `CLAUDE.local.md`.
 
 ## Rules
 
-- Work one phase of `PLAN.md` at a time and stop at every **Checkpoint** with the exact commands for the user.
+- Work one phase of the working plan at a time and stop at every **Checkpoint** with the exact commands for the
+  user. After a checkpoint, update the progress note (outside the repo), never a file in the repo.
+- Never add `PLAN.md`, `PROGRESS.md` or another copy of the working notes to the repo (`.gitignore` refuses them).
 - Never run `terraform apply`, `terraform destroy`, `terraform import`, `terraform state rm|mv|push`,
   `aws secretsmanager put-secret-value|get-secret-value`, or `aws iam create-access-key`. Prepare the command;
   the user runs it (NFR-9). Guardrails: `.claude/settings.json` deny rules and the `sis-team` guard hook.

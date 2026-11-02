@@ -9,8 +9,7 @@
 A small containerized app shipped to AWS ECS Fargate through GitHub Actions + Terraform: OIDC instead of
 access keys, separate plan/apply/deploy roles, Secrets Manager per environment, supply-chain hardening.
 
-- Requirements and phases: [`PLAN.md`](PLAN.md)
-- Phase status: [`PROGRESS.md`](PROGRESS.md)
+- Requirements (goal, scope, `FR-*`, `NFR-*`): [`docs/requirements.md`](docs/requirements.md)
 - Locked decisions: [`docs/adr/`](docs/adr/)
 - Agent team: [`plugins/sis-team/`](plugins/sis-team/)
 - Diagrams: [overview](docs/diagrams/overview.drawio.png), [infra pipeline](docs/diagrams/ci-cd.drawio.png),
@@ -271,7 +270,7 @@ public repo. **Destroy `envs/dev` at the end of every session.**
 
 Every session: `terraform-destroy` for `dev`, as in the session flow above. The bootstrap stack stays.
 
-End of the lab (PLAN §9), in this order:
+End of the lab ([requirements, cost and cleanup](docs/requirements.md#cost-and-cleanup)), in this order:
 
 1. `terraform-destroy` for every environment (prod first, once Phase 7 exists). Run it once more and check it
    reports "nothing to destroy".
@@ -311,7 +310,7 @@ Troubleshooting:
 | Env | Strategy | Why |
 |---|---|---|
 | dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `scripts/ecs/wait-deployment.sh` fails the run on a rollback |
-| prod (Phase 7) | `ROLLING` with the circuit breaker, like dev. Promote copies the dev digest; **rollback promotes an earlier green SHA**, whose image is already in prod | The goal is the deployment path (PLAN v3): one digest from PR to prod, and a rollback with no rebuild |
+| prod (Phase 7) | `ROLLING` with the circuit breaker, like dev. Promote copies the dev digest; **rollback promotes an earlier green SHA**, whose image is already in prod | The goal is the deployment path ([requirements](docs/requirements.md#the-deployment-path-v3)): one digest from PR to prod, and a rollback with no rebuild |
 | Later | ECS built-in `BLUE_GREEN`, `CANARY` or `LINEAR` | Need real traffic and alarms that mean something: 10% of almost no requests gives no signal. `BLUE_GREEN` was designed in ADR 0008 and left out by amendment S |
 
 Branching is trunk-based (FR-14): a PR gets a preview (Phase 8), merge to `main` deploys dev, and
@@ -342,7 +341,7 @@ builds from the service's current revision, not Terraform's latest family revisi
 
 ## Phases
 
-Status per phase: [`PROGRESS.md`](PROGRESS.md).
+Each phase has its decisions and checkpoint results in one ADR under [`docs/adr/`](docs/adr/).
 
 | Phase | Needs AWS? | You do by hand |
 |---|---|---|

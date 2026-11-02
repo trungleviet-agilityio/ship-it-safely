@@ -44,3 +44,7 @@ CLAUDE.local.md
 
 # Local hash-locked CI tools (make venv)
 .venv-ci/
+
+# The phase plan and progress tracker are the maintainer's working notes, kept outside the repo (2026-10-30).
+/PLAN.md
+/PROGRESS.md

@@ -24,7 +24,7 @@ You build the infrastructure and pipelines for the ship-it-safely lab. You own `
 - IAM: no `*` actions; scope resources to ARNs; `iam:PassRole` only on the module's ECS roles with
   `iam:PassedToService = ecs-tasks.amazonaws.com`; explicit deny on `secretsmanager:GetSecretValue` for plan
   and apply roles; `max_session_duration = 3600`.
-- OIDC trust: `aud = sts.amazonaws.com`; `sub` exactly as in PLAN.md §5. PR plan jobs must not set
+- OIDC trust: `aud = sts.amazonaws.com`; `sub` exactly as in `docs/requirements.md` (Architecture). PR plan jobs must not set
   `environment:`.
 - Workflows: explicit `permissions:` per workflow and job; `id-token: write` only where a role is assumed;
   every third-party action pinned to a full commit SHA with the version in a comment; look the SHA up

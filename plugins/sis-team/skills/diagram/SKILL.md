@@ -21,7 +21,7 @@ Draw only what the repo says. Read, in this order, and note `file:line` for ever
 
 1. `infra/terraform/**` (resources, names from `locals.tf`, the `resource_names` output),
    `.github/workflows/*.yml` (jobs, `environment:`, which role each job assumes).
-2. `docs/adr/*.md` and `PLAN.md` §5 for the intended design.
+2. `docs/adr/*.md` and `docs/requirements.md` (Architecture) for the intended design.
 
 Anything in the ADR or PLAN but not in code yet is **planned**: draw it with the planned edge/border style and
 label it `(planned, Phase N)`. Never invent a service, name or flow. Use names (`sis-dev-gha-plan`), never

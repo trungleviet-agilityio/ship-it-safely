@@ -1,14 +1,14 @@
-# Ship-it-Safely Lab — Requirements & Implementation Plan (v2)
+# Requirements
 
-> Hand-off file for Claude Code. Read this whole file first, then work **one phase at a time** and stop at each checkpoint.
-> Pattern source: [Configuring Terraform IaC pipelines… (DevOps.dev, Oct 2026)](https://blog.devops.dev/configuring-terraform-iac-pipelines-to-provision-cloud-resources-in-cloud-and-kubernetes-3ff863fe983e)
-> v2 changes: ECS Fargate instead of EKS · local/dev/prod environments · multi-account-ready · Secrets Manager per env · supply-chain hardening.
-> v3 changes (2026-10-30): the goal is the **deployment path** (PR preview, dev, promote, rollback); prod drops `BLUE_GREEN`; Phase 8 adds PR previews.
-> Status per phase: [`PROGRESS.md`](PROGRESS.md). Locked decisions: [`docs/adr/`](docs/adr/). When this file and an ADR disagree, the ADR wins.
+What this lab builds and the rules it holds itself to. Requirement IDs (`FR-*`, `NFR-*`) are cited across the code,
+tests and ADRs. Locked decisions live in [`docs/adr/`](adr/); when this file and an ADR disagree, the ADR wins.
+Conventions per domain: [`docs/reference/standards/`](reference/standards/).
 
----
+ADRs 0001 to 0008 cite `PLAN.md` and its sections. On 2026-10-30 that file was split: §1 (goal), §2 (scope), §5
+(architecture), the demo app of §6, §7 (requirements) and §9 (cost) are below; the phase plan, inputs and
+checkpoints are the maintainer's working notes and are not in the repository.
 
-## 1. Goal
+## Goal
 
 "Vibe coding an app is easy; shipping it safely is hard." This lab takes a small containerized app, which already runs locally with `docker compose`, and ships it to **AWS ECS Fargate** through GitHub Actions + Terraform. The security lessons are built into every step:
 
@@ -42,7 +42,7 @@ Done means this demo passes, each step checked by `/version` (SHA and digest):
 Value: reviewers see the change running before merge; prod only ever runs what ran in dev; a bad release is
 undone without a code change.
 
-## 2. Scope
+## Scope
 
 | In scope | Out of scope |
 |---|---|
@@ -54,27 +54,7 @@ undone without a code change.
 | `prod` env in a second AWS account via AWS Organizations, promote by digest, rollback (Phase 7) | Third-party hosting or tunnels (Cloudflare and similar) |
 | PR preview environments in the dev account (Phase 8) | Previews for fork or Dependabot PRs |
 
-## 3. Inputs to fill before starting
-
-| Variable | Example | Value |
-|---|---|---|
-| AWS region | `ap-southeast-1` | `ap-southeast-1` |
-| Dev account ID | `111111111111` | set in `CLAUDE.local.md` (gitignored; ADR 0001 D2) |
-| Prod account ID (Phase 7) | `222222222222` | `TODO / later` |
-| GitHub owner / repo | `my-user/ship-it-safely` | `trungleviet-agilityio/ship-it-safely` (public) |
-| Name prefix | `sis` | `sis` |
-| Budget alert email / monthly USD | `me@example.com` / `20` | set in `CLAUDE.local.md` (gitignored) / `20` |
-| App | existing app with Dockerfile, or generate the sample app (§6) | Generate Ship-it Board in Python 3.13, stdlib only (no dependencies) |
-
-Claude Code: ask the user for any `TODO` value before writing code that depends on it.
-
-## 4. Prerequisites
-
-- Docker + Docker Compose, AWS CLI v2, Terraform `>= 1.11` (S3 native locking is GA from 1.11; ADR 0002 B1), tflint, git, `gh`. Tool versions are pinned in `mise.toml`.
-- An admin login to the dev account for the **bootstrap only**. Prefer IAM Identity Center / SSO short-lived credentials over access keys.
-- **Do not** export admin credentials in the shell where Claude Code runs.
-
-## 5. Architecture
+## Architecture
 
 ```
 local:  docker compose up  (app + .env with fake values)
@@ -95,35 +75,7 @@ Notes from official docs:
 - The OIDC `sub` claim contains the environment name when the job references an environment. It contains `pull_request` only when the job does **not** reference an environment. So PR plan jobs must not set `environment:`.
 - ECS `secrets[].valueFrom` takes the full ARN of a Secrets Manager secret or an SSM parameter.
 
-## 6. Repository layout
-
-```
-.
-├── PLAN.md  README.md  .gitignore  .tflint.hcl  .pre-commit-config.yaml (gitleaks)
-├── app/
-│   ├── Dockerfile               # multi-stage, non-root user, HEALTHCHECK
-│   ├── compose.yaml             # local env
-│   ├── .env.example             # fake values, committed; real .env is gitignored
-│   └── src/...                  # sample: tiny HTTP API with GET /health and GET /
-├── infra/terraform/
-│   ├── bootstrap/               # run locally ONCE PER ACCOUNT: -var-file=accounts/<env>.tfvars
-│   │   ├── accounts/dev.tfvars  accounts/prod.tfvars
-│   │   └── state.tf oidc.tf iam_plan.tf iam_apply.tf iam_deploy.tf budget.tf ...
-│   ├── modules/app-ecs/         # network (public subnets), ECR, ECS cluster/service, ALB,
-│   │                            # task exec/task roles, Secrets Manager secret shells, log group
-│   └── envs/
-│       ├── dev/                 # backend → dev account bucket; uses modules/app-ecs
-│       └── prod/                # Phase 7
-└── .github/workflows/
-    ├── oidc-smoke-test.yml
-    ├── repo-guard.yml           # every PR: zizmor, account-ID guard, gitleaks, trigger allowlist (no AWS)
-    ├── terraform-iac.yml        # plan on PR, apply on main (per env)
-    ├── app-ci.yml               # PR: build, test, scan image (no AWS)
-    ├── app-deploy.yml           # main: build once → push ECR dev → deploy dev
-    ├── app-promote.yml          # dispatch: promote a green SHA's digest → prod; rollback = an earlier SHA (Phase 7)
-    ├── app-preview.yml          # PR: the PR image as a preview in dev, removed on close (Phase 8)
-    └── terraform-destroy.yml    # workflow_dispatch
-```
+## Demo app
 
 **Demo app: "Ship-it Board".** The app is NOT the target of this lab; keep it tiny (one file, about 100 lines, no database, no frontend framework). Use Node or Python, user's choice.
 
@@ -136,7 +88,7 @@ Notes from official docs:
 
 Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Make the `HEALTHCHECK` hit `/health`.
 
-## 7. Requirements
+## Functional and non-functional requirements
 
 ### Functional
 
@@ -174,78 +126,9 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 | NFR-8 | Default tags: `Project`, `Env`, `ManagedBy=terraform`. |
 | NFR-9 | Claude Code never runs `terraform apply`/`destroy` or `aws secretsmanager put-secret-value` against AWS. It prepares the commands and the user runs them. |
 
-## 8. Implementation plan
-
-### Phase 0 — Scaffold + local env (~30 min)
-1. Create the layout, `.gitignore`, `.tflint.hcl`, `.pre-commit-config.yaml` (gitleaks).
-2. App: generate the Ship-it Board (§6). Write a Dockerfile (multi-stage, non-root, `GIT_SHA` build arg), `compose.yaml` and `.env.example` (`APP_ENV=local`, a fake `APP_API_KEY`, `BREAK=false`). Timebox the app to about 30 minutes.
-3. **Checkpoint (user):** `cp app/.env.example app/.env && docker compose -f app/compose.yaml up`. Open `/` and check that it shows `local`, the SHA and `secret_loaded: yes`. `/admin` without the key must return 401. With `BREAK=true`, `/health` must return 500.
-
-### Phase 1 — Bootstrap dev account (~45 min)
-1. Write `bootstrap/` per FR-2 to FR-5, parameterized by `accounts/<env>.tfvars`. Output the role ARNs and bucket name.
-2. fmt / validate / tflint locally.
-3. **Checkpoint (user):** `terraform apply -var-file=accounts/dev.tfvars` using SSO credentials, then migrate state into the bucket (key `bootstrap/terraform.tfstate`).
-4. **Checkpoint (user):** create GitHub environment `dev` (required reviewer = self, `main` only) with secrets `AWS_APPLY_ROLE_ARN` and `AWS_DEPLOY_ROLE_ARN`. Repo secrets `AWS_PLAN_ROLE_ARN_DEV` and `AWS_ACCOUNT_ID_DEV`, repo variable `AWS_REGION` (NFR-1).
-
-### Phase 2 — OIDC smoke test (~15 min)
-1. `oidc-smoke-test.yml`: assume the plan role, run `aws sts get-caller-identity`.
-2. Done when the PR run prints the plan role's assumed-role ARN.
-
-### Phase 3 — Infra pipeline + ECS (~75 min)
-1. `modules/app-ecs` per FR-7 and FR-8. `envs/dev` uses it, with a placeholder image (e.g. a public hello image) until Phase 4.
-2. `terraform-iac.yml` per FR-9, with NFR-2 to NFR-4.
-3. **Checkpoint (user):** PR → read plan comment → merge → approve. Then set the secret value: `aws secretsmanager put-secret-value --secret-id <prefix>/dev/app-api-key --secret-string '<value>'`.
-4. Negative tests: the plan role gets AccessDenied on `GetSecretValue`, and the plan role cannot create resources.
-
-### Phase 4 — App pipeline (~60 min)
-1. `app-ci.yml` (FR-10) and `app-deploy.yml` (FR-11).
-2. **Checkpoint (user):** change `APP_COLOR` or any line of the app in a PR → CI passes → merge → approve → the ALB URL shows the new SHA/color, `APP_ENV=dev` and `secret_loaded: yes`.
-3. Confirm the running task definition references an image **digest**, not a tag.
-
-### Phase 5 — Hardening & teardown (~30 min)
-1. `terraform-destroy.yml` (FR-12).
-2. README: setup, trust conditions explained, cost notes, teardown order, and a "When to move to CodeBuild runners / CodePipeline" section.
-
-### Phase 6 — Supply-chain hardening (~45 min)
-1. Pin every action to a SHA and verify tool checksums (NFR-3).
-2. Add harden-runner (NFR-4). Review the egress log from one run, then consider `block` mode with an allowlist.
-3. Dependabot config, `.terraform.lock.hcl` multi-platform hashes (NFR-5).
-4. gitleaks pre-commit + push protection (NFR-6).
-5. As designed in ADR 0007, in two PRs. **PR A:** Dependabot (monthly, 7-day cooldown), apply and deploy trust
-   pinned by `job_workflow_ref` plus `aws:RequestedRegion` on every role, a CloudTrail trail with an EventBridge
-   rule and SNS email for unexpected GitHub assumptions (NFR-7), negative tests N8 (a PR token is refused by apply
-   and deploy) and N9 (the 1-hour cap), the YAML-parser trigger allowlist, an optional ALB CIDR secret, stricter
-   Terraform policy rules, `.editorconfig`, `CODEOWNERS`, non-executable libraries and `app/compose.yaml`.
-   **PR B:** harden-runner `block` with an explicit allowlist on the jobs that hold AWS credentials.
-6. **Checkpoint (user):** ADR 0007 "Checkpoint A commands", then PR B and "Checkpoint B".
-
-### Phase 7: Prod account, promote and rollback (~90 min)
-1. **User:** create AWS Organizations (from a management account with no workloads), create the prod account, and set up IAM Identity Center access.
-2. Bootstrap prod with `accounts/prod.tfvars`. Create GitHub environment `prod` (required reviewer) with the prod role ARNs.
-3. `envs/prod` (same module, own `tfvars`). Prod deploy job per FR-13.
-4. Rollback per FR-16. Demo: promote SHA A, then SHA B, then A again; `/version` shows each digest in turn.
-5. Negative test: a job in environment `dev` gets AccessDenied when assuming a prod role.
-
-### Phase 8: PR preview environments (~90 min)
-1. `/sis-team:plan 8` first: the ADR settles the URL and routing on the dev ALB, the preview role and its trust
-   (the workflow file comes from the PR ref, so the environment approval is the gate), the app secret for previews,
-   a cap on concurrent previews, and cleanup when a PR closes or the dev stack is down.
-2. `app-preview.yml` (display name App Preview) per FR-17, with harden-runner `block` on the credentialed job.
-3. **Checkpoint (user):** demo steps 1 and 2 of §1, plus: a second PR gets its own URL, a fork PR gets none, and
-   the preview role is refused on the dev service and its secret.
-
-## 9. Cost & cleanup
+## Cost and cleanup
 
 - ALB and Fargate are billed hourly, so destroy `envs/*` after each session (destroy workflow). No NAT gateway by design.
 - A preview adds one Fargate task (0.25 vCPU) while its PR is open, on the dev ALB that already exists; closing the PR stops it.
 - S3, Budgets, Organizations and the extra accounts cost close to $0.
 - Teardown order: destroy workflow per env → bootstrap per account (empty the bucket first, migrate state back to local).
-
-## 10. Instructions for Claude Code
-
-- Work phase by phase. At every **Checkpoint**, stop, summarize what was created, and list the exact commands for the user.
-- Look up current versions and SHAs for every action and tool you add; never guess. In use: `actions/checkout`, `aws-actions/configure-aws-credentials`, `actions/upload-artifact`, `actions/download-artifact`, `step-security/harden-runner`. Terraform, tflint, Trivy and hadolint are installed as checksum-verified binaries (`scripts/ci/install-tools.sh`), not through setup actions; ECR and ECS steps use the runner's AWS CLI, not the render/deploy actions (ADR 0005 F5, F8).
-- After every change, run `terraform fmt`, `validate` and `tflint`, plus `actionlint` and `hadolint` if available.
-- Never write secrets, real `.env` files or state files to git (NFR-9 applies).
-- Commit per phase, e.g. `feat(app-ecs): fargate service with secrets manager injection`.
-- After each phase checkpoint, update [`PROGRESS.md`](PROGRESS.md): status, PRs, verify result and anything deferred.
