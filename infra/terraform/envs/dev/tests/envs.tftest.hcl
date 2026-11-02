@@ -17,6 +17,8 @@ mock_provider "aws" {
 
 variables {
   aws_account_id = "123456789012"
+  # Used only where terraform.tfvars sets promotion_target_env (dev); CI passes the real one.
+  promotion_target_account_id = "222222222222"
 }
 
 run "default_tags_match_bootstrap" {

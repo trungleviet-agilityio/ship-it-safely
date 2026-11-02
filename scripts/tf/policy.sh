@@ -151,6 +151,10 @@ if [ -d "$root/modules" ]; then
     trust_out="$trust_out$(scan '("AWS"|"Federated"|(^|[^A-Za-z_])(AWS|Federated)[[:space:]]*=|Principal[[:space:]]*=[[:space:]]*"\*"|type[[:space:]]*=[[:space:]]*"\*"|identifiers[[:space:]]*=.*(arn:|:root|"\*"))' "$mdir")"$'\n'
   done < <(grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*resource[[:space:]]+"aws_iam_role"[[:space:]]' "$root/modules" 2>/dev/null | xargs -n1 dirname 2>/dev/null | sort -u)
   trust_out="$(printf '%s' "$trust_out" | grep -v '^$' || true)"
+  # The one allowed cross-account principal (ADR 0008 P9): the ECR repository policy in ecr.tf that lets the
+  # promotion target account pull. Exactly this line, in exactly that file; any other AWS principal still fails.
+  promo_line='[[:space:]]*Principal[[:space:]]*=[[:space:]]*\{[[:space:]]*AWS[[:space:]]*=[[:space:]]*"arn:\$\{local\.partition\}:iam::\$\{var\.promotion_target_account_id\}:root"[[:space:]]*\}[[:space:]]*$'
+  trust_out="$(printf '%s' "$trust_out" | grep -Ev "/ecr\.tf:[0-9]+:${promo_line}" || true)"
   report 7 "role trust may only allow ecs-tasks.amazonaws.com (no AWS/Federated/wildcard principals, no arn: or :root identifiers)" "$trust_out"
 fi
 

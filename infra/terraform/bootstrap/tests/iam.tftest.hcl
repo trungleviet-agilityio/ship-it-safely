@@ -597,3 +597,54 @@ run "apply_sgs_for_vpc" {
     error_message = "Ec2SgsForTaggedVpc: GetSecurityGroupsForVpc on vpc/* with ResourceTag Project and Env"
   }
 }
+
+# ADR 0008 P9: the build env (dev) has no source pull; a promoted env pulls only from the one source repository.
+run "deploy_source_pull_absent_in_build_env" {
+  command = plan
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.deploy.statement : s if s.sid == "EcrPullFromSource"]) == 0
+    error_message = "the build env must not get a source pull statement"
+  }
+}
+
+run "deploy_source_pull_in_promoted_env" {
+  command = plan
+
+  variables {
+    env                         = "prod"
+    promotion_source_account_id = "222222222222"
+  }
+
+  assert {
+    condition = [
+      for s in data.aws_iam_policy_document.deploy.statement : [toset(s.actions), toset(s.resources)]
+      if s.sid == "EcrPullFromSource"
+      ] == [[
+        toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        toset(["arn:aws:ecr:ap-southeast-1:222222222222:repository/sis-dev-app"]),
+    ]]
+    error_message = "the source pull must be the two pull actions on the one source repository"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.deploy.statement : toset(s.resources) == toset(["arn:aws:ecr:ap-southeast-1:123456789012:repository/sis-prod-app"])
+      if s.sid == "EcrPushOneRepo"
+    ])
+    error_message = "a promoted env pushes only to its own repository"
+  }
+}
+
+# ADR 0008 P9: the apply role manages the repository policy of its own repositories only.
+run "apply_repository_policy_scope" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.apply.statement : toset(s.resources) == toset(["arn:aws:ecr:ap-southeast-1:123456789012:repository/sis-dev-*"])
+      if contains(s.actions, "ecr:SetRepositoryPolicy") || contains(s.actions, "ecr:DeleteRepositoryPolicy")
+    ])
+    error_message = "repository policy writes must be scoped to this env's repositories"
+  }
+}

@@ -146,7 +146,7 @@ one role. The role's trust policy decides which tokens it accepts (ADR 0002 B13,
 | `ref` on the plan role | `StringLike refs/pull/*/merge` | `pull_request_target` runs and dispatched runs, which carry `refs/heads/main` |
 | `ref` on apply and deploy | `refs/heads/main` | A branch run that adds `environment: dev` to a job |
 | `aws:RequestedRegion` on every role | `ap-southeast-1` | An assumption through another region's STS or the global endpoint, where the security alert does not look (ADR 0007 verify M1) |
-| `job_workflow_ref` on apply and deploy | `OWNER/REPO/.github/workflows/terraform-iac.yml@refs/heads/main` and `.../terraform-destroy.yml@refs/heads/main` (apply); `.../app-deploy.yml@refs/heads/main` (deploy) | Any other workflow file, even one that copies a trusted `name:`; a renamed file needs a bootstrap re-apply (ADR 0007 S2) |
+| `job_workflow_ref` on apply and deploy | `OWNER/REPO/.github/workflows/terraform-iac.yml@refs/heads/main` and `.../terraform-destroy.yml@refs/heads/main` (apply); `.../app-deploy.yml@refs/heads/main` (dev deploy) or `.../app-promote.yml@refs/heads/main` (prod deploy) | Any other workflow file, even one that copies a trusted `name:`; a renamed file needs a bootstrap re-apply (ADR 0007 S2) |
 
 Gates outside the trust policy:
 
@@ -172,11 +172,12 @@ tab shows the Title Case name; the file name is the ID the role trusts pin.
 |---|---|---|
 | **Terraform** [`terraform-iac.yml`](.github/workflows/terraform-iac.yml) | PR to `main` touching `infra/**` (and its scripts) | `checks` (no AWS: policy rules, fmt, validate, `terraform test`, tflint), then one `plan (<env>)` caller per environment of **Terraform Plan (reusable)** [`reusable-terraform-plan.yml`](.github/workflows/reusable-terraform-plan.yml) (secrets passed by name, never `inherit`): `terraform plan` with the plan role (no `environment:`), `role guardrails` (plan-role negative tests), and one sticky PR comment with counts and changed addresses (no account ID). PR plans queue instead of cancelling, so a state lock is never left behind |
 | | push to `main` touching `envs/dev`, `modules/` or the workflow file (always dev), or `workflow_dispatch` with input `env` | `apply` in that environment (your approval required) with the apply role: plan, then apply that saved plan |
-| **Terraform Destroy** [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev`) and `confirm`, which must be typed as `destroy-dev` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
+| **Terraform Destroy** [`terraform-destroy.yml`](.github/workflows/terraform-destroy.yml) | `workflow_dispatch` only: input `env` (`dev` or `prod`) and `confirm`, which must be typed as `destroy-<env>` | Job `confirm` (no AWS, no secrets) rejects a wrong phrase before any approval is requested. Job `destroy` (environment `dev`, your approval, apply role): `plan -destroy`, a guard that refuses any action other than delete, apply of that same saved plan, then deregisters the task definition revisions `app-deploy` registered. Green with "nothing to destroy" when the stack is already gone. Shares one concurrency group with the `terraform-iac` apply |
 | **App CI** [`app-ci.yml`](.github/workflows/app-ci.yml) | PR to `main` touching `app/**` (and its scripts) | No AWS, no secrets: hadolint, build once (unit tests run inside the build), Fargate-like smoke test, Trivy gate. Never pushes |
 | **App Deploy** [`app-deploy.yml`](.github/workflows/app-deploy.yml) | push to `main` touching `app/**` or the scripts it runs, or `workflow_dispatch` | Two jobs. `build-scan` has **no OIDC, no environment and no secrets**: build, smoke, Trivy, then the image tar as a one-day artifact with its sha256. `deploy` (environment `dev`, your approval) verifies the sha256 before `docker load`, checks the stack is up and the secret has a value, then pushes once to ECR with the git SHA tag, registers a task definition revision that references the image **digest** (only `image` changes; the hardened shape is validated), updates the service and waits until the rollout is `COMPLETED` (a circuit-breaker rollback fails the run). The file path is in the deploy role trust: renaming the file needs a bootstrap re-apply |
+| **App Promote** [`app-promote.yml`](.github/workflows/app-promote.yml) | `workflow_dispatch` on `main`: input `env` (`prod`) and a commit `sha` | Two jobs. `resolve` (no AWS) requires the SHA to be an ancestor of `main` with a green `deploy (dev)` job. `promote` (environment `prod`, your approval, prod deploy role, containers off) copies the dev image to the prod ECR **by digest** with crane, or reuses the digest prod already holds for that SHA (rollback), then renders, registers, updates and waits like `app-deploy`. The file path is in the prod deploy role trust (ADR 0008 P7, P9, P10) |
 | **Repo Guard** [`repo-guard.yml`](.github/workflows/repo-guard.yml) | every PR to `main` and push to `main`, no path filter | No AWS, no secrets: zizmor, the account-ID guard, gitleaks, the workflow trigger allowlist, the harden-runner policy, the environment parity guard and the CI helper self-tests. It must never be listed in the bootstrap `workflow_files` |
-| **OIDC Smoke Test** [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file or its scripts; `workflow_dispatch` | Diagnostic and negative tests. On a PR: the token is refused by the apply and deploy roles (N8), a 3601 s session on the plan role is refused and a 900 s one shows its expiry (N9), then the plan role is assumed. On dispatch: every role refuses the non-PR token (N1). Each refusal also sends a security alert email, by design |
+| **OIDC Smoke Test** [`oidc-smoke-test.yml`](.github/workflows/oidc-smoke-test.yml) | PR to `main` that changes the workflow file or its scripts; `workflow_dispatch` | Diagnostic and negative tests. On a PR: the token is refused by the apply and deploy roles (N8), a 3601 s session on the plan role is refused and a 900 s one shows its expiry (N9), then the plan role is assumed. On dispatch: every dev and prod role refuses the non-PR token (N1), and a job in environment `dev` is refused by every prod role (N10). Each refusal also sends a security alert email, by design |
 
 Every job with steps starts with `step-security/harden-runner` (a job that only calls a reusable workflow is
 checked through the callee's jobs). The seven jobs that assume an AWS role run it in `block` mode
@@ -272,7 +273,7 @@ Every session: `terraform-destroy` for `dev`, as in the session flow above. The 
 
 End of the lab ([requirements, cost and cleanup](docs/requirements.md#cost-and-cleanup)), in this order:
 
-1. `terraform-destroy` for every environment (prod first, once Phase 7 exists). Run it once more and check it
+1. `terraform-destroy` for every environment (prod first). Run it once more and check it
    reports "nothing to destroy".
 2. Bootstrap, per account, as admin, locally (CI can never touch the bootstrap state). From
    `infra/terraform/bootstrap`, with `AWS_PROFILE=sis-dev-admin`:
@@ -310,11 +311,11 @@ Troubleshooting:
 | Env | Strategy | Why |
 |---|---|---|
 | dev | ECS `ROLLING` with the deployment circuit breaker and automatic rollback (built) | Cheap and simple; `scripts/ecs/wait-deployment.sh` fails the run on a rollback |
-| prod (Phase 7) | `ROLLING` with the circuit breaker, like dev. Promote copies the dev digest; **rollback promotes an earlier green SHA**, whose image is already in prod | The goal is the deployment path ([requirements](docs/requirements.md#the-deployment-path-v3)): one digest from PR to prod, and a rollback with no rebuild |
+| prod | `ROLLING` with the circuit breaker, like dev. `app-promote` copies the dev digest; **rollback promotes an earlier green SHA**, whose image is already in prod | The goal is the deployment path ([requirements](docs/requirements.md#the-deployment-path-v3), ADR 0010): one digest from `main` to prod, and a rollback with no rebuild |
 | Later | ECS built-in `BLUE_GREEN`, `CANARY` or `LINEAR` | Need real traffic and alarms that mean something: 10% of almost no requests gives no signal. `BLUE_GREEN` was designed in ADR 0008 and left out by amendment S |
 
-Branching is trunk-based (FR-14): a PR gets a preview (Phase 8), merge to `main` deploys dev, and
-`workflow_dispatch` promotes the same image digest to prod. No `develop` or per-env branches.
+Branching is trunk-based (FR-14): merge to `main` deploys dev, and `app-promote` (`workflow_dispatch` with a
+green SHA) promotes the same image digest to prod. No `develop` or per-env branches.
 
 ## When to move to CodeBuild runners or CodePipeline
 
@@ -352,5 +353,5 @@ Each phase has its decisions and checkpoint results in one ADR under [`docs/adr/
 | 4 App pipeline | Yes | Environment secret `AWS_DEPLOY_ROLE_ARN`, re-create the stack, approve `app-deploy`, verify the digest, merge the one-line checkpoint PR, negative tests, teardown |
 | 5 Hardening and teardown | Yes | Re-apply bootstrap (deploy role reads secret metadata), re-create, negative tests N5 and N6, destroy through `terraform-destroy`, N7 |
 | 6 Supply-chain hardening | Yes | Read the `job_workflow_ref` claim, re-apply bootstrap (file-pinned trust, region pin, trail and alert), confirm the alert email, read harden-runner insights, merge and prove the new trust with a re-create, deploy and destroy round, require `guard (no AWS)`. Then PR B: block mode from the collected egress list |
-| 7 Prod account, promote and rollback | **Yes**: a prod account in AWS Organizations, SSO admin login | Create the prod account, bootstrap it, environment `prod` and secrets, promote, rollback demo, N10 |
-| 8 PR preview environments | Yes (dev account) | Bootstrap re-apply for the preview role, environment `preview` with a reviewer, open and close a demo PR |
+| 7 Prod account, promote and rollback | **Yes**: a prod account in AWS Organizations, SSO admin login | Create the prod account, bootstrap it, re-apply the dev bootstrap, environment `prod` and secrets, promote A, B, then A again (rollback), N1 and N10, teardown (ADR 0008 "PR B2 checkpoint") |
+| 8 PR preview environments | Deferred (ADR 0010) | Design kept in ADR 0009 |

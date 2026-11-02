@@ -6,6 +6,9 @@ env        = "dev"
 azs        = ["ap-southeast-1a", "ap-southeast-1b"]
 vpc_cidr   = "10.40.0.0/16"
 
+# ADR 0008 P9: prod promotes from this repository. The prod account comes from TF_VAR_promotion_target_account_id.
+promotion_target_env = "prod"
+
 # Placeholder that never serves (ADR 0005, F2): the Docker official image on ECR Public, pinned by index digest.
 # It has no command, so it exits at once and the first deployment after a create stalls by design. app-deploy sets
 # the real image by digest (it replaces only the image field of the latest task definition revision).

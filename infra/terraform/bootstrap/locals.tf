@@ -27,9 +27,12 @@ locals {
   # Workflow files (ADR 0007 S2, S29): the apply and deploy roles trust the job_workflow_ref claim, which holds
   # the file path and the ref. A `name:` can be copied into any merged file; a path cannot. Phases 3 to 5 must
   # use exactly these files, and repo-guard checks that each exists (selftest/workflows.sh).
+  # The deploy file depends on the environment's role in the path (ADR 0008 P7): the build environment deploys
+  # with app-deploy.yml; a promoted environment only receives images through app-promote.yml.
+  is_promoted = var.promotion_source_account_id != null
   workflow_files = {
     apply  = ["terraform-iac.yml", "terraform-destroy.yml"]
-    deploy = ["app-deploy.yml"]
+    deploy = [local.is_promoted ? "app-promote.yml" : "app-deploy.yml"]
   }
   job_workflow_refs = {
     for k, files in local.workflow_files : k => [
@@ -82,7 +85,13 @@ locals {
 
   ecr_repo_pattern = "${local.svc_arn["ecr"]}:repository/${local.name}-*"
   ecr_repo_app     = "${local.svc_arn["ecr"]}:repository/${local.resource_names.ecr_repository}"
-  secret_pattern   = "${local.svc_arn["secretsmanager"]}:secret:${var.prefix}/${var.env}/*"
+  # Promotion source repository (ADR 0008 P9): read-only, the one repository, in the source account.
+  ecr_repo_source = (
+    local.is_promoted
+    ? "arn:${local.partition}:ecr:${local.region}:${var.promotion_source_account_id}:repository/${var.prefix}-${var.promotion_source_env}-app"
+    : null
+  )
+  secret_pattern = "${local.svc_arn["secretsmanager"]}:secret:${var.prefix}/${var.env}/*"
   log_group_arns = [
     "${local.svc_arn["logs"]}:log-group:/ecs/${local.name}-*",
     "${local.svc_arn["logs"]}:log-group:/ecs/${local.name}-*:*",

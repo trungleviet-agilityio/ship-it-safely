@@ -572,3 +572,56 @@ run "validation_rejects_a_recovery_window_of_three_days" {
 
   expect_failures = [var.secret_recovery_window_days]
 }
+
+# ADR 0008 P9: no repository policy unless a promotion target is set; then pull-only, one role in one account.
+run "no_repository_policy_without_a_promotion_target" {
+  command = plan
+
+  assert {
+    condition     = length(aws_ecr_repository_policy.promotion) == 0
+    error_message = "no promotion target means no repository policy"
+  }
+}
+
+run "repository_policy_is_pull_only_for_the_target_deploy_role" {
+  command = plan
+
+  variables {
+    promotion_target_env        = "prod"
+    promotion_target_account_id = "222222222222"
+  }
+
+  assert {
+    condition = jsondecode(aws_ecr_repository_policy.promotion[0].policy).Statement == [{
+      Sid       = "PromotionPullOnly"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::222222222222:root" }
+      Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+      Condition = { StringEquals = { "aws:PrincipalArn" = "arn:aws:iam::222222222222:role/sis-prod-gha-deploy" } }
+    }]
+    error_message = "the repository policy must allow only the two pull actions to the target env's deploy role"
+  }
+}
+
+run "validation_rejects_a_promotion_target_without_an_account" {
+  command = plan
+
+  variables {
+    promotion_target_env = "prod"
+  }
+
+  expect_failures = [var.promotion_target_account_id]
+}
+
+run "an_account_without_a_promotion_target_creates_nothing" {
+  command = plan
+
+  variables {
+    promotion_target_account_id = "222222222222"
+  }
+
+  assert {
+    condition     = length(aws_ecr_repository_policy.promotion) == 0
+    error_message = "the account alone must not create a repository policy"
+  }
+}

@@ -14,7 +14,9 @@ Rules, per job:
   3. any other job has `egress-policy: audit`;
   4. every allowed endpoint is `host:port` and holds no 12-digit literal (an account ID);
   5. in a credentialed job an endpoint holds no `*`, and the only expressions are the ones in
-     ALLOWED_EXPRESSIONS (account hosts come from the secret, never from a literal);
+     ALLOWED_EXPRESSIONS (account hosts come from the secret, never from a literal), plus
+     `secrets.AWS_ACCOUNT_ID_DEV` in the jobs of SOURCE_REGISTRY_JOBS only (the promotion source
+     registry host, ADR 0008 P8);
   6. `env.ENV` in a credentialed job names the environment, so ENV must be a literal, or exactly
      `inputs.env` (optionally `|| '<literal>'`) where `env` is a `choice` input of
      workflow_dispatch (a workflow_call input in a reusable-*.yml file). A branch name, free text
@@ -68,6 +70,10 @@ REUSABLE_CALL = re.compile(r"^\./\.github/workflows/reusable-[A-Za-z0-9._-]+\.ya
 # The one credentialed job that needs Docker (docker load and docker push), so it cannot disable
 # containers. The residual risk is recorded in ADR 0007. Keyed by (workflow file name, job id).
 NEEDS_CONTAINERS = (("app-deploy.yml", "deploy"),)
+# The one credentialed job that reads a second account: app-promote pulls from the dev registry,
+# whose host holds the dev account ID (ADR 0008 P8, P9). Keyed by (workflow file name, job id).
+SOURCE_REGISTRY_JOBS = (("app-promote.yml", "promote"),)
+SOURCE_REGISTRY_EXPRESSION = "secrets.AWS_ACCOUNT_ID_DEV"
 
 
 def _has_id_token(permissions: Any) -> bool:
@@ -117,7 +123,9 @@ def _env_name_is_clean(name: str, env: dict[str, Any], seen: frozenset[str] = fr
     return True
 
 
-def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -> list[str]:
+def _endpoint_problems(
+    endpoint: str, credentialed: bool, env: dict[str, Any], allowed: tuple[str, ...]
+) -> list[str]:
     problems: list[str] = []
     expressions = EXPRESSION.findall(endpoint)
     literal = EXPRESSION.sub("", endpoint)
@@ -129,10 +137,9 @@ def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -
         if "*" in literal:
             problems.append(f"endpoint '{endpoint}' holds a wildcard (list exact hosts)")
         problems.extend(
-            f"endpoint '{endpoint}' uses the expression '{e}' (allowed: "
-            f"{', '.join(ALLOWED_EXPRESSIONS)})"
+            f"endpoint '{endpoint}' uses the expression '{e}' (allowed: {', '.join(allowed)})"
             for e in expressions
-            if e not in ALLOWED_EXPRESSIONS
+            if e not in allowed
         )
     else:
         for e in expressions:
@@ -185,6 +192,7 @@ def _step_problems(
     needs_containers: bool,
     env: dict[str, Any],
     env_problem: str | None,
+    allowed: tuple[str, ...] = ALLOWED_EXPRESSIONS,
 ) -> list[str]:
     uses = step.get("uses") if isinstance(step, dict) else None
     if not isinstance(uses, str) or not uses.startswith(ACTION):
@@ -211,7 +219,7 @@ def _step_problems(
     endpoints = with_.get("allowed-endpoints")
     found = ENDPOINT.findall(endpoints if isinstance(endpoints, str) else "")
     for endpoint in found:
-        problems.extend(_endpoint_problems(endpoint, credentialed, env))
+        problems.extend(_endpoint_problems(endpoint, credentialed, env, allowed))
     uses_env = any("env.ENV" in EXPRESSION.findall(e) for e in found)
     if credentialed and uses_env and env_problem:
         problems.append(f"an endpoint uses env.ENV, but {env_problem}")
@@ -270,7 +278,12 @@ def check(shown: str, document: Any) -> list[str]:
         needs_containers = (os.path.basename(shown), job_id) in NEEDS_CONTAINERS
         merged = _merged_env(document, job, first)
         env_problem = _env_value_problem(merged.get("ENV"), document, reusable)
-        messages += _step_problems(first, credentialed, needs_containers, merged, env_problem)
+        allowed = ALLOWED_EXPRESSIONS
+        if (os.path.basename(shown), job_id) in SOURCE_REGISTRY_JOBS:
+            allowed = (*ALLOWED_EXPRESSIONS, SOURCE_REGISTRY_EXPRESSION)
+        messages += _step_problems(
+            first, credentialed, needs_containers, merged, env_problem, allowed
+        )
         if credentialed:
             messages += [
                 f"has id-token: write, so `{k}:` is not allowed"

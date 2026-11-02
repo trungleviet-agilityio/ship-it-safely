@@ -153,3 +153,62 @@ jobs:
           REGION: ${{ vars.AWS_REGION }}
           ENV: dev
         run: scripts/aws/assert-web-identity-denied.sh plan apply deploy
+
+      # The same refusal from the prod roles (ADR 0008 S5, N1 for prod).
+      - name: Check prod configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_PROD }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: scripts/aws/check-config.sh sis-prod-gha-plan
+
+      - name: Require an explicit access denied from every prod role
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+          REGION: ${{ vars.AWS_REGION }}
+          ENV: prod
+        run: scripts/aws/assert-web-identity-denied.sh plan apply deploy
+
+  # N10 (PLAN 7.5, ADR 0010 T5): a job approved in the dev environment carries sub ...:environment:dev, which no prod
+  # role trusts. Its job_workflow_ref (this file) is not in the prod apply or deploy trust either, so for those two
+  # roles two claims differ; the plan role pins no file, so for it only the sub differs. Each must answer AccessDenied.
+  # Needs an approval of dev and sends prod security alert emails, by design.
+  dev-env-denied-by-prod:
+    name: prod refuses a dev token (N10)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: dev
+    permissions:
+      contents: read # checkout of the scripts
+      # Needed to request the OIDC token (sub ...:environment:dev) that the prod roles must refuse.
+      id-token: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            github.com:443
+            sts.${{ vars.AWS_REGION }}.amazonaws.com:443
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check prod configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_PROD }}
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: scripts/aws/check-config.sh sis-prod-gha-plan
+
+      - name: Require an explicit access denied from every prod role
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+          REGION: ${{ vars.AWS_REGION }}
+          ENV: prod
+        run: scripts/aws/assert-web-identity-denied.sh plan apply deploy

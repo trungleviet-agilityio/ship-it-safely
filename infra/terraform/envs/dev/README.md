@@ -79,6 +79,8 @@ Offline checks need no credentials: `make tf-check` (init with `-backend=false`,
 | task_memory | Task-level memory in MiB. | `number` | n/a | yes |
 | vpc_cidr | CIDR block of the VPC. | `string` | n/a | yes |
 | alb_ingress_cidrs_json | JSON list of IPv4 CIDRs allowed to reach the ALB on port 80, e.g. ["198.51.100.7/32"]. CI passes the secret ALB_INGRESS_CIDRS. Empty means 0.0.0.0/0 (ADR 0007 S10). | `string` | `""` | no |
+| promotion_target_account_id | Account of promotion_target_env. Never committed: CI passes TF_VAR_promotion_target_account_id from the secret PROMOTION_TARGET_ACCOUNT_ID (env dev) or AWS_ACCOUNT_ID_PROD (PR plan). | `string` | `""` | no |
+| promotion_target_env | Environment that promotes this environment's images (ADR 0008 P9): "prod" in dev, empty elsewhere. Set in terraform.tfvars. | `string` | `""` | no |
 | secret_recovery_window_days | Secrets Manager recovery window; 0 deletes at once (ADR 0004, Q3). | `number` | `0` | no |
 
 ## Outputs

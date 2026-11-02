@@ -25,6 +25,9 @@ on:
       ALB_INGRESS_CIDRS:
         description: Optional JSON list of CIDRs allowed to reach the ALB
         required: false
+      PROMOTION_TARGET_ACCOUNT_ID:
+        description: Account of the env's promotion target (ADR 0008 P9); required by the plan when terraform.tfvars sets promotion_target_env
+        required: false
 
 permissions: {}
 
@@ -95,6 +98,7 @@ jobs:
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           TF_VAR_alb_ingress_cidrs_json: ${{ secrets.ALB_INGRESS_CIDRS }}
+          TF_VAR_promotion_target_account_id: ${{ secrets.PROMOTION_TARGET_ACCOUNT_ID }}
         run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
 
       # Counts and one row per changed address; fails if a 12-digit run shows up (the repo is public).

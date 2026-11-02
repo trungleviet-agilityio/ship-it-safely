@@ -17,7 +17,7 @@ on:
       env:
         description: Environment to destroy
         type: choice
-        options: [dev]
+        options: [dev, prod]
         required: true
         default: dev
       confirm:
@@ -56,7 +56,7 @@ jobs:
           REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          allowed_envs="dev"
+          allowed_envs="dev prod"
           if [[ "$REF" != "refs/heads/main" ]]; then
             echo "::error::run this workflow from main"
             exit 1
@@ -140,6 +140,8 @@ jobs:
       - name: Terraform destroy plan
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          # dev only: the variable validation needs it even for a destroy (ADR 0008 P9); unset and ignored in prod.
+          TF_VAR_promotion_target_account_id: ${{ secrets.PROMOTION_TARGET_ACCOUNT_ID }}
         run: terraform -chdir="$TF_DIR" plan -destroy -lock-timeout=5m -no-color -out=tfplan
 
       # Before the guard, so a refused plan still shows its table in the summary.

@@ -127,3 +127,25 @@ variable "create_trail" {
   description = "Create the CloudTrail trail and its bucket. Set false when the account already has a trail, so management events are not paid for twice. The alert rule is created either way."
   default     = true
 }
+
+variable "promotion_source_account_id" {
+  type        = string
+  description = "Account that builds the images this environment promotes (ADR 0008 P9). Null for the build environment (dev). Set in a promoted environment (prod): its deploy role may then pull from the source repository, and it trusts app-promote.yml instead of app-deploy.yml (P7)."
+  default     = null
+
+  validation {
+    condition     = var.promotion_source_account_id == null || can(regex("^[0-9]{12}$", var.promotion_source_account_id))
+    error_message = "promotion_source_account_id must be null or exactly 12 digits."
+  }
+}
+
+variable "promotion_source_env" {
+  type        = string
+  description = "Environment name of the promotion source; names its repository <prefix>-<env>-app."
+  default     = "dev"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{1,7}$", var.promotion_source_env))
+    error_message = "promotion_source_env must be 2 to 8 lowercase letters and digits, starting with a letter (ADR 0008, P4)."
+  }
+}

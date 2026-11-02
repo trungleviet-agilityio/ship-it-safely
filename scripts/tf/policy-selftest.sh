@@ -110,6 +110,11 @@ bad r7c 7 modules/m/trust.tf 'locals {\n  trust = { Principal = { AWS = "x" } }\
 bad r7d 7 modules/m/trust.tf 'locals {\n  trust = { Principal = "*" }\n}'
 bad r7e 7 modules/m/trust.tf 'data "aws_iam_policy_document" "t" {\n  statement {\n    principals {\n      type = "*"\n      identifiers = ["*"]\n    }\n  }\n}'
 bad r7f 7 modules/m/trust.tf 'locals {\n  trust = { Federated = "x" }\n}'
+# ADR 0008 P9: only the promotion line, only in ecr.tf, is exempt.
+# shellcheck disable=SC2016  # HCL text
+bad r7g 7 modules/m/ecr.tf 'locals {\n  p = { Principal = { AWS = "arn:${local.partition}:iam::${var.other_account_id}:root" } }\n}'
+# shellcheck disable=SC2016  # HCL text
+bad r7h 7 modules/m/trust.tf 'locals {\n  p = { Principal = { AWS = "arn:${local.partition}:iam::${var.promotion_target_account_id}:root" } }\n}'
 
 # Rule 8: public root outputs.
 bad r8a 8 envs/dev/outputs.tf 'output "a" {\n  value = module.m.role.arn\n}'
@@ -152,6 +157,8 @@ bad r12c 12 modules/m/versions.tf 'terraform {\n  required_providers {\n    note
 # These must pass: local sources, hashicorp providers, and a source outside a module or provider block.
 good g11 envs/dev/mod.tf 'module "x" { source = "../../modules/app-ecs" }\nmodule "y" {\n  source = "./y"\n}'
 good g12 bootstrap/versions.tf 'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/aws"\n    }\n  }\n}'
+# shellcheck disable=SC2016  # HCL text
+good g7promo modules/m/ecr.tf 'locals {\n  p = {\n    Principal = { AWS = "arn:${local.partition}:iam::${var.promotion_target_account_id}:root" }\n  }\n}'
 good gsrc modules/m/other.tf 'resource "x" "y" {\n  source = "anything"\n}'
 
 ok "all $n bad fixtures fail with their rule id"

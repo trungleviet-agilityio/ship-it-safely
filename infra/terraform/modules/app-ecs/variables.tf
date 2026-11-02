@@ -158,3 +158,26 @@ variable "alb_ingress_cidrs" {
     error_message = "alb_ingress_cidrs must hold at least one valid IPv4 CIDR block (the rules use cidr_ipv4)."
   }
 }
+
+variable "promotion_target_env" {
+  type        = string
+  description = "Environment that promotes images from this repository (ADR 0008 P9), e.g. \"prod\" in dev. Empty: no repository policy."
+  default     = ""
+
+  validation {
+    condition     = var.promotion_target_env == "" || can(regex("^[a-z][a-z0-9]{1,7}$", var.promotion_target_env))
+    error_message = "promotion_target_env must be empty or 2 to 8 lowercase letters and digits, starting with a letter."
+  }
+}
+
+variable "promotion_target_account_id" {
+  type        = string
+  description = "Account of promotion_target_env. Required when promotion_target_env is set, ignored otherwise; sensitive so it never prints in a public plan."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.promotion_target_env == "" || can(regex("^[0-9]{12}$", var.promotion_target_account_id))
+    error_message = "promotion_target_account_id must be 12 digits when promotion_target_env is set (it is ignored otherwise)."
+  }
+}

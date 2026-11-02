@@ -51,7 +51,7 @@ on:
       env:
         description: Environment to apply
         type: choice
-        options: [dev]
+        options: [dev, prod]
         required: false
         default: dev
 
@@ -128,6 +128,28 @@ jobs:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID_DEV }}
       AWS_PLAN_ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_DEV }}
       ALB_INGRESS_CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_DEV }}
+      # dev promotes to prod (terraform.tfvars promotion_target_env): the dev ECR repository policy names the prod
+      # account (ADR 0008 P9). The only cross-env secret a caller may map; the parity guard checks it.
+      PROMOTION_TARGET_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+
+  plan-prod:
+    name: plan (prod)
+    needs: checks
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    permissions:
+      contents: read
+      id-token: write # the called plan jobs assume the plan role
+      pull-requests: write # the called comment job posts the sticky comment
+    uses: ./.github/workflows/reusable-terraform-plan.yml # zizmor: ignore[self-repository]
+    with:
+      env: prod
+    secrets:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID_PROD }}
+      AWS_PLAN_ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN_PROD }}
+      ALB_INGRESS_CIDRS: ${{ secrets.ALB_INGRESS_CIDRS_PROD }}
 
   apply:
     name: apply
@@ -195,6 +217,9 @@ jobs:
         env:
           TF_VAR_aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           TF_VAR_alb_ingress_cidrs_json: ${{ secrets.ALB_INGRESS_CIDRS }}
+          # Environment secret of dev only (the prod account, for the dev ECR repository policy, ADR 0008 P9). Unset in
+          # prod, where terraform.tfvars sets no promotion target and the value is ignored.
+          TF_VAR_promotion_target_account_id: ${{ secrets.PROMOTION_TARGET_ACCOUNT_ID }}
         run: terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan
 
       - name: Summarize the plan

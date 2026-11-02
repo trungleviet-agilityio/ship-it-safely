@@ -78,6 +78,7 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | [aws_cloudwatch_log_group.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_ecr_lifecycle_policy.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_lifecycle_policy) | resource |
 | [aws_ecr_repository.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository) | resource |
+| [aws_ecr_repository_policy.promotion](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository_policy) | resource |
 | [aws_ecs_cluster.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_cluster) | resource |
 | [aws_ecs_service.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_service) | resource |
 | [aws_ecs_task_definition.app](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition) | resource |
@@ -116,6 +117,8 @@ Offline checks: `make tf-check` runs `terraform test` with a mocked provider, pl
 | ecr_keep_images | Number of images the ECR lifecycle rule keeps. | `number` | `10` | no |
 | health_check_path | HTTP path the load balancer probes. | `string` | `"/health"` | no |
 | log_retention_days | Retention of the application log group. | `number` | `7` | no |
+| promotion_target_account_id | Account of promotion_target_env. Required when promotion_target_env is set, ignored otherwise; sensitive so it never prints in a public plan. | `string` | `""` | no |
+| promotion_target_env | Environment that promotes images from this repository (ADR 0008 P9), e.g. "prod" in dev. Empty: no repository policy. | `string` | `""` | no |
 | secret_recovery_window_days | Secrets Manager recovery window. 0 deletes at once, so a torn-down stack can be re-created (ADR 0004, Q3). | `number` | `0` | no |
 | task_cpu | Task-level CPU units. The apply role caps this at 512 (ecs:task-cpu). | `number` | `256` | no |
 | task_memory | Task-level memory in MiB. The apply role caps this at 1024 (ecs:task-memory). | `number` | `512` | no |
