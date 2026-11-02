@@ -254,6 +254,46 @@ for j in $plan_callers; do
 done
 ok "reusable plan: no environment on any job, explicit secrets in the caller"
 
+# Order inside the composite action: the role is assumed only after the environment root is selected and the CIDRs are
+# masked, so a bad environment or an empty required CIDR list is refused before any AWS call (ADR 0008 PR A, round 2).
+# The credentials step is found by its `uses:` (not its name), so renaming it cannot hide it.
+# step_order_ok <lines "name<TAB>uses">: exactly one credentials step, after the root selection and the CIDR mask.
+step_order_ok() {
+  printf '%s\n' "$1" | awk -F'\t' '
+    $2 ~ /^aws-actions\/configure-aws-credentials@/ { c++; cp = NR }
+    $1 == "Select the environment root" { s++; sp = NR }
+    $1 == "Mask the ALB ingress CIDRs" { m++; mp = NR }
+    END { exit !(c == 1 && s == 1 && m == 1 && sp < mp && cp > mp) }'
+}
+steps_now="$(facts composite-steps "$setup_action")"
+step_order_ok "$steps_now" || die "selftest: terraform-setup must select the root and mask the CIDRs before it assumes the role"
+# Mutations of the real step list: the credentials step first, before the mask, renamed and first, a second credentials
+# step before the selection, and a removed CIDR mask.
+cred_line="$(awk -F'\t' '$2 ~ /^aws-actions\/configure-aws-credentials@/' <<<"$steps_now")"
+others="$(awk -F'\t' '$2 !~ /^aws-actions\/configure-aws-credentials@/' <<<"$steps_now")"
+renamed_line="$(printf 'Some other name\t%s' "${cred_line#*$'\t'}")"
+step_order_ok "$(printf '%s\n%s' "$cred_line" "$others")" && die "selftest: the order check missed the credentials step first"
+step_order_ok "$(printf '%s\n%s' "$renamed_line" "$others")" && die "selftest: the order check missed a renamed credentials step first"
+step_order_ok "$(printf '%s\n%s\n%s' "$(head -n1 <<<"$others")" "$cred_line" "$(tail -n +2 <<<"$others")")" \
+  && die "selftest: the order check missed the credentials step before the CIDR mask"
+step_order_ok "$(printf '%s\n%s' "$cred_line" "$steps_now")" && die "selftest: the order check missed a second credentials step before the selection"
+step_order_ok "$(grep -v '^Mask the ALB' <<<"$steps_now")" && die "selftest: the order check missed a removed CIDR mask step"
+ok "terraform-setup action: the role is assumed after the root selection and the CIDR mask"
+
+# The promotion check (scripts/image/promote-resolve.sh) finds the dev deploy by the display name of the app-deploy job
+# `deploy`. Renaming either side alone would make every promotion fail (or, worse, match nothing), so the two must agree.
+# deploy_name_matches <workflow file>: the name of job `deploy` equals the deploy_job literal of the script.
+deploy_name_matches() {
+  local in_workflow in_script
+  in_workflow="$(facts names "$1" | awk -F'\t' '$1 == "deploy" { print $2 }')"
+  in_script="$(sed -nE 's/^deploy_job="(.*)"$/\1/p' "$ROOT/scripts/image/promote-resolve.sh")"
+  [ -n "$in_workflow" ] && [ "$in_workflow" = "$in_script" ]
+}
+deploy_name_matches "$deploy_wf" || die "selftest: the name of the app-deploy job 'deploy' differs from deploy_job in scripts/image/promote-resolve.sh"
+sed 's/^    name: deploy (dev)$/    name: deploy (development)/' "$deploy_wf" >"$tmp/deploy-renamed.yml"
+deploy_name_matches "$tmp/deploy-renamed.yml" && die "selftest: the name check missed a renamed deploy job"
+ok "app-deploy: the deploy job name is the one promote-resolve.sh looks for"
+
 # The shared Terraform job start lives in one local action (ADR 0008, P6). Its "Select the environment root" step must fail
 # for a bad environment and leave GITHUB_ENV empty: the step text is run with the same shell flags the runner uses.
 select_step="$(facts composite-run "$setup_action" "Select the environment root")"
@@ -391,6 +431,25 @@ case_hardening "the old repo-level account secret in a credentialed job" "uses t
 case_hardening "secrets[ in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ secrets['X'] }}.example.com:443\n"
 case_hardening "toJSON(secrets) in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ toJSON(secrets) }}.example.com:443\n"
 case_hardening "an env built from a secret in an audit job" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: ${{ secrets.X }}\n'
+case_hardening "an env built from another env built from a secret" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.OUTER }}.example.com:443\n" '    env:\n      INNER: ${{ secrets.X }}\n      MIDDLE: ${{ env.INNER }}-a\n      OUTER: x-${{ env.MIDDLE }}\n'
+case_hardening "a transitive env read with other letter case" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.outer }}.example.com:443\n" '    env:\n      INNER: ${{ secrets.X }}\n      OUTER: ${{ ENV.inner }}\n'
+case_hardening "SECRETS. in upper case in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ SECRETS.X }}.example.com:443\n"
+case_hardening "Secrets[ in mixed case in an audit job" "reads a secret in a job without credentials" "contents: read" "${audit_with}${hosts_head}            \${{ Secrets['X'] }}.example.com:443\n"
+case_hardening "an env built from a secret in upper case" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: ${{ SECRETS.X }}\n'
+case_hardening "a chain of envs that never reaches a secret" ok "contents: read" "${audit_with}${hosts_head}            \${{ env.OUTER }}.example.com:443\n" '    env:\n      INNER: plain\n      OUTER: ${{ env.INNER }}\n'
+case_hardening "an env read through env['A'] from a secret" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.B }}.example.com:443\n" '    env:\n      A: ${{ secrets.X }}\n      B: ${{ env['"'"'A'"'"'] }}\n'
+case_hardening "an env built from toJSON(env)" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.B }}.example.com:443\n" '    env:\n      A: ${{ secrets.X }}\n      B: ${{ toJSON(env) }}\n'
+case_hardening "an env built from github.token" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: ${{ github.token }}\n'
+case_hardening "an env built from a step output" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: ${{ steps.s.outputs.v }}\n'
+case_hardening "an env built from a needs output" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: ${{ needs.j.outputs.v }}\n'
+case_hardening "an env block that is an expression" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env: ${{ fromJSON(vars.E) }}\n'
+case_hardening "an env that no literal mapping defines" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.NOPE }}.example.com:443\n"
+case_hardening "env keys that differ in case, one from a secret" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.host }}.example.com:443\n" '    env:\n      Host: plain\n      HOST: ${{ secrets.X }}\n'
+case_hardening "an env built from vars and a clean env" "ok" "contents: read" "${audit_with}${hosts_head}            \${{ env.B }}.example.com:443\n" '    env:\n      A: ${{ vars.AWS_REGION }}\n      B: x-${{ env.A }}\n'
+case_hardening "a block scalar env holding a multi-line toJSON(secrets)" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: |-\n        ${{ toJSON(\n        secrets) }}\n'
+case_hardening "a block scalar env with the expression opened on its own line" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: |-\n        ${{\n        secrets.X }}\n'
+case_hardening "an env with an unclosed expression" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: ${{ vars.X\n'
+case_hardening "an env that names the token in plain text" "built from a secret" "contents: read" "${audit_with}${hosts_head}            \${{ env.A }}.example.com:443\n" '    env:\n      A: x-github.token\n'
 case_hardening "an env without a secret in an audit job" ok "contents: read" "${audit_with}${hosts_head}            \${{ env.HOST }}.example.com:443\n" '    env:\n      HOST: plain\n'
 # A job that calls a reusable workflow has no steps: it must target a local reusable-*.yml and name its secrets.
 printf 'name: x\non: push\njobs:\n  c:\n    uses: ./.github/workflows/reusable-x.yml\n    permissions:\n      id-token: write\n    secrets:\n      A: ${{ secrets.B }}\n' >"$tmp/h.yml"

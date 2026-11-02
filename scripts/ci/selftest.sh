@@ -6,6 +6,7 @@
 #   render      task definition render
 #   ecs         rollout evaluation and wait, preflight, service status, revision cleanup, role name
 #   image       build mirror policy, ECR push, image archive
+#   promote     promotion resolve check and the crane copy by digest (stub gh and crane)
 #   tooling     account ID guard, lib.sh helpers, tool installer, config check, usage contracts
 #   new-env     environment clone script (tf/new-env.sh) and the env parity guard
 # A bad fixture must fail with its message; the real workflows must pass. Areas are independent, so one can be run
@@ -18,7 +19,7 @@ source "$(dirname "$0")/../lib.sh"
 
 [ $# -eq 0 ] || die "usage: scripts/ci/selftest.sh"
 
-for area in terraform workflows render ecs image tooling new-env; do
+for area in terraform workflows render ecs image promote tooling new-env; do
   log "self-tests: ${area}"
   "$ROOT/scripts/selftest/${area}.sh" || die "self-tests failed in scripts/selftest/${area}.sh"
 done

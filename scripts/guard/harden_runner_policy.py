@@ -21,7 +21,10 @@ Rules, per job:
      or any other expression could steer the allowlist or the state bucket host;
   7. in any other job (audit) an endpoint may use `vars.X` and `env.X` only: no `secrets` in any
      form (`secrets.`, `secrets[`, `toJSON(secrets)`), no `env[...]`, `format(...)` or other
-     function, and no `env.X` whose value is built from a secret (ADR 0007 N1 Low, ADR 0008 P8);
+     function, and no `env.X` whose value is built from a secret, directly or through other env
+     values: an env value is clean only as a literal or from `vars.X` and clean `env.X`, so
+     `env[...]`, `toJSON(env)`, `github.*`, an `env:` expression and an undefined `env.X` all
+     fail closed; `secrets` matches in any letter case (ADR 0007 N1, ADR 0008 P8);
   8. a job with `uses:` calls a reusable workflow. It has no steps, so it is checked through its
      callee (the reusable-*.yml file is checked like any workflow). It must call
      ./.github/workflows/reusable-*.yml and must not pass `secrets: inherit`;
@@ -47,13 +50,15 @@ from workflow_yaml import dispatch_options, run, trigger_input  # noqa: E402  (i
 ACTION = "step-security/harden-runner@"
 # One endpoint is a run of non-space characters; `${{ ... }}` may hold spaces and stays whole.
 ENDPOINT = re.compile(r"(?:\$\{\{.*?\}\}|\S)+")
-EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+# DOTALL: an expression may span lines (a YAML block scalar) and must still be seen.
+EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}", re.DOTALL)
 PORT = re.compile(r":[0-9]{1,5}$")
 ACCOUNT_ID = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 # The account ID is the environment secret AWS_ACCOUNT_ID (a reusable workflow gets that name too).
 ALLOWED_EXPRESSIONS = ("vars.AWS_REGION", "secrets.AWS_ACCOUNT_ID", "env.ENV")
-SECRETS_REF = re.compile(r"\bsecrets\b")
-ENV_REF = re.compile(r"^env\.([A-Za-z_][A-Za-z0-9_]*)$")
+# Context names are case-insensitive: `SECRETS.X` and `Secrets[...]` read a secret too.
+SECRETS_REF = re.compile(r"\bsecrets\b", re.IGNORECASE)
+ENV_REF = re.compile(r"^env\.([A-Za-z_][A-Za-z0-9_]*)$", re.IGNORECASE)
 VARS_REF = re.compile(r"^vars\.[A-Za-z_][A-Za-z0-9_]*$")
 # The only forms of the ENV value that follow an input: `${{ inputs.env }}`, or with a literal
 # fallback.
@@ -69,6 +74,47 @@ def _has_id_token(permissions: Any) -> bool:
     if permissions == "write-all":
         return True
     return isinstance(permissions, dict) and permissions.get("id-token") == "write"
+
+
+OPAQUE_ENV = "*opaque*"  # key of the merged env when some `env:` is an expression, not a mapping
+CLEAN_EXPRESSION = re.compile(r"^(vars|env)\.([A-Za-z_][A-Za-z0-9_]*)$", re.IGNORECASE)
+
+
+def _env_name_is_clean(name: str, env: dict[str, Any], seen: frozenset[str] = frozenset()) -> bool:
+    """Whether env value `name` is provably free of secrets (fail closed).
+
+    Clean means a literal, or built only from `vars.X` and other clean `env.X`. Anything else
+    taints: any secrets form, `env[...]`, `toJSON(env)`, `github.*`, `steps.*`, `needs.*` or other
+    expressions, an `env:` that is an expression instead of a mapping, and a name no literal
+    mapping defines.
+    Env names are case-insensitive in expressions: with keys that differ only in case, the name is
+    clean only if every variant is. A cycle adds no taint of its own.
+    """
+    key = name.lower()
+    if OPAQUE_ENV in env:
+        return False
+    if key in seen:
+        return True
+    variants = [v for k, v in env.items() if str(k).lower() == key]
+    if not variants:
+        return False
+    for value in variants:
+        text = str(value)
+        # The raw text is checked too: a mention of secrets or the token anywhere, or a `${{`
+        # that no complete expression consumed (an unclosed one), is never trusted as a literal.
+        if SECRETS_REF.search(text) or "github.token" in text.lower():
+            return False
+        if "${{" in EXPRESSION.sub("", text):
+            return False
+        for expression in EXPRESSION.findall(text):
+            ref = CLEAN_EXPRESSION.match(expression)
+            if not ref:
+                return False
+            if ref.group(1).lower() == "env" and not _env_name_is_clean(
+                ref.group(2), env, seen | {key}
+            ):
+                return False
+    return True
 
 
 def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -> list[str]:
@@ -95,10 +141,10 @@ def _endpoint_problems(endpoint: str, credentialed: bool, env: dict[str, Any]) -
                 problems.append(
                     f"endpoint '{endpoint}' reads a secret in a job without credentials"
                 )
-            elif ref and SECRETS_REF.search(str(env.get(ref.group(1), ""))):
+            elif ref and not _env_name_is_clean(ref.group(1), env):
                 problems.append(
-                    f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret, "
-                    "in a job without credentials"
+                    f"endpoint '{endpoint}' uses env {ref.group(1)}, which is built from a secret "
+                    "or from a source that is not proven clean, in a job without credentials"
                 )
             elif not ref and not VARS_REF.match(e):
                 problems.append(
@@ -182,12 +228,17 @@ def _call_problems(job: dict[str, Any]) -> list[str]:
 
 
 def _merged_env(document: Any, job: dict[str, Any], step: Any) -> dict[str, Any]:
-    """Workflow, job and first-step `env:` values, the narrowest scope winning."""
+    """Workflow, job and first-step `env:` values, the narrowest scope winning.
+
+    An `env:` that is not a mapping (an expression) cannot be read, so the result is marked opaque.
+    """
     merged: dict[str, Any] = {}
     for scope in (document, job, step):
         env = scope.get("env") if isinstance(scope, dict) else None
         if isinstance(env, dict):
             merged.update(env)
+        elif env is not None:
+            merged[OPAQUE_ENV] = True
     return merged
 
 

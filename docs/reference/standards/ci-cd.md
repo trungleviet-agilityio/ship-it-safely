@@ -49,7 +49,8 @@ bootstrap re-apply (ADR 0007 S2). Change display names instead.
   `disable-sudo-and-containers: true` (only app-deploy `deploy` is exempt: it runs Docker) and
   `allowed-endpoints` with one exact `host:port` per line: no `*`, and no expression other than
   `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID` and `env.ENV`. Jobs without credentials never name a secret
-  in their endpoints (`secrets.`, `secrets[`, `toJSON(secrets)` or an `env` value built from one). Such a job has
+  in their endpoints, in any letter case, and an `env` value they reach is clean only as a literal or built from
+  `vars.X` and other clean `env.X` (anything else, including multi-line expressions, taints it). Such a job has
   no `container:` or `services:`, and its harden-runner step has no `if:` or `continue-on-error:`. Every other job
   uses `audit`. `scripts/guard/harden-runner.sh` enforces all of this.
 - Pin `runs-on` to a versioned label (`ubuntu-24.04`), not `ubuntu-latest`.
@@ -88,6 +89,8 @@ bootstrap re-apply (ADR 0007 S2). Change display names instead.
   files with that trigger. Callers pass each secret by name, never `secrets: inherit`. A job that assumes a
   role on `main` (apply, deploy, destroy) stays in a top-level file, because the role trust pins that file
   (`job_workflow_ref`).
+- The composite assumes the role in exactly one `aws-actions/configure-aws-credentials` step, after the root
+  select and the CIDR mask (a self-test pins the order).
 - Steps repeated by several Terraform jobs live in the local composite action
   `.github/actions/terraform-setup` (root, tools, config check, CIDR mask, role, init). harden-runner and
   checkout stay job steps, and each job keeps its own `allowed-endpoints`.

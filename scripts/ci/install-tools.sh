@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Install CI tools with checksum verification (NFR-3, ADR 0004 E29, ADR 0005 F8, F12, F22).
-# Tools: terraform, tflint, trivy, hadolint. With no tool arguments, terraform and tflint are installed.
+# Tools: terraform, tflint, trivy, hadolint, crane. With no tool arguments, terraform and tflint are installed.
 # Versions come from mise.toml (one source of truth). Each download is saved under a versioned file name and
 # checked against scripts/ci/tools.sha256, so a version bump without a checksum update fails with
 # "no checksum for <file>". Neither hashicorp/setup-terraform nor trivy-action/setup-trivy is used: they do not
 # verify the download (or, for trivy, were compromised in March 2026, GHSA-69fq-xp46-6x23).
 # Providers are verified later by `terraform init -lockfile=readonly`; tflint verifies its own plugin download.
 #
-# Usage: scripts/ci/install-tools.sh <dest dir> [terraform|tflint|trivy|hadolint ...]
+# Usage: scripts/ci/install-tools.sh <dest dir> [terraform|tflint|trivy|hadolint|crane ...]
 # Exit codes: 0 installed, 1 unknown tool, missing checksum or checksum mismatch.
 # Test overrides (scratch copies only): CI_TOOLS_MISE_TOML, CI_TOOLS_SHA256, and CI_TOOLS_BASE_URL (a URL prefix such
 # as file:///dir holding the files under their versioned names, used instead of the release URLs).
@@ -15,7 +15,7 @@
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/../lib.sh"
 
-known_tools="terraform tflint trivy hadolint"
+known_tools="terraform tflint trivy hadolint crane"
 
 [ $# -ge 1 ] || die "usage: scripts/ci/install-tools.sh <dest dir> [${known_tools// /|} ...]"
 dest="$1"
@@ -61,6 +61,9 @@ tool_spec() {
     trivy)
       kind=tar file="trivy_${v}_Linux-64bit.tar.gz"
       url="https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_Linux-64bit.tar.gz" ;;
+    crane)
+      kind=tar file="crane_${v}_Linux_x86_64.tar.gz"
+      url="https://github.com/google/go-containerregistry/releases/download/v${v}/go-containerregistry_Linux_x86_64.tar.gz" ;;
     hadolint)
       kind=raw file="hadolint_${v}_linux_x86_64"
       url="https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-linux-x86_64" ;;

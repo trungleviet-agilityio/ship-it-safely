@@ -3,8 +3,8 @@
 # container image and the tags (ADR 0005, F3, F4). Offline: reads a file, prints JSON on stdout.
 #
 # Terraform owns the shape, so the shape is validated, not copied blindly: unknown keys, and any drift in the
-# user, the root filesystem, the environment, the log group, the /tmp volume, the roles, the secret and the size
-# caps, fail with a named rule. The input holds ARNs with the account ID, so nothing from it is printed except
+# user, the root filesystem, the environment (exactly APP_ENV=<env>), the log group, the /tmp volume, the roles, the
+# secret and the size caps, fail with a named rule. The input holds ARNs with the account ID, so nothing from it is printed except
 # key names and rule names. The names come from the environment (app_names in lib.sh).
 #
 # Usage: scripts/ecs/render-task-def.sh --env <env> <describe.json> <image@digest> <commit sha>
@@ -42,7 +42,7 @@ jq -e 'type == "object"' "$input" >/dev/null 2>&1 || die "task definition file i
 
 # First failing rule wins. Messages carry rule names and key names only, never values from the input.
 problem="$(jq -r --argjson req "$REQUEST_KEYS_JSON" --argjson ro "$readonly_keys" --argjson schema "$schema_container_keys" --argjson denied "$denied_container_keys" \
-  --arg exec_role "$EXEC_ROLE" --arg task_role "$TASK_ROLE" --arg secret "$SECRET_ID" --arg log_group "$LOG_GROUP" \
+  --arg env "$ENV" --arg exec_role "$EXEC_ROLE" --arg task_role "$TASK_ROLE" --arg secret "$SECRET_ID" --arg log_group "$LOG_GROUP" \
   --argjson cpu_max "$TASK_CPU_MAX" --argjson mem_max "$TASK_MEMORY_MAX" '
   (.taskDefinition // .) as $t
   | ($t.containerDefinitions // []) as $c
@@ -56,7 +56,7 @@ problem="$(jq -r --argjson req "$REQUEST_KEYS_JSON" --argjson ro "$readonly_keys
       (if ($c0.volumesFrom // []) != [] then "denied container key: volumesFrom (only an empty array is allowed)" else null end),
       (if $c0.user != "10001:10001" then "the container user must be 10001:10001" else null end),
       (if $c0.readonlyRootFilesystem != true then "readonlyRootFilesystem must be true" else null end),
-      (if ($c0.environment // [] | map(.name)) != ["APP_ENV"] then "environment must be exactly APP_ENV" else null end),
+      (if ($c0.environment // []) != [{name: "APP_ENV", value: $env}] then "environment must be exactly APP_ENV=" + $env + " (a hand-made revision is never promoted)" else null end),
       (if ($c0.logConfiguration.logDriver // "") != "awslogs" or ($c0.logConfiguration.options["awslogs-group"] // "") != $log_group
         then "logConfiguration must be awslogs with the group " + $log_group else null end),
       (if ($c0.mountPoints // [] | map({sourceVolume, containerPath, readOnly: (.readOnly // false)}))

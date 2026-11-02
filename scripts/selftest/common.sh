@@ -9,7 +9,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# expect_fail <label> <expected stderr text> <command...>
+# expect_fail <label> <expected stderr text> <command...>: also leaves the output of the command in EXPECT_OUT, so a
+# caller can inspect it (for a leaked host, say) without running the command a second time.
+EXPECT_OUT=""
 expect_fail() {
   local label="$1" text="$2" out rc=0
   shift 2
@@ -18,6 +20,7 @@ expect_fail() {
     trap - ERR
     "$@" 2>&1
   )" || rc=$?
+  EXPECT_OUT="$out"
   [ "$rc" -ne 0 ] || die "selftest: $label should have failed"
   case "$out" in
     *"$text"*) ok "$label fails as expected" ;;
@@ -33,21 +36,28 @@ digest="$(printf 'a%.0s' $(seq 1 64))"
 commit="$(printf 'b%.0s' $(seq 1 40))"
 image="${acct}.dkr.ecr.ap-southeast-1.amazonaws.com/sis-dev-app@sha256:${digest}"
 
-# --- Stub aws, docker and terraform: file-driven replies, so the scripts that call them run offline.
+# --- Stub aws, docker, gh, crane and terraform: file-driven replies, so the scripts that call them run offline.
 # The stub answers a call from files in $sd: <key>.out (stdout), <key>.err (stderr) and <key>.rc (exit code, default
-# 0). A suffix .N applies to the N-th call only (0-based). The key is aws-<service>-<operation> or docker-<command>.
-# Terraform is only logged (calls), never answered.
+# 0). A suffix .N applies to the N-th call only (0-based). The key is aws-<service>-<operation>, gh-<group>-<command>
+# (gh-run-list, gh-run-view), docker-<command>, or crane-<command> (crane-digest-src for a repository named
+# sis-dev-app, crane-digest-tgt for any other, crane-copy, crane-auth). docker and crane also record the
+# DOCKER_CONFIG they ran with in docker-config, and crane fails when it is not an existing directory, as it would
+# without a login directory. Terraform is only logged (calls), never answered.
 mkdir -p "$tmp/stub"
 cat >"$tmp/stub/aws" <<'EOF'
 #!/usr/bin/env bash
 dir="${STUB_DIR:?}" name="$(basename "$0")"
 key="$name-$1"
-[ "$name" = aws ] && key="$key-$2"
+case "$name" in aws | gh) key="$key-$2" ;; esac
+if [ "$key" = crane-digest ]; then
+  case "$2" in *sis-dev-app*) key=crane-digest-src ;; *) key=crane-digest-tgt ;; esac
+fi
 n="$(cat "$dir/$key.n" 2>/dev/null || echo 0)"
 echo $((n + 1)) >"$dir/$key.n"
 echo "$name $*" >>"$dir/calls"
-[ "$name" = docker ] && echo "${DOCKER_CONFIG:-}" >>"$dir/docker-config"
-[ "$key" = docker-login ] && cat >/dev/null
+case "$name" in docker | crane) echo "${DOCKER_CONFIG:-}" >>"$dir/docker-config" ;; esac
+if [ "$name" = crane ] && [ ! -d "${DOCKER_CONFIG:-}" ]; then echo "no DOCKER_CONFIG directory" >&2; exit 9; fi
+case "$key" in docker-login | crane-auth) cat >/dev/null ;; esac
 [ "$key" = docker-save ] && printf 'image tar' >"$3"
 pick() { if [ -f "$dir/$key.$1.$n" ]; then echo "$dir/$key.$1.$n"; elif [ -f "$dir/$key.$1" ]; then echo "$dir/$key.$1"; fi; }
 f="$(pick out)"; [ -z "$f" ] || cat "$f"
@@ -57,6 +67,8 @@ exit 0
 EOF
 chmod +x "$tmp/stub/aws"
 cp "$tmp/stub/aws" "$tmp/stub/docker"
+cp "$tmp/stub/aws" "$tmp/stub/gh"
+cp "$tmp/stub/aws" "$tmp/stub/crane"
 cat >"$tmp/stub/terraform" <<'EOF'
 #!/usr/bin/env bash
 echo "terraform $*" >>"${STUB_DIR:?}/calls"
