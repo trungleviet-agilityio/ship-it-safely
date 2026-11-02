@@ -502,6 +502,30 @@ Residual (Low, accepted): the apply role can now write a repository policy on it
 malicious apply could share a dev image with another account. The images hold no secrets (FR-8), and every
 apply is a reviewed `main` commit after an approval.
 
+### PR B2 checkpoint results (2026-11-02)
+
+| Step | Result |
+|---|---|
+| C1 | `sis-prod` created from the existing organization's management account (the user's own, no workloads; P20), in a `Prod` OU. SCPs: `FullAWSAccess` plus a root-level deny of leaving the organization and closing accounts, which does not affect the lab. `AdministratorAccess` assigned through IAM Identity Center, profile `sis-prod-admin`; root MFA set. `describe-trails` empty, so `create_trail` keeps its default. 3 AZs, Fargate vCPU quota 6 |
+| C2 | `prod.tfvars` filled (gitignored) with `env = "prod"` and the promotion source account |
+| C3 | Prod bootstrap on local state: 33 added; migrated to the prod state bucket; `deploy_workflow_file` = `app-promote.yml`; local state files deleted |
+| C4 | Dev bootstrap: 0 to add, 1 to change (`aws_iam_role_policy.apply`), 0 to destroy |
+| C5 | Environment `prod` (reviewer the user, branch policy `main`) and every secret set. The `gh api` PUT returned 403 until the PAT got Administration write. No repo secret shadows an environment secret name (N2) |
+| C6 | #38 checks green: `plan (dev)` 28 to add including `aws_ecr_repository_policy`, `plan (prod)` 27 to add, `guard` green |
+| C7 | #38 squash-merged as `<SHA_A>` (`42248b8`). Dev apply: 28 added. Secret value set; `app-deploy` green; dev `/version` on `42248b8` |
+| C8 | `terraform-iac` dispatch with env `prod`: 27 added. Secret value set |
+| C9 | `app-promote` `42248b8`: `resolve` and `promote (prod)` green, `PROMOTE_COPIED: true`; prod `/version` = `prod`, `42248b8` and the same digest as dev |
+| C10 | #39 (the page says `shipped by: app-promote` on prod, read from `APP_ENV` at runtime) merged as `<SHA_B>` (`caa9bfd`); `app-deploy` green. Promote `caa9bfd`: copied by digest, "target digest equals source digest", rollout completed; prod `/` shows `shipped by: app-promote (dev digest)` and `secret_loaded: yes`. Promote `42248b8` again: "the target tag ... exists ...; nothing is copied", rollout completed, `/version` back on `42248b8` and its digest. Preflight logged N4 (deploy role `GetSecretValue`) as denied as designed |
+| C11 | `oidc-smoke-test` on `main`: `refuse non-PR token (N1)` and `prod refuses a dev token (N10)` green; the prod plan, apply and deploy roles each answered "denied as designed (AccessDenied)". `prove plan role identity` skipped (it runs on `pull_request` only) |
+| C12 | `terraform-destroy` env `prod` (**destroy-prod**): 27 destroyed, revisions `:2` to `:4` deregistered (Terraform removed `:1`). Env `dev` (**destroy-dev**): 28 destroyed, revisions `:17` and `:18` deregistered. Per-service checks clean in both accounts: no VPC, `LoadBalancerNotFound`, cluster `INACTIVE`, no ECR repository, no secret, no ACTIVE task definition. Bootstraps stay |
+
+Account ID in every run log: 0.
+
+Not observed: the job summary wording of C9 and C10 ("copied from dev by digest", "already in prod: reused"),
+because the PAT cannot read job summaries; the step logs above show the same outcome. The prod alert emails of C11
+and the prod SNS subscription confirmation of C3 were not reported back. Harden-runner logged a 401 and a timeout
+from its own API (telemetry off, egress blocked); no step failed on it.
+
 ### PR B2 checkpoint
 
 From the repo root. Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_B2>`, `<SHA_A>`, `<SHA_B>`,
