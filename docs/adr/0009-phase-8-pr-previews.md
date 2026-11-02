@@ -1,6 +1,6 @@
 # ADR 0009: Phase 8 PR preview environments on the dev ALB
 
-- Status: accepted (2026-10-30, the user approved Q1 to Q11 with the recommended answers)
+- Status: deferred (ADR 0010, 2026-11-02). Accepted 2026-10-30 with Q1 to Q11 at the recommended answers; PR A (#35) closed unmerged, branch `phase-8-pr-a` kept
 - Amended 2026-10-30 (user): Amendment H. Credentialed preview jobs run `main`'s code through `workflow_run`
   (Q4 flipped) after the PR A security review found H1. Sections A (V6, V13 to V18), E, F, I, J, K, M, Risks,
   the PR B brief and the PR B checkpoint are rewritten to match.
