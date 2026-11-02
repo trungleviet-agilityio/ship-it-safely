@@ -33,11 +33,12 @@
 | T6 | B2 code is offline and is built **before** the prod account exists; only the checkpoint needs it |
 | T7 | Prod stack is up only for the checkpoint, then torn down (`destroy-prod`, `destroy-dev`). Bootstraps stay |
 | T8 | `sis-team` is frozen after Phase 7 closes: no new agents or skills in this repo. Reuse happens by fork in the next app (`2026-11-01-sis-team-fit-review.md` in English for Devs) |
+| T9 | ADR 0008 Q1 answered (user, 2026-11-02): the existing organization's management account is the user's own and runs no workloads. `sis-prod` is created there as designed (P20) |
 
 ## Consequences
 
 - No PR preview URL; reviewers rely on `app-ci` (build, test, scan) before merge.
-- Remaining user steps: Q1 and the prod account, then the ADR 0008 PR B checkpoint (B1 to B9, B11, B12, B14).
+- Remaining user steps: create `sis-prod` in the organization (T9), then the ADR 0008 PR B checkpoint (B1 to B9, B11, B12, B14).
 - ADR 0009 keeps its number and design for a later phase.
 - Repo docs to update in B2: `docs/requirements.md` (Goal demo, Scope, FR-17), `README.md` phase table.
 
@@ -51,3 +52,4 @@
 | Date | Change |
 |---|---|
 | 2026-11-02 | Proposed |
+| 2026-11-02 | T9: Q1 answered |
