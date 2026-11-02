@@ -25,16 +25,16 @@ Phases 0 to 6 built a safe road from `main` to dev. v3 finishes the road from a 
 travels the whole path; nothing is rebuilt on the way.
 
 ```
-PR ──► preview (own URL, removed on close) ──► merge ──► dev ──► promote (approval) ──► prod
+PR (app-ci) ──► merge ──► dev ──► promote (approval) ──► prod
                                                                  ◄── rollback: promote an earlier green SHA
 ```
 
-Done means this demo passes, each step checked by `/version` (SHA and digest):
+Done means steps 3 to 5 of this demo pass, each checked by `/version` (SHA and digest); steps 1 and 2 wait for PR previews (ADR 0010):
 
 | # | Action | Proof |
 |---|---|---|
-| 1 | Open a PR that changes the app | A bot comment holds the preview URL; `/version` shows the PR's SHA |
-| 2 | Close or merge the PR | The preview and its resources are gone |
+| 1 | Open a PR that changes the app | Deferred with PR previews (ADR 0010 T2) |
+| 2 | Close or merge the PR | Deferred with PR previews (ADR 0010 T2) |
 | 3 | Merge | Dev serves that SHA (built in Phase 4) |
 | 4 | Run App Promote with that SHA and approve | Prod serves the **same digest** as dev |
 | 5 | Promote an earlier green SHA (rollback) | Prod is back on the earlier digest within minutes, with no rebuild |
@@ -52,7 +52,7 @@ undone without a code change.
 | Secrets Manager wired into ECS task definition | Production-grade networking (private subnets + NAT) |
 | Destroy workflow, supply-chain hardening | ECS `BLUE_GREEN` and `CANARY` (README only, v3) |
 | `prod` env in a second AWS account via AWS Organizations, promote by digest, rollback (Phase 7) | Third-party hosting or tunnels (Cloudflare and similar) |
-| PR preview environments in the dev account (Phase 8) | Previews for fork or Dependabot PRs |
+| | PR preview environments (Phase 8, deferred by ADR 0010; design in ADR 0009) |
 
 ## Architecture
 
@@ -66,7 +66,6 @@ GitHub ──OIDC──► AWS STS (per account)
 
 dev account:  S3 state ─ ECR ─ ECS cluster ─ Fargate service ─ ALB (public)
               Secrets Manager: <prefix>/dev/app-api-key ──(execution role)──► container env APP_API_KEY
-              PR preview (Phase 8): the PR image as its own Fargate service behind the dev ALB, tagged Env=preview
 prod account: same module, own state/secrets/roles; promote = same image digest as dev; rollback = promote an earlier SHA
 ```
 
@@ -109,7 +108,7 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 | FR-14 | Branching: trunk-based. Short-lived feature branches → PR → `main`. Merge to `main` deploys dev. A release tag `v*` (or `workflow_dispatch`) promotes the same image digest to prod. No `develop`/`release` branches, no branch-per-env. |
 | FR-15 | Release strategy: dev and prod use ECS `ROLLING` with deployment circuit breaker + auto rollback. `BLUE_GREEN` and `CANARY` are documented in README as next steps once there is real traffic to measure (v3: dropped from Phase 7). |
 | FR-16 | Rollback: prod returns to an earlier green SHA by promoting it again (FR-13). The image is already in prod ECR by digest, so nothing is rebuilt or copied, and the trust and approval are the ones promote uses. Dev rolls back with `git revert` on `main` (trunk-based). |
-| FR-17 | PR preview: a PR from this repository that touches `app/**` gets the image it built running in the dev account, with its own URL posted as a sticky PR comment and `/version` showing the PR's SHA. Closing the PR removes everything the preview created. The build stays in a credential-free job; the preview job uses GitHub environment `preview` (required reviewer) and a preview role that can only touch resources tagged `Env=preview`. Fork and Dependabot PRs get no preview. Design (URL, routing, secret, cost cap, the trust for a PR-ref workflow file) in the Phase 8 ADR. |
+| FR-17 | **Deferred (ADR 0010 T2).** PR preview: a PR from this repository that touches `app/**` gets the image it built running in the dev account, with its own URL posted as a sticky PR comment and `/version` showing the PR's SHA. Closing the PR removes everything the preview created. The build stays in a credential-free job; the preview job uses GitHub environment `preview` (required reviewer) and a preview role that can only touch resources tagged `Env=preview`. Fork and Dependabot PRs get no preview. Design (URL, routing, secret, cost cap, the trust for a PR-ref workflow file) in the Phase 8 ADR. |
 | FR-13 | Prod account in AWS Organizations, bootstrapped with `accounts/prod.tfvars`. `envs/prod` added. The prod deploy job copies the **same digest** from dev ECR to prod ECR (or uses ECR cross-account replication), then deploys. Trigger: `workflow_dispatch` or release tag; GitHub environment `prod` requires a reviewer. |
 
 ### Non-functional / security
@@ -129,6 +128,6 @@ Rules: never print or log the value of `APP_API_KEY`. Run as a non-root user. Ma
 ## Cost and cleanup
 
 - ALB and Fargate are billed hourly, so destroy `envs/*` after each session (destroy workflow). No NAT gateway by design.
-- A preview adds one Fargate task (0.25 vCPU) while its PR is open, on the dev ALB that already exists; closing the PR stops it.
+- (Deferred, ADR 0010) A preview would add one Fargate task (0.25 vCPU) while its PR is open, on the dev ALB that already exists; closing the PR would stop it.
 - S3, Budgets, Organizations and the extra accounts cost close to $0.
 - Teardown order: destroy workflow per env → bootstrap per account (empty the bucket first, migrate state back to local).

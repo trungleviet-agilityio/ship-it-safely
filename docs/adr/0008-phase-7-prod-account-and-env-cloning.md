@@ -1,6 +1,6 @@
 # ADR 0008: Phase 7 prod account, built-in blue/green, and one-command environment cloning
 
-- Status: accepted (Q1 open; Q2 to Q15 take the recommended answers)
+- Status: accepted (Q1 answered 2026-11-02, ADR 0010 T9; Q2 to Q15 take the recommended answers)
 - Date: 2026-10-27
 - Amended 2026-10-27 (user): P1 keeps the PLAN layout, one thin root per environment, instead of one shared
   root. The clone script copies a root; the parity guard keeps the copies identical (sections B and C).
@@ -478,6 +478,152 @@ Verify: e2e green (`make check` three times, `pre-commit`, crane install). Two f
 simplifier's stub and flow suggestions were applied. Accepted: an SHA deployed before #30 renamed the job to
 `deploy (dev)` cannot be promoted (fails closed; prod has no such SHA).
 
+## PR B2 build notes (2026-11-02)
+
+Scope per amendment S and ADR 0010 (T4, T5). Q1 answered: the existing organization's management account is the
+user's own and runs no workloads, so `sis-prod` is created there (P20, ADR 0010 T9).
+
+| Item | Built |
+|---|---|
+| P1, P2 | `envs/prod/` from `make new-env ENV=prod` (CIDR `10.50.0.0/16`, Q3); `bootstrap/accounts/prod.tfvars.example` with `env` and `promotion_source_account_id` |
+| P7 | Bootstrap `is_promoted` (`promotion_source_account_id` set): the deploy role trusts `app-promote.yml` instead of `app-deploy.yml`; new output `deploy_workflow_file` |
+| P9 identity side | Prod deploy statement `EcrPullFromSource`: `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer` on `sis-dev-app` in the source account only. Apply role gains `ecr:SetRepositoryPolicy` and `ecr:DeleteRepositoryPolicy` on `sis-<env>-*` |
+| P9 resource side | Module `aws_ecr_repository_policy.promotion` when `promotion_target_env` is set (dev: `prod`): Principal the target account root, narrowed by `aws:PrincipalArn` to `sis-prod-gha-deploy`, pull only. The account comes from `TF_VAR_promotion_target_account_id` (sensitive, never committed) |
+| P8 | harden-runner policy: `secrets.AWS_ACCOUNT_ID_DEV` allowed only in `app-promote.yml` job `promote` (the source registry host). Terraform policy rule 7: the one promotion principal line in a module `ecr.tf` is exempt; any other AWS principal still fails |
+| P3 | Parity guard: a `plan-<env>` caller must map `PROMOTION_TARGET_ACCOUNT_ID` from `secrets.AWS_ACCOUNT_ID_<TARGET>` exactly when its tfvars sets `promotion_target_env`, and never otherwise |
+| P6, P18 | `terraform-iac.yml`: `plan-prod` caller, dispatch choice `[dev, prod]`, dev plan and apply pass the promotion account. `terraform-destroy.yml`: `[dev, prod]` |
+| P10, S2 | `app-promote.yml`: dispatch on `main` with `env` `[prod]` and `sha`. `resolve` (no AWS) runs `promote-resolve.sh`; `promote` (environment `prod`, block mode, containers off) runs preflight, `promote-copy.sh`, render with `--env prod`, register, update, `wait-deployment.sh`. Rollback = the same run with an earlier green SHA |
+| N1, N10 (T5) | `oidc-smoke-test.yml` dispatch: N1 also against the prod roles; new job `dev-env-denied-by-prod` (environment `dev`) requires AccessDenied from the prod plan, apply and deploy roles. For apply and deploy two claims differ (`sub` and `job_workflow_ref`); for plan only `sub` |
+
+Not built (ADR 0010 T5): the `prove-isolation` mode, the broken-release demo (B10), the drift check (B13), and
+everything of section E and P11 to P16 except P15(2).
+
+Residual (Low, accepted): the apply role can now write a repository policy on its own repositories, so a
+malicious apply could share a dev image with another account. The images hold no secrets (FR-8), and every
+apply is a reviewed `main` commit after an approval.
+
+### PR B2 checkpoint
+
+From the repo root. Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_B2>`, `<SHA_A>`, `<SHA_B>`,
+`<PROD_ALB>`. Dispatches use the web UI (Actions > workflow > Run workflow).
+
+**C1. Prod account and access.** Follow `notes/aws-organizations-prod-account-setup.md` §4 (management account:
+create `sis-prod`, assign `AdministratorAccess` in IAM Identity Center), then:
+```bash
+aws configure sso --profile sis-prod-admin
+```
+```bash
+AWS_PROFILE=sis-prod-admin aws sts get-caller-identity --query Account --output text
+```
+Expect: `<PROD_ACCOUNT_ID>`.
+```bash
+AWS_PROFILE=sis-prod-admin aws cloudtrail describe-trails --region ap-southeast-1 --query 'trailList[].Name' --output text
+```
+Expect: empty. If a trail is listed (an organization trail), set `create_trail = false` in `prod.tfvars`.
+
+**C2. Prod inputs** (gitignored file). Copy the example, then fill `aws_account_id`, `budget_email`,
+`github_owner_id`, `github_repo_id` (same as dev) and `promotion_source_account_id = "<DEV_ACCOUNT_ID>"`.
+```bash
+cp infra/terraform/bootstrap/accounts/prod.tfvars.example infra/terraform/bootstrap/accounts/prod.tfvars
+```
+
+**C3. Prod bootstrap** on local state first, then migrate. A separate `TF_DATA_DIR` keeps dev's `.terraform/`.
+```bash
+printf 'terraform {\n  backend "local" {\n    path = "prod.tfstate"\n  }\n}\n' > infra/terraform/bootstrap/backend_override.tf
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap init
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap apply -var-file=accounts/prod.tfvars
+```
+Expect: the same resource count as the dev bootstrap, 0 to change, 0 to destroy. Then:
+```bash
+rm infra/terraform/bootstrap/backend_override.tf
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap init -migrate-state -backend-config="bucket=sis-prod-tfstate-<PROD_ACCOUNT_ID>-ap-southeast-1-an"
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap output -raw deploy_workflow_file
+```
+Expect: `app-promote.yml`. Delete `prod.tfstate` and `prod.tfstate.backup` in the bootstrap folder, and confirm
+the SNS subscription email from the prod account.
+
+**C4. Dev bootstrap re-apply** (apply role: repository policy actions).
+```bash
+AWS_PROFILE=sis-dev-admin terraform -chdir=infra/terraform/bootstrap apply -var-file=accounts/dev.tfvars
+```
+Expect: 0 to add, 1 to change (`aws_iam_role_policy.apply`), 0 to destroy.
+
+**C5. GitHub environment `prod` and secrets.** Reviewer = you, `main` only:
+```bash
+gh api -X PUT repos/trungleviet-agilityio/ship-it-safely/environments/prod -F "reviewers[][type]=User" -F "reviewers[][id]=$(gh api user --jq .id)" -F prevent_self_review=false -F "deployment_branch_policy[protected_branches]=false" -F "deployment_branch_policy[custom_branch_policies]=true"
+```
+```bash
+gh api -X POST repos/trungleviet-agilityio/ship-it-safely/environments/prod/deployment-branch-policies -f name=main -f type=branch
+```
+Role ARNs from the prod bootstrap (one line each):
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap output -raw apply_role_arn | gh secret set AWS_APPLY_ROLE_ARN --env prod --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap output -raw deploy_role_arn | gh secret set AWS_DEPLOY_ROLE_ARN --env prod --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+AWS_PROFILE=sis-prod-admin TF_DATA_DIR=.terraform-prod terraform -chdir=infra/terraform/bootstrap output -raw plan_role_arn | gh secret set AWS_PLAN_ROLE_ARN_PROD --repo trungleviet-agilityio/ship-it-safely
+```
+These prompt; paste `<PROD_ACCOUNT_ID>` for the first three, and a JSON CIDR list (or `["0.0.0.0/0"]`) for the
+last two:
+```bash
+gh secret set AWS_ACCOUNT_ID --env prod --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+gh secret set AWS_ACCOUNT_ID_PROD --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+gh secret set PROMOTION_TARGET_ACCOUNT_ID --env dev --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+gh secret set ALB_INGRESS_CIDRS --env prod --repo trungleviet-agilityio/ship-it-safely
+```
+```bash
+gh secret set ALB_INGRESS_CIDRS_PROD --repo trungleviet-agilityio/ship-it-safely
+```
+Expect: `gh secret list --env prod --repo trungleviet-agilityio/ship-it-safely` shows `AWS_ACCOUNT_ID`,
+`AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` and `ALB_INGRESS_CIDRS`.
+
+**C6. PR checks.** Re-run the checks of `<PR_B2>`. Expect: `plan (dev)` shows the stack (or 28 to add when
+torn down, including `aws_ecr_repository_policy`); `plan (prod)` shows 27 to add; `guard` green.
+
+**C7. Merge, dev up.** Approve the push apply of dev. Then:
+```bash
+AWS_PROFILE=sis-dev-admin aws secretsmanager put-secret-value --region ap-southeast-1 --secret-id sis/dev/app-api-key --secret-string "$(openssl rand -hex 24)" --query Name --output text
+```
+Run workflow `app-deploy` and approve. Note its commit as `<SHA_A>`.
+
+**C8. Prod up.** Run workflow `terraform-iac` with env `prod`, approve (27 to add). Then:
+```bash
+AWS_PROFILE=sis-prod-admin aws secretsmanager put-secret-value --region ap-southeast-1 --secret-id sis/prod/app-api-key --secret-string "$(openssl rand -hex 24)" --query Name --output text
+```
+
+**C9. Promote A.** Run workflow `app-promote` with sha `<SHA_A>`, approve `prod`. Expect: summary "copied from dev
+by digest", and:
+```bash
+curl -s http://<PROD_ALB>/version
+```
+Expect: `prod`, `<SHA_A>` and the same digest as `app-deploy` showed for dev.
+
+**C10. Promote B, then roll back to A.** Merge a one-line app change, approve `app-deploy` (`<SHA_B>`), promote
+`<SHA_B>`, read `/version`. Then promote `<SHA_A>` again. Expect: the summary says "already in prod: reused", and
+`/version` is back on `<SHA_A>` and its digest within minutes, with no build.
+
+**C11. N1 and N10.** Run workflow `oidc-smoke-test` on `main`; approve `dev` for `prod refuses a dev token (N10)`.
+Expect: every dev and prod role answers "denied as designed", and prod alert emails arrive.
+
+**C12. Teardown.** Run workflow `terraform-destroy` with env `prod`, type **destroy-prod**, approve (27
+destroyed). Then env `dev`, type **destroy-dev** (28). Bootstraps stay.
+
 ## Checkpoint commands (the user runs these; Claude never does, NFR-9)
 
 Placeholders: `<DEV_ACCOUNT_ID>`, `<PROD_ACCOUNT_ID>`, `<PR_A>`, `<PR_B>`, `<SHA>`, `<PROD_ALB>`, `<BROKEN_REV>`. Each command is one line for zsh; there are no packed arguments (lessons 5, 37). Dispatches use the web UI (Actions > workflow > Run workflow), because the PAT has Actions read-only (lesson 31).
@@ -536,7 +682,9 @@ Expect `terraform.tfstate` under the unchanged key. Then re-run and approve `app
 Not observed: a blocked host (none occurred). Dependabot's docker job failed on an ECR Public 429 again (lesson 42),
 not on the config.
 
-### PR B
+### PR B (superseded)
+
+Superseded by "PR B2 checkpoint" above (amendment S, ADR 0010). Kept for the record.
 
 **B0. Answer Q1 to Q4 first.**
 

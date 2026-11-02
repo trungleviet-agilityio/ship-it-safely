@@ -48,7 +48,8 @@ bootstrap re-apply (ADR 0007 S2). Change display names instead.
   explicitly. A job with `id-token: write` uses `block`, `disable-telemetry: true`,
   `disable-sudo-and-containers: true` (only app-deploy `deploy` is exempt: it runs Docker) and
   `allowed-endpoints` with one exact `host:port` per line: no `*`, and no expression other than
-  `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID` and `env.ENV`. Jobs without credentials never name a secret
+  `vars.AWS_REGION`, `secrets.AWS_ACCOUNT_ID` and `env.ENV` (only app-promote `promote` may also use
+  `secrets.AWS_ACCOUNT_ID_DEV`, for the source registry host). Jobs without credentials never name a secret
   in their endpoints, in any letter case, and an `env` value they reach is clean only as a literal or built from
   `vars.X` and other clean `env.X` (anything else, including multi-line expressions, taints it). Such a job has
   no `container:` or `services:`, and its harden-runner step has no `if:` or `continue-on-error:`. Every other job
@@ -81,7 +82,9 @@ bootstrap re-apply (ADR 0007 S2). Change display names instead.
   and destroy jobs do.
 - Environment jobs read secrets with env-agnostic names (`AWS_ACCOUNT_ID`) and take the env from
   `inputs.env`, validated by `scripts/names.sh env-root` before any credential step. PR plan jobs have no
-  environment, so they read repo secrets suffixed with the env (`AWS_ACCOUNT_ID_DEV`).
+  environment, so they read repo secrets suffixed with the env (`AWS_ACCOUNT_ID_DEV`). The one cross-env mapping is
+  `PROMOTION_TARGET_ACCOUNT_ID` from `AWS_ACCOUNT_ID_<TARGET>` in the caller of an env that sets
+  `promotion_target_env` (the parity guard checks it).
 
 ## Structure and reuse
 
